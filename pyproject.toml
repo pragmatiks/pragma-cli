@@ -1,0 +1,33 @@
+[project]
+name = "pragma-cli"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "typer>=0.15.3",
+    # Git URL used when UV_NO_SOURCES=1 (production builds)
+    "pragmatiks-sdk @ git+https://github.com/pragmatiks/sdk.git@v0.1.3",
+    "pyyaml>=6.0.3",
+    "copier>=9.0.0",
+    "rich>=13.9.0",
+]
+
+[project.scripts]
+pragma = "pragma_cli.main:app"
+
+[tool.uv.sources]
+pragmatiks-sdk = { path = "../../sdk", editable = true }
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.isort]
+known-first-party = ["pragma_cli"]
+
+[dependency-groups]
+test = ["pytest>=8.4.1", "pytest-cov>=7.0.0", "pytest-mock>=3.14.0"]
+
+[build-system]
+requires = ["uv_build>=0.9.8"]
+build-backend = "uv_build"
