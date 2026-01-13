@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "typer>=0.15.3",
-    "pragmatiks-sdk>=0.1.3",
+    "pragmatiks-sdk>=0.2.1",
     "pyyaml>=6.0.3",
     "copier>=9.0.0",
     "rich>=13.9.0",
@@ -16,7 +16,7 @@ dependencies = [
 pragma = "pragma_cli.main:app"
 
 [tool.uv.sources]
-pragmatiks-sdk = { git = "https://github.com/pragmatiks/sdk.git", tag = "v0.1.3" }
+pragmatiks-sdk = { git = "https://github.com/pragmatiks/sdk.git", tag = "v0.2.1" }
 
 [tool.ruff]
 target-version = "py313"
