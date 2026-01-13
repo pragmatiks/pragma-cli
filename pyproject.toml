@@ -54,6 +54,9 @@ changelog_file = "CHANGELOG.md"
 test = ["pytest>=8.4.1", "pytest-cov>=7.0.0", "pytest-mock>=3.14.0"]
 dev = ["commitizen>=4.11.0", "pre-commit>=4.0.0", "ruff>=0.11.0"]
 
+[tool.uv.build-backend]
+module-name = "pragma_cli"
+
 [build-system]
 requires = ["uv_build>=0.9.8"]
 build-backend = "uv_build"
