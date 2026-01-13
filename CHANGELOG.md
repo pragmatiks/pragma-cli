@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.3 (2026-01-13)
+
+### Fix
+
+- **provider**: pass context api_url to SDK client
+- **deps**: update pragmatiks-sdk to v0.3.1
+
 ## v0.2.2 (2026-01-13)
 
 ### Fix
