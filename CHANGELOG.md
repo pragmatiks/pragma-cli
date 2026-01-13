@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1 (2026-01-13)
+
+### Fix
+
+- add module-name for uv_build to find pragma_cli
+
 ## v0.2.0 (2026-01-13)
 
 ### Feat
