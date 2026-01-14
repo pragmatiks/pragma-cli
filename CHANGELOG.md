@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.1 (2026-01-14)
+
+### Fix
+
+- **ci**: use --no-sources for standalone SDK resolution
+
 ## v0.4.0 (2026-01-14)
 
 ### Feat
