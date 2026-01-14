@@ -119,7 +119,7 @@ def test_push_fails_without_pyproject(cli_runner, tmp_path, monkeypatch):
 def test_push_uploads_tarball_and_polls_status(cli_runner, provider_project, mock_pragma_client):
     """Push creates tarball, uploads to API, and polls for completion."""
     mock_pragma_client.push_provider.return_value = PushResult(
-        build_id="build-123",
+        version="20250114.153045",
         job_name="build-test-abc12345",
         status=BuildStatus.PENDING,
         message="Build started",
@@ -147,7 +147,7 @@ def test_push_uploads_tarball_and_polls_status(cli_runner, provider_project, moc
 def test_push_with_deploy_flag_deploys_after_build(cli_runner, provider_project, mock_pragma_client):
     """Push with --deploy deploys after successful build."""
     mock_pragma_client.push_provider.return_value = PushResult(
-        build_id="build-123",
+        version="20250114.153045",
         job_name="build-test-abc12345",
         status=BuildStatus.PENDING,
         message="Build started",
@@ -173,7 +173,7 @@ def test_push_with_deploy_flag_deploys_after_build(cli_runner, provider_project,
 def test_push_with_no_wait_returns_immediately(cli_runner, provider_project, mock_pragma_client):
     """Push with --no-wait returns immediately after upload."""
     mock_pragma_client.push_provider.return_value = PushResult(
-        build_id="build-123",
+        version="20250114.153045",
         job_name="build-test-abc12345",
         status=BuildStatus.PENDING,
         message="Build started",
@@ -189,7 +189,7 @@ def test_push_with_no_wait_returns_immediately(cli_runner, provider_project, moc
 def test_push_handles_build_failure(cli_runner, provider_project, mock_pragma_client):
     """Push handles build failures gracefully."""
     mock_pragma_client.push_provider.return_value = PushResult(
-        build_id="build-123",
+        version="20250114.153045",
         job_name="build-test-abc12345",
         status=BuildStatus.PENDING,
         message="Build started",
@@ -213,7 +213,7 @@ def test_push_with_package_option_uses_specified_name(cli_runner, tmp_path, mock
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "other-provider"')
 
     mock_pragma_client.push_provider.return_value = PushResult(
-        build_id="build-123",
+        version="20250114.153045",
         job_name="build-custom-abc12345",
         status=BuildStatus.PENDING,
         message="Build started",
