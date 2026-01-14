@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/pragmatiks/pragmatiks/main/assets/pragmatiks_brand/wordmark/tech_readout.png" alt="Pragmatiks" width="800">
+</p>
+
 # Pragmatiks CLI
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/pragmatiks/cli)
@@ -9,8 +13,6 @@
 **[Documentation](https://docs.pragmatiks.io/cli/overview)** | **[SDK](https://github.com/pragmatiks/sdk)** | **[Providers](https://github.com/pragmatiks/providers)**
 
 Command-line interface for managing Pragmatiks resources.
-
-<!-- TODO: Add logo and demo GIF -->
 
 ## Quick Start
 
