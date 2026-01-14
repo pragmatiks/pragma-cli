@@ -2,13 +2,13 @@ version: "3"
 
 tasks:
   format:
-    cmd: env -u VIRTUAL_ENV uv run ruff format .
+    cmd: uv run ruff format .
     desc: Format Python code with ruff
 
   check:
-    cmd: env -u VIRTUAL_ENV uv run ruff check --fix .
+    cmd: uv run ruff check --fix .
     desc: Check Python code with ruff and auto-fix issues
 
   test:
-    cmd: env -u VIRTUAL_ENV uv run pytest tests/ --cov=pragma_cli --cov-report=term-missing {{.CLI_ARGS}}
+    cmd: uv run pytest tests/ --cov=pragma_cli --cov-report=term-missing {{.CLI_ARGS}}
     desc: Run all tests with coverage

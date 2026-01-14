@@ -14,10 +14,11 @@ from typing import Annotated
 import copier
 import httpx
 import typer
-from pragma_sdk import BuildResult, BuildStatus, Config, PragmaClient, PushResult, Resource
+from pragma_sdk import BuildResult, BuildStatus, Config, PragmaClient, ProviderDeleteResult, PushResult, Resource
 from pragma_sdk.provider import discover_resources
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
 
 from pragma_cli import get_client
 
@@ -671,3 +672,113 @@ def detect_provider_package() -> str | None:
         return name.replace("-", "_")
 
     return None
+
+
+@app.command()
+def delete(
+    provider_id: Annotated[
+        str,
+        typer.Argument(help="Provider ID to delete (e.g., 'postgres', 'my-provider')"),
+    ],
+    cascade: Annotated[
+        bool,
+        typer.Option("--cascade", help="Delete all resources for this provider"),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Skip confirmation prompt"),
+    ] = False,
+):
+    """Delete a provider and all associated resources.
+
+    Removes the provider deployment, resource definitions, and pending events
+    from the platform. By default, fails if the provider has any resources.
+
+    Without --cascade:
+        pragma provider delete my-provider
+        -> Fails if provider has resources
+
+    With --cascade:
+        pragma provider delete my-provider --cascade
+        -> Deletes provider and all its resources
+
+    Skip confirmation:
+        pragma provider delete my-provider --force
+        pragma provider delete my-provider --cascade --force
+
+    Example:
+        pragma provider delete postgres
+        pragma provider delete postgres --cascade
+        pragma provider delete postgres --cascade --force
+
+    Raises:
+        typer.Exit: If deletion fails or user cancels.
+    """
+    client = get_client()
+
+    if client._auth is None:
+        console.print("[red]Error:[/red] Authentication required. Run 'pragma login' first.")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Provider:[/bold] {provider_id}")
+    if cascade:
+        console.print("[yellow]Warning:[/yellow] --cascade will delete all resources for this provider")
+    console.print()
+
+    if not force:
+        action = "DELETE provider and all its resources" if cascade else "DELETE provider"
+        confirm = typer.confirm(f"Are you sure you want to {action}?")
+        if not confirm:
+            console.print("[dim]Cancelled.[/dim]")
+            raise typer.Exit(0)
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            progress.add_task("Deleting provider...", total=None)
+            result = client.delete_provider(provider_id, cascade=cascade)
+
+        _print_delete_result(result)
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 409:
+            detail = e.response.json().get("detail", "Provider has resources")
+            console.print(f"[red]Error:[/red] {detail}")
+            console.print("[dim]Use --cascade to delete all resources with the provider.[/dim]")
+        else:
+            console.print(f"[red]Error:[/red] {e.response.text}")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+def _print_delete_result(result: ProviderDeleteResult) -> None:
+    """Print a summary of the deletion result.
+
+    Args:
+        result: ProviderDeleteResult from the API.
+    """
+    console.print()
+    console.print(f"[green]Provider deleted:[/green] {result.provider_id}")
+    console.print()
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Component")
+    table.add_column("Deleted", justify="right")
+
+    table.add_row("Builds Cancelled", str(result.builds_cancelled))
+    table.add_row("Source Archives", str(result.source_archives_deleted))
+    table.add_row("Deployment", "Yes" if result.deployment_deleted else "No (not found)")
+    table.add_row("Resources", str(result.resources_deleted))
+    table.add_row("Resource Definitions", str(result.resource_definitions_deleted))
+    table.add_row("Outbox Events", str(result.outbox_events_deleted))
+    table.add_row("Dead Letter Events", str(result.dead_letter_events_deleted))
+    table.add_row("NATS Messages Purged", str(result.messages_purged))
+    table.add_row("NATS Consumer", "Deleted" if result.consumer_deleted else "Not found")
+
+    console.print(table)
