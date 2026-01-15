@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/wordmark.png" alt="Pragmatiks" width="800">
+  <img src="assets/wordmark.png" alt="Pragma-OS" width="800">
 </p>
 
 # Pragma CLI
