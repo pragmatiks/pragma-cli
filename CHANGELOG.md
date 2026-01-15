@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.0 (2026-01-15)
+
+### Feat
+
+- **cli**: simplify provider commands for declarative architecture
+
 ## v0.6.0 (2026-01-15)
 
 ### Feat
