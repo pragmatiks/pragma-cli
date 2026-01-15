@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.3 (2026-01-15)
+
+### Refactor
+
+- use BuildInfo for build status responses
+
 ## v0.9.2 (2026-01-15)
 
 ### Refactor
