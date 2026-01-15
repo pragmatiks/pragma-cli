@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.0 (2026-01-15)
+
+### Feat
+
+- add provider autocomplete and update status display
+
 ## v0.7.0 (2026-01-15)
 
 ### Feat
