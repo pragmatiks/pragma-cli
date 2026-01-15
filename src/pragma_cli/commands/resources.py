@@ -93,7 +93,13 @@ def list_resources(
 ):
     """List resources, optionally filtered by provider, resource type, or tags."""
     client = get_client()
-    for res in client.list_resources(provider=provider, resource=resource, tags=tags):
+    resources = list(client.list_resources(provider=provider, resource=resource, tags=tags))
+
+    if not resources:
+        console.print("[dim]No resources found.[/dim]")
+        return
+
+    for res in resources:
         print(f"{res['provider']}/{res['resource']}/{res['name']} {format_state(res['lifecycle_state'])}")
 
 

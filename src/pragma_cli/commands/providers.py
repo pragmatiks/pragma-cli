@@ -129,7 +129,7 @@ def list_providers():
     - Last deployed timestamp
 
     Example:
-        pragma provider list
+        pragma providers list
 
     Raises:
         typer.Exit: If authentication is missing or API call fails.
@@ -178,11 +178,7 @@ def _print_providers_table(providers: list[ProviderInfo]) -> None:
     for provider in providers:
         status = _format_deployment_status(provider.deployment_status)
         version = provider.current_version or "[dim]never deployed[/dim]"
-        updated = (
-            provider.updated_at.strftime("%Y-%m-%d %H:%M:%S")
-            if provider.updated_at
-            else "[dim]-[/dim]"
-        )
+        updated = provider.updated_at.strftime("%Y-%m-%d %H:%M:%S") if provider.updated_at else "[dim]-[/dim]"
 
         table.add_row(provider.provider_id, version, status, updated)
 
@@ -248,9 +244,9 @@ def init(
     - mise.toml for tool management
 
     Example:
-        pragma provider init mycompany
-        pragma provider init postgres --output ./providers/postgres
-        pragma provider init mycompany --defaults --description "My provider"
+        pragma providers init mycompany
+        pragma providers init postgres --output ./providers/postgres
+        pragma providers init mycompany --defaults --description "My provider"
 
     Raises:
         typer.Exit: If directory already exists or template copy fails.
@@ -303,7 +299,7 @@ def init(
     typer.echo("  copier update")
     typer.echo("")
     typer.echo("When ready to deploy:")
-    typer.echo("  pragma provider push")
+    typer.echo("  pragma providers push")
 
 
 @app.command()
@@ -319,8 +315,8 @@ def update(
     incorporating template updates.
 
     Example:
-        pragma provider update
-        pragma provider update ./my-provider
+        pragma providers update
+        pragma providers update ./my-provider
 
     Raises:
         typer.Exit: If directory is not a Copier project or update fails.
@@ -374,25 +370,25 @@ def push(
     a container image.
 
     Build only:
-        pragma provider push
+        pragma providers push
         -> Uploads code and waits for build
 
     Build and deploy:
-        pragma provider push --deploy
+        pragma providers push --deploy
         -> Uploads code, builds, and deploys
 
     Async build:
-        pragma provider push --no-wait
+        pragma providers push --no-wait
         -> Uploads code and returns immediately
 
     With logs:
-        pragma provider push --logs
+        pragma providers push --logs
         -> Shows build output in real-time
 
     Example:
-        pragma provider push
-        pragma provider push --deploy
-        pragma provider push --logs --deploy
+        pragma providers push
+        pragma providers push --deploy
+        pragma providers push --logs --deploy
 
     Raises:
         typer.Exit: If provider detection fails or build fails.
@@ -437,7 +433,7 @@ def push(
         if not wait:
             console.print()
             console.print("[dim]Build running in background. Check status with:[/dim]")
-            console.print(f"  pragma provider status {provider_id} --job {push_result.job_name}")
+            console.print(f"  pragma providers status {provider_id} --job {push_result.job_name}")
             return
 
         build_result = _wait_for_build(client, provider_id, push_result.job_name, logs)
@@ -617,12 +613,12 @@ def deploy(
 ):
     """Deploy a provider from a built container image.
 
-    Deploys a provider image to Kubernetes. Use after 'pragma provider push'
+    Deploys a provider image to Kubernetes. Use after 'pragma providers push'
     completes successfully, or to redeploy/rollback to a specific version.
 
     Example:
-        pragma provider deploy --image europe-west4-docker.pkg.dev/project/repo/provider:tag
-        pragma provider deploy -i provider:latest --package my_provider
+        pragma providers deploy --image europe-west4-docker.pkg.dev/project/repo/provider:tag
+        pragma providers deploy -i provider:latest --package my_provider
 
     Raises:
         typer.Exit: If deployment fails.
@@ -674,9 +670,9 @@ def sync(
     - JSON schema from Pydantic Config classes
 
     Example:
-        pragma provider sync
-        pragma provider sync --package postgres_provider
-        pragma provider sync --dry-run
+        pragma providers sync
+        pragma providers sync --package postgres_provider
+        pragma providers sync --dry-run
 
     Raises:
         typer.Exit: If package not found or registration fails.
@@ -801,21 +797,21 @@ def delete(
     from the platform. By default, fails if the provider has any resources.
 
     Without --cascade:
-        pragma provider delete my-provider
+        pragma providers delete my-provider
         -> Fails if provider has resources
 
     With --cascade:
-        pragma provider delete my-provider --cascade
+        pragma providers delete my-provider --cascade
         -> Deletes provider and all its resources
 
     Skip confirmation:
-        pragma provider delete my-provider --force
-        pragma provider delete my-provider --cascade --force
+        pragma providers delete my-provider --force
+        pragma providers delete my-provider --cascade --force
 
     Example:
-        pragma provider delete postgres
-        pragma provider delete postgres --cascade
-        pragma provider delete postgres --cascade --force
+        pragma providers delete postgres
+        pragma providers delete postgres --cascade
+        pragma providers delete postgres --cascade --force
 
     Raises:
         typer.Exit: If deletion fails or user cancels.
@@ -907,15 +903,15 @@ def rollback(
     rolls back to the previous successful version.
 
     Rollback to specific version:
-        pragma provider rollback my-provider --version 20250114.120000
+        pragma providers rollback my-provider --version 20250114.120000
 
     Rollback to previous version:
-        pragma provider rollback my-provider
+        pragma providers rollback my-provider
 
     Example:
-        pragma provider rollback postgres --version 20250114.120000
-        pragma provider rollback postgres -v 20250114.120000
-        pragma provider rollback postgres
+        pragma providers rollback postgres --version 20250114.120000
+        pragma providers rollback postgres -v 20250114.120000
+        pragma providers rollback postgres
 
     Raises:
         typer.Exit: If rollback fails or no suitable version found.
@@ -1009,8 +1005,8 @@ def status(
     - Last updated timestamp
 
     Example:
-        pragma provider status postgres
-        pragma provider status my-provider
+        pragma providers status postgres
+        pragma providers status my-provider
 
     Raises:
         typer.Exit: If deployment not found or status check fails.
@@ -1089,8 +1085,8 @@ def builds(
     Useful for selecting versions for rollback and verifying build status.
 
     Example:
-        pragma provider builds postgres
-        pragma provider builds my-provider
+        pragma providers builds postgres
+        pragma providers builds my-provider
 
     Raises:
         typer.Exit: If request fails.

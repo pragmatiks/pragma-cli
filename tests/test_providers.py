@@ -1,4 +1,4 @@
-"""Tests for CLI provider commands."""
+"""Tests for CLI providers commands."""
 
 import tarfile
 from datetime import UTC, datetime
@@ -10,7 +10,7 @@ from pragma_sdk import BuildInfo, BuildResult, BuildStatus, DeploymentResult, De
 from pytest_mock import MockerFixture
 from typer.testing import CliRunner
 
-from pragma_cli.commands.provider import (
+from pragma_cli.commands.providers import (
     DEFAULT_TEMPLATE_URL,
     TARBALL_EXCLUDES,
     create_tarball,
@@ -38,7 +38,7 @@ def mock_pragma_client(mocker: MockerFixture):
     """Mock get_client for testing."""
     mock_client = mocker.Mock()
     mock_client._auth = mocker.Mock()  # Simulate authenticated client
-    mocker.patch("pragma_cli.commands.provider.get_client", return_value=mock_client)
+    mocker.patch("pragma_cli.commands.providers.get_client", return_value=mock_client)
     return mock_client
 
 
@@ -72,7 +72,7 @@ def test_init_creates_project_structure(cli_runner, tmp_path, template_path):
     """Init creates complete project structure with all expected files."""
     result = cli_runner.invoke(
         app,
-        ["provider", "init", "mycompany", "--output", str(tmp_path / "mycompany-provider"), "--defaults"],
+        ["providers", "init", "mycompany", "--output", str(tmp_path / "mycompany-provider"), "--defaults"],
     )
     assert result.exit_code == 0
 
@@ -89,7 +89,7 @@ def test_init_creates_project_structure(cli_runner, tmp_path, template_path):
     assert "pragmatiks-sdk" in pyproject
 
     assert "uv sync" in result.stdout
-    assert "pragma provider push" in result.stdout
+    assert "pragma providers push" in result.stdout
 
 
 def test_init_fails_if_directory_exists(cli_runner, tmp_path, template_path):
@@ -97,14 +97,14 @@ def test_init_fails_if_directory_exists(cli_runner, tmp_path, template_path):
     existing_dir = tmp_path / "existing-provider"
     existing_dir.mkdir()
 
-    result = cli_runner.invoke(app, ["provider", "init", "existing", "--output", str(existing_dir)])
+    result = cli_runner.invoke(app, ["providers", "init", "existing", "--output", str(existing_dir)])
     assert result.exit_code == 1
     assert "already exists" in result.output
 
 
 def test_update_fails_without_answers_file(cli_runner, tmp_path):
     """Update fails when .copier-answers.yml is missing."""
-    result = cli_runner.invoke(app, ["provider", "update", str(tmp_path)])
+    result = cli_runner.invoke(app, ["providers", "update", str(tmp_path)])
     assert result.exit_code == 1
     assert "not a Copier-generated project" in result.output
 
@@ -112,7 +112,7 @@ def test_update_fails_without_answers_file(cli_runner, tmp_path):
 def test_push_fails_without_pyproject(cli_runner, tmp_path, monkeypatch):
     """Push fails when no pyproject.toml exists."""
     monkeypatch.chdir(tmp_path)
-    result = cli_runner.invoke(app, ["provider", "push"])
+    result = cli_runner.invoke(app, ["providers", "push"])
     assert result.exit_code == 1
     assert "Could not detect provider package" in result.output
 
@@ -131,7 +131,7 @@ def test_push_uploads_tarball_and_polls_status(cli_runner, provider_project, moc
         image="registry.local/test:abc123",
     )
 
-    result = cli_runner.invoke(app, ["provider", "push"])
+    result = cli_runner.invoke(app, ["providers", "push"])
 
     assert result.exit_code == 0
     assert "Pushing provider: test" in result.output
@@ -164,7 +164,7 @@ def test_push_with_deploy_flag_deploys_after_build(cli_runner, provider_project,
         message="Deployment started",
     )
 
-    result = cli_runner.invoke(app, ["provider", "push", "--deploy"])
+    result = cli_runner.invoke(app, ["providers", "push", "--deploy"])
 
     assert result.exit_code == 0
     assert "Deployment started:" in result.output
@@ -180,7 +180,7 @@ def test_push_with_no_wait_returns_immediately(cli_runner, provider_project, moc
         message="Build started",
     )
 
-    result = cli_runner.invoke(app, ["provider", "push", "--no-wait"])
+    result = cli_runner.invoke(app, ["providers", "push", "--no-wait"])
 
     assert result.exit_code == 0
     assert "Build running in background" in result.output
@@ -201,7 +201,7 @@ def test_push_handles_build_failure(cli_runner, provider_project, mock_pragma_cl
         error_message="Dockerfile syntax error",
     )
 
-    result = cli_runner.invoke(app, ["provider", "push"])
+    result = cli_runner.invoke(app, ["providers", "push"])
 
     assert result.exit_code == 1
     assert "Build failed:" in result.output
@@ -225,7 +225,7 @@ def test_push_with_package_option_uses_specified_name(cli_runner, tmp_path, mock
         image="registry.local/custom:abc123",
     )
 
-    result = cli_runner.invoke(app, ["provider", "push", "--package", "custom_provider"])
+    result = cli_runner.invoke(app, ["providers", "push", "--package", "custom_provider"])
 
     assert result.exit_code == 0
     assert "Pushing provider: custom" in result.output
@@ -332,9 +332,7 @@ def test_rollback_with_explicit_version(cli_runner, mock_pragma_client):
         message="Deployment started",
     )
 
-    result = cli_runner.invoke(
-        app, ["provider", "rollback", "test", "--version", "20250114.120000"]
-    )
+    result = cli_runner.invoke(app, ["providers", "rollback", "test", "--version", "20250114.120000"])
 
     assert result.exit_code == 0
     assert "Rolling back provider: test" in result.output
@@ -365,7 +363,7 @@ def test_rollback_without_version_finds_previous(cli_runner, mock_pragma_client)
         message="Deployment started",
     )
 
-    result = cli_runner.invoke(app, ["provider", "rollback", "test"])
+    result = cli_runner.invoke(app, ["providers", "rollback", "test"])
 
     assert result.exit_code == 0
     assert "Target version: 20250114.120000" in result.output
@@ -383,7 +381,7 @@ def test_rollback_without_version_fails_if_no_previous_build(cli_runner, mock_pr
         ),
     ]
 
-    result = cli_runner.invoke(app, ["provider", "rollback", "test"])
+    result = cli_runner.invoke(app, ["providers", "rollback", "test"])
 
     assert result.exit_code == 1
     assert "No previous successful build found" in result.output
@@ -419,7 +417,7 @@ def test_rollback_skips_failed_builds_when_finding_previous(cli_runner, mock_pra
         message="Deployment started",
     )
 
-    result = cli_runner.invoke(app, ["provider", "rollback", "test"])
+    result = cli_runner.invoke(app, ["providers", "rollback", "test"])
 
     assert result.exit_code == 0
     assert "Target version: 20250114.120000" in result.output
@@ -436,9 +434,7 @@ def test_rollback_fails_if_version_not_found(cli_runner, mock_pragma_client):
         response=httpx.Response(404, json={"detail": "Build not found: test@20250101.000000"}),
     )
 
-    result = cli_runner.invoke(
-        app, ["provider", "rollback", "test", "--version", "20250101.000000"]
-    )
+    result = cli_runner.invoke(app, ["providers", "rollback", "test", "--version", "20250101.000000"])
 
     assert result.exit_code == 1
     assert "Build not found" in result.output
@@ -454,9 +450,7 @@ def test_rollback_fails_if_build_not_deployable(cli_runner, mock_pragma_client):
         response=httpx.Response(400, json={"detail": "Build 20250114.120000 is not deployable (status: failed)"}),
     )
 
-    result = cli_runner.invoke(
-        app, ["provider", "rollback", "test", "--version", "20250114.120000"]
-    )
+    result = cli_runner.invoke(app, ["providers", "rollback", "test", "--version", "20250114.120000"])
 
     assert result.exit_code == 1
     assert "not deployable" in result.output
@@ -474,7 +468,7 @@ def test_status_displays_deployment_info(cli_runner, mock_pragma_client):
         message="Deployment has minimum availability",
     )
 
-    result = cli_runner.invoke(app, ["provider", "status", "test"])
+    result = cli_runner.invoke(app, ["providers", "status", "test"])
 
     assert result.exit_code == 0
     assert "Provider:" in result.output
@@ -494,7 +488,7 @@ def test_status_handles_not_found(cli_runner, mock_pragma_client):
         "Not found", request=httpx.Request("GET", "http://test"), response=mock_response
     )
 
-    result = cli_runner.invoke(app, ["provider", "status", "nonexistent"])
+    result = cli_runner.invoke(app, ["providers", "status", "nonexistent"])
 
     assert result.exit_code == 1
     assert "Deployment not found" in result.output
@@ -511,7 +505,7 @@ def test_status_handles_progressing_deployment(cli_runner, mock_pragma_client):
         message="ReplicaSet is progressing",
     )
 
-    result = cli_runner.invoke(app, ["provider", "status", "test"])
+    result = cli_runner.invoke(app, ["providers", "status", "test"])
 
     assert result.exit_code == 0
     assert "progressing" in result.output
@@ -528,7 +522,7 @@ def test_status_handles_failed_deployment(cli_runner, mock_pragma_client):
         message="ProgressDeadlineExceeded",
     )
 
-    result = cli_runner.invoke(app, ["provider", "status", "test"])
+    result = cli_runner.invoke(app, ["providers", "status", "test"])
 
     assert result.exit_code == 0
     assert "failed" in result.output
@@ -553,7 +547,7 @@ def test_list_providers_displays_table(cli_runner, mock_pragma_client):
         ),
     ]
 
-    result = cli_runner.invoke(app, ["provider", "list"])
+    result = cli_runner.invoke(app, ["providers", "list"])
 
     assert result.exit_code == 0
     assert "postgres" in result.output
@@ -567,7 +561,7 @@ def test_list_providers_handles_empty_list(cli_runner, mock_pragma_client):
     """List command shows message when no providers exist."""
     mock_pragma_client.list_providers.return_value = []
 
-    result = cli_runner.invoke(app, ["provider", "list"])
+    result = cli_runner.invoke(app, ["providers", "list"])
 
     assert result.exit_code == 0
     assert "No providers found" in result.output
@@ -584,7 +578,7 @@ def test_list_providers_handles_not_deployed(cli_runner, mock_pragma_client):
         ),
     ]
 
-    result = cli_runner.invoke(app, ["provider", "list"])
+    result = cli_runner.invoke(app, ["providers", "list"])
 
     assert result.exit_code == 0
     assert "test" in result.output
@@ -595,7 +589,7 @@ def test_list_providers_requires_auth(cli_runner, mock_pragma_client):
     """List command fails without authentication."""
     mock_pragma_client._auth = None
 
-    result = cli_runner.invoke(app, ["provider", "list"])
+    result = cli_runner.invoke(app, ["providers", "list"])
 
     assert result.exit_code == 1
     assert "Authentication required" in result.output
@@ -612,7 +606,7 @@ def test_list_providers_handles_failed_status(cli_runner, mock_pragma_client):
         ),
     ]
 
-    result = cli_runner.invoke(app, ["provider", "list"])
+    result = cli_runner.invoke(app, ["providers", "list"])
 
     assert result.exit_code == 0
     assert "broken" in result.output
