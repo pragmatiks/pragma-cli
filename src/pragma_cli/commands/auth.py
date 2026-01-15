@@ -5,11 +5,17 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import typer
+from pragma_sdk import PragmaClient
 from pragma_sdk.config import load_credentials
 from rich import print
+from rich.console import Console
 
 from pragma_cli.config import CREDENTIALS_FILE, get_current_context, load_config
+
+
+console = Console()
 
 
 app = typer.Typer()
@@ -218,30 +224,49 @@ def logout(
 
 @app.command()
 def whoami():
-    """Show current authentication status.
+    """Show current authentication status and user information.
 
-    Displays which contexts have stored credentials and current authentication state.
+    Displays the current context, authentication state, and user details
+    including email and organization name from the API.
     """
-    config = load_config()
-    current_context_name, _ = get_current_context()
+    current_context_name, current_context_config = get_current_context()
+    token = load_credentials(current_context_name)
 
-    print()
-    print("[bold]Authentication Status[/bold]")
-    print()
+    console.print()
+    console.print("[bold]Authentication Status[/bold]")
+    console.print()
 
-    has_any_creds = False
-    for context_name in config.contexts.keys():
-        token = load_credentials(context_name)
-        marker = "[green]*[/green]" if context_name == current_context_name else " "
+    if not token:
+        console.print(f"  Context: [cyan]{current_context_name}[/cyan]")
+        console.print("  Status:  [yellow]Not authenticated[/yellow]")
+        console.print()
+        console.print("[dim]Run 'pragma auth login' to authenticate[/dim]")
+        return
 
-        if token:
-            has_any_creds = True
-            print(f"{marker} [cyan]{context_name}[/cyan]: [green]\u2713 Authenticated[/green]")
+    console.print(f"  Context: [cyan]{current_context_name}[/cyan]")
+    console.print("  Status:  [green]\u2713 Authenticated[/green]")
+
+    try:
+        client = PragmaClient(base_url=current_context_config.api_url, auth_token=token)
+        user_info = client.get_me()
+
+        console.print()
+        console.print("[bold]User Information[/bold]")
+        console.print()
+        console.print(f"  User ID:      [cyan]{user_info.user_id}[/cyan]")
+        if user_info.email:
+            console.print(f"  Email:        [cyan]{user_info.email}[/cyan]")
         else:
-            print(f"{marker} [cyan]{context_name}[/cyan]: [dim]Not authenticated[/dim]")
+            console.print("  Email:        [dim]Not set[/dim]")
+        console.print(f"  Organization: [cyan]{user_info.organization_name or user_info.organization_id}[/cyan]")
 
-    print()
-
-    if not has_any_creds:
-        print("[yellow]No stored credentials found[/yellow]")
-        print("[dim]Run 'pragma login' to authenticate[/dim]")
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            console.print()
+            console.print("[yellow]Token expired or invalid. Run 'pragma auth login' to re-authenticate.[/yellow]")
+        else:
+            console.print()
+            console.print(f"[red]Error fetching user info:[/red] {e.response.text}")
+    except httpx.RequestError as e:
+        console.print()
+        console.print(f"[red]Connection error:[/red] {e}")

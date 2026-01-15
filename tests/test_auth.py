@@ -201,8 +201,10 @@ contexts:
     assert "default" in result.stdout
 
 
-def test_whoami_command_with_credentials(cli_runner, tmp_path, monkeypatch):
-    """Test whoami command with stored credentials."""
+def test_whoami_command_with_credentials(cli_runner, tmp_path, monkeypatch, mocker):
+    """Test whoami command with stored credentials and API response."""
+    from pragma_sdk import UserInfo
+
     config_file = tmp_path / "config"
     config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text(
@@ -211,8 +213,6 @@ current_context: default
 contexts:
   default:
     api_url: http://localhost:8000
-  production:
-    api_url: https://api.prod.com
 """
     )
     monkeypatch.setattr("pragma_cli.config.CONFIG_PATH", config_file)
@@ -222,15 +222,25 @@ contexts:
     monkeypatch.setattr("pragma_cli.config.CREDENTIALS_FILE", credentials_file)
 
     save_credentials("default_token", "default")
-    save_credentials("prod_token", "production")
+
+    mock_client = mocker.MagicMock()
+    mock_client.get_me.return_value = UserInfo(
+        user_id="user_123",
+        email="test@example.com",
+        organization_id="org_456",
+        organization_name="Test Org",
+    )
+    mocker.patch("pragma_cli.commands.auth.PragmaClient", return_value=mock_client)
 
     result = cli_runner.invoke(app, ["auth", "whoami"])
 
     assert result.exit_code == 0
     assert "Authentication Status" in result.stdout
     assert "default" in result.stdout
-    assert "production" in result.stdout
     assert "Authenticated" in result.stdout
+    assert "User Information" in result.stdout
+    assert "test@example.com" in result.stdout
+    assert "Test Org" in result.stdout
 
 
 def test_whoami_command_no_credentials(cli_runner, tmp_path, monkeypatch):
@@ -258,5 +268,5 @@ contexts:
     result = cli_runner.invoke(app, ["auth", "whoami"])
 
     assert result.exit_code == 0
-    assert "No stored credentials found" in result.stdout
-    assert "pragma login" in result.stdout
+    assert "Not authenticated" in result.stdout
+    assert "pragma auth login" in result.stdout
