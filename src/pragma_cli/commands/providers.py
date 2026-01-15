@@ -573,9 +573,7 @@ def _stream_build_logs(client: PragmaClient, provider_id: str, job_name: str) ->
     console.print("-" * 40)
 
 
-def _deploy_provider(
-    client: PragmaClient, provider_id: str, version: str | None = None
-) -> None:
+def _deploy_provider(client: PragmaClient, provider_id: str, version: str | None = None) -> None:
     """Deploy the provider to a specific version.
 
     Args:
@@ -762,23 +760,12 @@ def _print_delete_result(result: ProviderDeleteResult) -> None:
     """
     console.print()
     console.print(f"[green]Provider deleted:[/green] {result.provider_id}")
-    console.print()
 
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("Component")
-    table.add_column("Deleted", justify="right")
+    if result.deployment_deleted:
+        console.print("[dim]Deployment stopped[/dim]")
 
-    table.add_row("Builds Cancelled", str(result.builds_cancelled))
-    table.add_row("Source Archives", str(result.source_archives_deleted))
-    table.add_row("Deployment", "Yes" if result.deployment_deleted else "No (not found)")
-    table.add_row("Resources", str(result.resources_deleted))
-    table.add_row("Resource Definitions", str(result.resource_definitions_deleted))
-    table.add_row("Outbox Events", str(result.outbox_events_deleted))
-    table.add_row("Dead Letter Events", str(result.dead_letter_events_deleted))
-    table.add_row("NATS Messages Purged", str(result.messages_purged))
-    table.add_row("NATS Consumer", "Deleted" if result.consumer_deleted else "Not found")
-
-    console.print(table)
+    if result.resources_deleted > 0:
+        console.print(f"[dim]Resources deleted: {result.resources_deleted}[/dim]")
 
 
 @app.command()
