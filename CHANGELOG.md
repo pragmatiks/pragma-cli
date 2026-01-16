@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.10.0 (2026-01-16)
+
+### Feat
+
+- Add describe command, resource types, and error message improvements
+
 ## v0.9.3 (2026-01-15)
 
 ### Refactor
