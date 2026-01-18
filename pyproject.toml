@@ -15,11 +15,6 @@ dependencies = [
 [project.scripts]
 pragma = "pragma_cli.main:app"
 
-[tool.uv.sources]
-# In workspace: resolved from local packages/sdk
-# Standalone: falls back to PyPI (pragmatiks-sdk)
-pragmatiks-sdk = { workspace = true }
-
 [tool.ruff]
 target-version = "py313"
 line-length = 120
