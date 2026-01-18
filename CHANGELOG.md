@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.12.2 (2026-01-18)
+
+### Fix
+
+- align code with pragma_sdk API models
+
 ## v0.12.1 (2026-01-18)
 
 ### Fix
