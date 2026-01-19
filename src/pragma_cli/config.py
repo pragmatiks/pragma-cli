@@ -40,6 +40,11 @@ class ContextConfig(BaseModel):
         """
         if self.auth_url:
             return self.auth_url
+
+        # Handle localhost: default to port 3000 for web app
+        if "localhost" in self.api_url or "127.0.0.1" in self.api_url:
+            return "http://localhost:3000"
+
         # Derive from api_url: api.pragmatiks.io -> app.pragmatiks.io
         return self.api_url.replace("://api.", "://app.")
 

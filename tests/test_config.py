@@ -296,16 +296,32 @@ def test_context_config_get_auth_url_localhost():
     """Test get_auth_url handles localhost API correctly."""
     context = ContextConfig(api_url="http://localhost:8000")
 
-    # For localhost without 'api.' prefix, the replace does nothing
-    assert context.get_auth_url() == "http://localhost:8000"
+    # Localhost defaults to port 3000 for the web app
+    assert context.get_auth_url() == "http://localhost:3000"
+
+
+def test_context_config_get_auth_url_localhost_explicit():
+    """Test get_auth_url respects explicit auth_url for localhost."""
+    context = ContextConfig(api_url="http://localhost:8000", auth_url="http://localhost:4000")
+
+    # Explicit auth_url should be used
+    assert context.get_auth_url() == "http://localhost:4000"
+
+
+def test_context_config_get_auth_url_127():
+    """Test get_auth_url handles 127.0.0.1 correctly."""
+    context = ContextConfig(api_url="http://127.0.0.1:8000")
+
+    # 127.0.0.1 also defaults to localhost:3000
+    assert context.get_auth_url() == "http://localhost:3000"
 
 
 def test_context_config_get_auth_url_local_api():
     """Test get_auth_url derives correctly for local dev setup."""
     context = ContextConfig(api_url="http://api.localhost:8000")
 
-    # Should derive app.localhost:8000 from api.localhost:8000
-    assert context.get_auth_url() == "http://app.localhost:8000"
+    # Localhost takes precedence, defaults to port 3000
+    assert context.get_auth_url() == "http://localhost:3000"
 
 
 def test_pragma_config_model():

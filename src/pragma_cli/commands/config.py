@@ -44,18 +44,25 @@ def current_context():
     context_name, context_config = get_current_context()
     print(f"[bold]Current context:[/bold] [cyan]{context_name}[/cyan]")
     print(f"[bold]API URL:[/bold] {context_config.api_url}")
+    print(f"[bold]Auth URL:[/bold] {context_config.get_auth_url()}")
 
 
 @app.command()
 def set_context(
     name: str = typer.Argument(..., help="Context name"),
     api_url: str = typer.Option(..., help="API endpoint URL"),
+    auth_url: str | None = typer.Option(None, help="Auth endpoint URL (derived from api_url if not set)"),
 ):
     """Create or update a context."""
     config = load_config()
-    config.contexts[name] = ContextConfig(api_url=api_url)
+    config.contexts[name] = ContextConfig(api_url=api_url, auth_url=auth_url)
     save_config(config)
+
+    # Show the effective auth URL
+    effective_auth = config.contexts[name].get_auth_url()
     print(f"[green]\u2713[/green] Context '{name}' configured")
+    print(f"  API URL:  {api_url}")
+    print(f"  Auth URL: {effective_auth}")
 
 
 @app.command()
