@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.12.5 (2026-01-19)
+
+### Fix
+
+- auth login now uses current context by default
+
 ## v0.12.4 (2026-01-19)
 
 ### Fix
