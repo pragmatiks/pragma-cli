@@ -431,7 +431,7 @@ def push(
     client = get_client()
 
     if client._auth is None:
-        console.print("[red]Error:[/red] Authentication required. Run 'pragma login' first.")
+        console.print("[red]Error:[/red] Authentication required. Run 'pragma auth login' first.")
         raise typer.Exit(1)
 
     try:
@@ -722,7 +722,7 @@ def delete(
     client = get_client()
 
     if client._auth is None:
-        console.print("[red]Error:[/red] Authentication required. Run 'pragma login' first.")
+        console.print("[red]Error:[/red] Authentication required. Run 'pragma auth login' first.")
         raise typer.Exit(1)
 
     console.print(f"[bold]Provider:[/bold] {provider_id}")
@@ -896,7 +896,7 @@ def builds(
     client = get_client()
 
     if client._auth is None:
-        console.print("[red]Error:[/red] Authentication required. Run 'pragma login' first.")
+        console.print("[red]Error:[/red] Authentication required. Run 'pragma auth login' first.")
         raise typer.Exit(1)
 
     try:

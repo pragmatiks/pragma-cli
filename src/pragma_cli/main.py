@@ -63,14 +63,14 @@ def main(
     """Pragma CLI - Declarative resource management.
 
     Authentication (industry-standard pattern):
-      - CLI writes credentials: 'pragma login' stores tokens in ~/.config/pragma/credentials
+      - CLI writes credentials: 'pragma auth login' stores tokens in ~/.config/pragma/credentials
       - SDK reads credentials: Automatic token discovery via precedence chain
 
     Token Discovery Precedence:
       1. --token flag (explicit override)
       2. PRAGMA_AUTH_TOKEN_<CONTEXT> context-specific environment variable
       3. PRAGMA_AUTH_TOKEN environment variable
-      4. ~/.config/pragma/credentials file (from pragma login)
+      4. ~/.config/pragma/credentials file (from pragma auth login)
       5. No authentication
     """
     context_name, context_config = get_current_context(context)
