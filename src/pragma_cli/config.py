@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 from pydantic import BaseModel
@@ -42,7 +43,8 @@ class ContextConfig(BaseModel):
             return self.auth_url
 
         # Handle localhost: default to port 3000 for web app
-        if "localhost" in self.api_url or "127.0.0.1" in self.api_url:
+        parsed = urlparse(self.api_url)
+        if parsed.hostname in ("localhost", "127.0.0.1"):
             return "http://localhost:3000"
 
         # Derive from api_url: api.pragmatiks.io -> app.pragmatiks.io
