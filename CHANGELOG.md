@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.12.6 (2026-01-20)
+
+### Fix
+
+- update to use ProviderStatus model from SDK
+
 ## v0.12.5 (2026-01-19)
 
 ### Fix
