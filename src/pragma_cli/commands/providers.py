@@ -52,7 +52,7 @@ TARBALL_EXCLUDES = {
     ".nox",
 }
 
-DEFAULT_TEMPLATE_URL = "gh:pragmatiks/provider-template"
+DEFAULT_TEMPLATE_URL = "gh:pragmatiks/pragma-providers"
 TEMPLATE_PATH_ENV = "PRAGMA_PROVIDER_TEMPLATE"
 
 BUILD_POLL_INTERVAL = 2.0
@@ -110,7 +110,7 @@ def get_template_source() -> str:
     if env_template := os.environ.get(TEMPLATE_PATH_ENV):
         return env_template
 
-    local_template = Path(__file__).parents[5] / "templates" / "provider"
+    local_template = Path(__file__).parents[4] / "pragma-providers"
     if local_template.exists() and (local_template / "copier.yml").exists():
         return str(local_template)
 
@@ -279,12 +279,15 @@ def init(
     typer.echo("")
 
     try:
+        # Use HEAD when running from local path (development) to pick up uncommitted changes
+        vcs_ref = "HEAD" if not template_source.startswith("gh:") else None
         copier.run_copy(
             src_path=template_source,
             dst_path=project_dir,
             data=data,
             defaults=defaults,
             unsafe=True,
+            vcs_ref=vcs_ref,
         )
     except Exception as e:
         typer.echo(f"Error creating provider: {e}", err=True)
@@ -300,7 +303,7 @@ def init(
     typer.echo("  uv sync --dev")
     typer.echo("  uv run pytest tests/")
     typer.echo("")
-    typer.echo(f"Edit src/{package_name}/resources.py to add your resources.")
+    typer.echo(f"Edit src/{package_name}/resources/ to add your resources.")
     typer.echo("")
     typer.echo("To update this project when the template changes:")
     typer.echo("  copier update")

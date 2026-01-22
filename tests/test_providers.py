@@ -10,7 +10,6 @@ import yaml
 from pragma_sdk import (
     BuildInfo,
     BuildStatus,
-    DeploymentResult,
     DeploymentStatus,
     ProviderInfo,
     ProviderStatus,
@@ -142,7 +141,7 @@ def test_get_template_source_uses_env_variable(monkeypatch):
 
 def test_get_template_source_default():
     """Default template URL is GitHub."""
-    assert DEFAULT_TEMPLATE_URL == "gh:pragmatiks/provider-template"
+    assert DEFAULT_TEMPLATE_URL == "gh:pragmatiks/pragma-providers"
 
 
 def test_init_creates_project_structure(cli_runner, tmp_path, template_path):
