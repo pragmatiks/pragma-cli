@@ -502,7 +502,7 @@ wheels = [
 
 [[package]]
 name = "pragmatiks-cli"
-version = "0.12.5"
+version = "0.12.7"
 source = { editable = "." }
 dependencies = [
     { name = "copier" },
