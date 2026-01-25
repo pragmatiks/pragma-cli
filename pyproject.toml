@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "typer>=0.15.3",
-    "pragmatiks-sdk>=0.15.4",
+    "pragmatiks-sdk>=0.15.5",
     "pyyaml>=6.0.3",
     "copier>=9.0.0",
     "rich>=13.9.0",
