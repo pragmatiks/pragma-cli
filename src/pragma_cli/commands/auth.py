@@ -217,8 +217,8 @@ def login(
         print(f"[dim]Credentials saved to {CREDENTIALS_FILE}[/dim]")
         print()
         print("[bold]You can now use pragma commands:[/bold]")
-        print("  pragma resources list-groups")
-        print("  pragma resources get <resource-id>")
+        print("  pragma resources list")
+        print("  pragma resources get <provider/resource> <name>")
         print("  pragma resources apply <file.yaml>")
     else:
         print()

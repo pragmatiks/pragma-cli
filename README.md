@@ -105,13 +105,41 @@ Build and deploy custom providers:
 
 ```bash
 # Initialize a new provider project
-pragma provider init mycompany
+pragma providers init mycompany
 
-# Sync resource schemas with the platform
-pragma provider sync
+# Update project from latest template
+pragma providers update
 
-# Build and deploy
-pragma provider push --deploy
+# Build and push (without deploying)
+pragma providers push
+
+# Build, push, and deploy
+pragma providers push --deploy
+
+# Stream build logs
+pragma providers push --logs --deploy
+```
+
+### Managing Deployed Providers
+
+```bash
+# List all deployed providers
+pragma providers list
+
+# Check deployment status
+pragma providers status mycompany
+
+# View build history
+pragma providers builds mycompany
+
+# Deploy a specific version
+pragma providers deploy mycompany 20250115.120000
+
+# Delete a provider (fails if resources exist)
+pragma providers delete mycompany
+
+# Delete provider and all its resources
+pragma providers delete mycompany --cascade
 ```
 
 ## Authentication
@@ -129,11 +157,50 @@ pragma auth logout
 
 ## Configuration
 
-Set environment variables to configure the CLI:
+The CLI uses **contexts** to manage connections to different environments (production, staging, local).
+
+### Context Management
 
 ```bash
-export PRAGMA_API_URL=https://api.pragmatiks.io
-export PRAGMA_AUTH_TOKEN=sk_...
+# Show current context
+pragma config current-context
+
+# List available contexts
+pragma config get-contexts
+
+# Switch context
+pragma config use-context staging
+
+# Create a new context
+pragma config set-context staging --api-url https://api.staging.pragmatiks.io
+
+# Delete a context
+pragma config delete-context old-context
+```
+
+Configuration is stored in `~/.config/pragma/config`.
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `PRAGMA_CONTEXT` | Override the current context |
+| `PRAGMA_AUTH_TOKEN` | Authentication token (overrides stored credentials) |
+| `PRAGMA_AUTH_TOKEN_<CONTEXT>` | Context-specific token (e.g., `PRAGMA_AUTH_TOKEN_PRODUCTION`) |
+
+**Token Discovery Precedence:**
+1. `--token` flag (explicit override)
+2. `PRAGMA_AUTH_TOKEN_<CONTEXT>` environment variable
+3. `PRAGMA_AUTH_TOKEN` environment variable
+4. `~/.config/pragma/credentials` file (from `pragma auth login`)
+
+Example:
+```bash
+# Use a specific context
+PRAGMA_CONTEXT=staging pragma resources list
+
+# Use a token directly
+PRAGMA_AUTH_TOKEN=sk_... pragma resources list
 ```
 
 ## Command Reference
@@ -143,18 +210,38 @@ export PRAGMA_AUTH_TOKEN=sk_...
 | Command | Description |
 |---------|-------------|
 | `pragma resources list` | List resources with optional filters |
-| `pragma resources get <provider/resource> <name>` | Get a specific resource |
+| `pragma resources types` | List available resource types from providers |
+| `pragma resources get <provider/resource> [name]` | Get resource(s) by type, optionally by name |
+| `pragma resources describe <provider/resource> <name>` | Show detailed resource info (config, outputs, deps) |
 | `pragma resources apply <file>` | Apply resources from YAML |
 | `pragma resources delete <provider/resource> <name>` | Delete a resource |
+| `pragma resources tags list <provider/resource> <name>` | List tags for a resource |
+| `pragma resources tags add <provider/resource> <name> --tag <tag>` | Add tags to a resource |
+| `pragma resources tags remove <provider/resource> <name> --tag <tag>` | Remove tags from a resource |
 
 ### Providers
 
 | Command | Description |
 |---------|-------------|
-| `pragma provider init <name>` | Initialize a new provider project |
-| `pragma provider sync` | Sync resource schemas with platform |
-| `pragma provider push` | Build and push provider image |
-| `pragma provider push --deploy` | Build, push, and deploy |
+| `pragma providers list` | List all deployed providers |
+| `pragma providers init <name>` | Initialize a new provider project |
+| `pragma providers update [dir]` | Update provider project from template |
+| `pragma providers push` | Build and push provider image |
+| `pragma providers push --deploy` | Build, push, and deploy |
+| `pragma providers deploy <provider-id> [version]` | Deploy a provider to a specific version |
+| `pragma providers status <provider-id>` | Check deployment status |
+| `pragma providers builds <provider-id>` | List build history |
+| `pragma providers delete <provider-id>` | Delete a provider (use --cascade for resources) |
+
+### Configuration
+
+| Command | Description |
+|---------|-------------|
+| `pragma config current-context` | Show current context |
+| `pragma config get-contexts` | List available contexts |
+| `pragma config use-context <name>` | Switch to a different context |
+| `pragma config set-context <name> --api-url <url>` | Create or update a context |
+| `pragma config delete-context <name>` | Delete a context |
 
 ### Authentication
 
@@ -169,7 +256,11 @@ export PRAGMA_AUTH_TOKEN=sk_...
 | Command | Description |
 |---------|-------------|
 | `pragma ops dead-letter list` | List failed events |
+| `pragma ops dead-letter show <id>` | Show detailed event information |
 | `pragma ops dead-letter retry <id>` | Retry a failed event |
+| `pragma ops dead-letter retry --all` | Retry all failed events |
+| `pragma ops dead-letter delete <id>` | Delete a failed event |
+| `pragma ops dead-letter delete --all` | Delete all failed events |
 
 ## Development
 
