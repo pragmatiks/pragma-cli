@@ -38,12 +38,19 @@ jobs:
       - name: Bump version
         id: bump
         run: |
+          OLD_VERSION=$(cz version --project)
           if cz bump --yes --changelog 2>&1 | tee bump_output.txt; then
-            echo "bumped=true" >> $GITHUB_OUTPUT
             NEW_VERSION=$(cz version --project)
-            echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+            if [ "$OLD_VERSION" != "$NEW_VERSION" ]; then
+              echo "Version bumped: $OLD_VERSION -> $NEW_VERSION"
+              echo "bumped=true" >> $GITHUB_OUTPUT
+              echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+            else
+              echo "No version change (was $OLD_VERSION)"
+              echo "bumped=false" >> $GITHUB_OUTPUT
+            fi
           else
-            if grep -q "No commits found" bump_output.txt || grep -q "is not a bump" bump_output.txt; then
+            if grep -q "No commits found\|is not a bump\|No eligible commits\|nothing to bump" bump_output.txt; then
               echo "No version bump needed"
               echo "bumped=false" >> $GITHUB_OUTPUT
             else
