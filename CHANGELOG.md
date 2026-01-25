@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.14.1 (2026-01-25)
+
+### Fix
+
+- **ci**: detect actual version change before publishing
+
 ## v0.14.0 (2026-01-25)
 
 ### Feat
