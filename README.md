@@ -49,7 +49,7 @@ pragma --install-completion
 
 - **Declarative Resources** - Apply, get, and delete resources with YAML manifests
 - **Smart Completion** - Tab completion for providers, resources, and names
-- **Provider Development** - Initialize, sync, and deploy custom providers
+- **Provider Development** - Initialize, update, and deploy custom providers
 - **Multi-document Support** - Apply multiple resources from a single YAML file
 
 ## Resource Management
