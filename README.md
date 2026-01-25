@@ -73,8 +73,8 @@ pragma resources apply bucket.yaml
 # Apply multiple files
 pragma resources apply *.yaml
 
-# Apply with pending flag to execute immediately
-pragma resources apply --pending bucket.yaml
+# Apply without deploying (keep as draft)
+pragma resources apply --draft bucket.yaml
 ```
 
 ### List and Get Resources

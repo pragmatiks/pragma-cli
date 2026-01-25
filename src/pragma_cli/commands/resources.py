@@ -433,14 +433,14 @@ def describe(
 @app.command()
 def apply(
     file: list[typer.FileText],
-    pending: Annotated[
-        bool, typer.Option("--pending", "-p", help="Queue for processing (set lifecycle_state to PENDING)")
+    draft: Annotated[
+        bool, typer.Option("--draft", "-d", help="Keep in draft state (don't deploy)")
     ] = False,
 ):
     """Apply resources from YAML files (multi-document supported).
 
-    By default, resources are created in DRAFT state (not processed).
-    Use --pending to queue for immediate processing.
+    By default, resources are queued for immediate processing (deployed).
+    Use --draft to keep resources in draft state without deploying.
 
     For pragma/secret resources, file references in config.data values
     are resolved before submission. Use '@path/to/file' syntax to inline
@@ -456,7 +456,7 @@ def apply(
 
         for resource in resources:
             resource = resolve_file_references(resource, base_dir)
-            if pending:
+            if not draft:
                 resource["lifecycle_state"] = "pending"
             res_id = f"{resource.get('provider', '?')}/{resource.get('resource', '?')}/{resource.get('name', '?')}"
             try:

@@ -553,7 +553,7 @@ config:
         "422 Unprocessable Entity", request=httpx.Request("POST", "http://test"), response=response
     )
 
-    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file), "--pending"])
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
     assert result.exit_code == 1
     assert "Dependency validation failed" in result.stdout
     assert "Dependencies not ready" in result.stdout
@@ -589,7 +589,7 @@ config:
         "422 Unprocessable Entity", request=httpx.Request("POST", "http://test"), response=response
     )
 
-    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file), "--pending"])
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
     assert result.exit_code == 1
     assert "Field reference resolution failed" in result.stdout
     assert "pragma/secret/gcp-creds#config.data.service_account" in result.stdout
