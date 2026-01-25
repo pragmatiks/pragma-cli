@@ -1,6 +1,10 @@
 version: "3"
 
 tasks:
+  install:
+    cmd: uv sync --all-groups
+    desc: Install dependencies
+
   format:
     cmd: uv run ruff format .
     desc: Format Python code with ruff
