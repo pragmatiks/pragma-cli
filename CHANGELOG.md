@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.14.0 (2026-01-25)
+
+### Feat
+
+- rename --pending to --draft and invert default behavior (#6)
+
 ## v0.13.0 (2026-01-23)
 
 ### Feat
