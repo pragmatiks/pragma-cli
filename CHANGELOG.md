@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.14.5 (2026-01-29)
+
+### Fix
+
+- **ci**: trigger publish after SDK updates
+- **deps**: update pragmatiks-sdk to v0.16.0
+
 ## v0.14.4 (2026-01-28)
 
 ### Fix
