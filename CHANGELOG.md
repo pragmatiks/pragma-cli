@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.15.0 (2026-01-31)
+
+### Feat
+
+- add @path syntax support for pragma/file resources
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v0.18.0
+- **deps**: update pragmatiks-sdk to v0.17.1
+
 ## v0.14.6 (2026-01-31)
 
 ### Fix
