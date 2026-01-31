@@ -76,11 +76,29 @@ def _format_api_error(error: httpx.HTTPStatusError) -> str:
     return "".join(parts)
 
 
-def resolve_file_references(resource: dict, base_dir: Path) -> dict:
+def _resolve_path(path_str: str, base_dir: Path) -> Path:
+    """Resolve a path string relative to base directory.
+
+    Args:
+        path_str: Path string (without @ prefix).
+        base_dir: Base directory for relative paths.
+
+    Returns:
+        Resolved absolute path.
+    """
+    file_path = Path(path_str).expanduser()
+
+    if not file_path.is_absolute():
+        file_path = base_dir / file_path
+
+    return file_path
+
+
+def _resolve_secret_references(resource: dict, base_dir: Path) -> dict:
     """Resolve file references in secret resource config.
 
     For pragma/secret resources, scans config.data values for '@' prefix
-    and replaces them with the file contents.
+    and replaces them with the file contents (as text).
 
     Args:
         resource: Resource dictionary from YAML.
@@ -90,12 +108,8 @@ def resolve_file_references(resource: dict, base_dir: Path) -> dict:
         Resource dictionary with file references resolved.
 
     Raises:
-        typer.Exit: If a referenced file is not found.
+        typer.Exit: If a referenced file is not found or cannot be read.
     """
-    is_secret = resource.get("provider") == "pragma" and resource.get("resource") == "secret"
-    if not is_secret:
-        return resource
-
     config = resource.get("config")
     if not config or not isinstance(config, dict):
         return resource
@@ -107,9 +121,7 @@ def resolve_file_references(resource: dict, base_dir: Path) -> dict:
     resolved_data = {}
     for key, value in data.items():
         if isinstance(value, str) and value.startswith("@"):
-            file_path = Path(value[1:]).expanduser()
-            if not file_path.is_absolute():
-                file_path = base_dir / file_path
+            file_path = _resolve_path(value[1:], base_dir)
 
             if not file_path.exists():
                 console.print(f"[red]Error:[/red] File not found: {file_path}")
@@ -126,6 +138,97 @@ def resolve_file_references(resource: dict, base_dir: Path) -> dict:
     resolved_resource = resource.copy()
     resolved_resource["config"] = {**config, "data": resolved_data}
     return resolved_resource
+
+
+def _resolve_file_references(resource: dict, base_dir: Path) -> dict:
+    """Resolve file references in file resource config.
+
+    For pragma/file resources, if config.content starts with '@', reads
+    the file as binary and uploads it via the API.
+
+    Args:
+        resource: Resource dictionary from YAML.
+        base_dir: Base directory for resolving relative paths.
+
+    Returns:
+        Resource dictionary with content removed (file uploaded separately).
+
+    Raises:
+        typer.Exit: If file not found, cannot be read, or upload fails.
+    """
+    config = resource.get("config")
+    if not config or not isinstance(config, dict):
+        return resource
+
+    content = config.get("content")
+    if not isinstance(content, str) or not content.startswith("@"):
+        return resource
+
+    content_type = config.get("content_type")
+    if not content_type:
+        console.print("[red]Error:[/red] content_type is required for pragma/file resources with @path syntax")
+        raise typer.Exit(1)
+
+    file_path = _resolve_path(content[1:], base_dir)
+
+    if not file_path.exists():
+        console.print(f"[red]Error:[/red] File not found: {file_path}")
+        raise typer.Exit(1)
+
+    try:
+        file_content = file_path.read_bytes()
+    except OSError as e:
+        console.print(f"[red]Error:[/red] Cannot read file {file_path}: {e}")
+        raise typer.Exit(1)
+
+    name = resource.get("name")
+    if not name:
+        console.print("[red]Error:[/red] Resource name is required for pragma/file resources")
+        raise typer.Exit(1)
+
+    try:
+        client = get_client()
+        client.upload_file(name, file_content, content_type)
+    except httpx.HTTPStatusError as e:
+        console.print(f"[red]Error:[/red] Failed to upload file: {_format_api_error(e)}")
+        raise typer.Exit(1)
+
+    resolved_resource = resource.copy()
+    resolved_config = {k: v for k, v in config.items() if k != "content"}
+    resolved_resource["config"] = resolved_config
+
+    return resolved_resource
+
+
+def resolve_file_references(resource: dict, base_dir: Path) -> dict:
+    """Resolve file references in resource config.
+
+    Handles two resource types:
+    - pragma/secret: Scans config.data values for '@' prefix and replaces
+      with file contents (as text).
+    - pragma/file: If config.content starts with '@', uploads the file
+      and removes content from config.
+
+    Args:
+        resource: Resource dictionary from YAML.
+        base_dir: Base directory for resolving relative paths.
+
+    Returns:
+        Resource dictionary with file references resolved.
+    """  # noqa: DOC502
+    provider = resource.get("provider")
+    resource_type = resource.get("resource")
+
+    if provider != "pragma":
+        return resource
+
+    if resource_type == "secret":
+        return _resolve_secret_references(resource, base_dir)
+
+    if resource_type == "file":
+        return _resolve_file_references(resource, base_dir)
+
+    return resource
 
 
 def format_state(state: str) -> str:
@@ -412,9 +515,7 @@ def describe(
 @app.command()
 def apply(
     file: list[typer.FileText],
-    draft: Annotated[
-        bool, typer.Option("--draft", "-d", help="Keep in draft state (don't deploy)")
-    ] = False,
+    draft: Annotated[bool, typer.Option("--draft", "-d", help="Keep in draft state (don't deploy)")] = False,
 ):
     """Apply resources from YAML files (multi-document supported).
 
@@ -490,9 +591,7 @@ def _fetch_resource(resource_id: str, name: str) -> tuple[str, str, dict]:
         raise typer.Exit(1)
 
 
-def _apply_tags(
-    provider: str, resource: str, name: str, config: dict, tags: list[str] | None
-) -> None:
+def _apply_tags(provider: str, resource: str, name: str, config: dict, tags: list[str] | None) -> None:
     """Apply updated tags to a resource.
 
     Raises:

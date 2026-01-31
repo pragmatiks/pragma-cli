@@ -6,6 +6,7 @@ import json
 import tempfile
 from pathlib import Path
 
+import httpx
 import pytest
 import yaml
 
@@ -477,8 +478,6 @@ def test_describe_resource_with_field_reference(cli_runner, mock_cli_client):
 
 def test_describe_resource_not_found(cli_runner, mock_cli_client):
     """Test describe handles not found error."""
-    import httpx
-
     response = httpx.Response(404, json={"detail": "Resource not found: gcp_secret_nonexistent"})
     mock_cli_client.get_resource.side_effect = httpx.HTTPStatusError(
         "404 Not Found", request=httpx.Request("GET", "http://test"), response=response
@@ -528,8 +527,6 @@ def test_get_resource_shows_error_for_failed(cli_runner, mock_cli_client):
 
 def test_apply_shows_dependency_validation_error(cli_runner, mock_cli_client, tmp_path):
     """Test apply shows detailed dependency validation errors."""
-    import httpx
-
     yaml_content = """provider: gcp
 resource: secret
 name: test-secret
@@ -562,8 +559,6 @@ config:
 
 def test_apply_shows_field_reference_error(cli_runner, mock_cli_client, tmp_path):
     """Test apply shows detailed field reference errors."""
-    import httpx
-
     yaml_content = """provider: gcp
 resource: secret
 name: test-secret
@@ -597,8 +592,6 @@ config:
 
 def test_delete_shows_error(cli_runner, mock_cli_client):
     """Test delete shows error message on failure."""
-    import httpx
-
     response = httpx.Response(404, json={"detail": "Resource not found"})
     mock_cli_client.delete_resource.side_effect = httpx.HTTPStatusError(
         "404 Not Found", request=httpx.Request("DELETE", "http://test"), response=response
@@ -651,8 +644,6 @@ def test_types_empty_list(cli_runner, mock_cli_client):
 
 def test_types_shows_error(cli_runner, mock_cli_client):
     """Test types command shows error on failure."""
-    import httpx
-
     response = httpx.Response(500, json={"detail": "Internal server error"})
     mock_cli_client.list_resource_types.side_effect = httpx.HTTPStatusError(
         "500 Internal Server Error", request=httpx.Request("GET", "http://test"), response=response
@@ -795,3 +786,150 @@ def test_types_yaml_output(cli_runner, mock_cli_client):
     assert isinstance(data, list)
     assert len(data) == 1
     assert data[0]["provider"] == "gcp"
+
+
+# --- Tests for pragma/file with @path syntax ---
+
+
+def test_apply_file_with_content_reference(cli_runner, mock_cli_client, tmp_path):
+    """Test that @path syntax in pragma/file resources uploads the file."""
+    test_file = tmp_path / "document.pdf"
+    test_file.write_bytes(b"%PDF-1.4 binary content here")
+
+    yaml_content = """provider: pragma
+resource: file
+name: my-document
+config:
+  content: "@./document.pdf"
+  content_type: application/pdf
+"""
+    yaml_file = tmp_path / "file.yaml"
+    yaml_file.write_text(yaml_content)
+
+    mock_cli_client.upload_file.return_value = {
+        "url": "gs://bucket/tenant/files/my-document",
+        "public_url": "https://storage.googleapis.com/bucket/tenant/files/my-document",
+        "size": 28,
+        "content_type": "application/pdf",
+        "checksum": "abc123",
+        "uploaded_at": "2026-01-31T10:00:00Z",
+    }
+    mock_cli_client.apply_resource.return_value = mock_resource(
+        "pragma", "file", "my-document", "draft", {"content_type": "application/pdf"}
+    )
+
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
+    assert result.exit_code == 0
+    assert "Applied pragma/file/my-document" in result.stdout
+
+    mock_cli_client.upload_file.assert_called_once_with(
+        "my-document", b"%PDF-1.4 binary content here", "application/pdf"
+    )
+
+    call_kwargs = mock_cli_client.apply_resource.call_args[1]
+    assert "content" not in call_kwargs["resource"]["config"]
+    assert call_kwargs["resource"]["config"]["content_type"] == "application/pdf"
+
+
+def test_apply_file_with_missing_file(cli_runner, mock_cli_client, tmp_path):
+    """Test that missing file references produce a clear error."""
+    yaml_content = """provider: pragma
+resource: file
+name: missing-file
+config:
+  content: "@./nonexistent.pdf"
+  content_type: application/pdf
+"""
+    yaml_file = tmp_path / "file.yaml"
+    yaml_file.write_text(yaml_content)
+
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
+    assert result.exit_code == 1
+    assert "Error" in result.stdout
+    assert "File not found" in result.stdout
+    mock_cli_client.upload_file.assert_not_called()
+    mock_cli_client.apply_resource.assert_not_called()
+
+
+def test_apply_file_with_missing_content_type(cli_runner, mock_cli_client, tmp_path):
+    """Test that missing content_type produces a clear error."""
+    test_file = tmp_path / "document.pdf"
+    test_file.write_bytes(b"PDF content")
+
+    yaml_content = """provider: pragma
+resource: file
+name: no-content-type
+config:
+  content: "@./document.pdf"
+"""
+    yaml_file = tmp_path / "file.yaml"
+    yaml_file.write_text(yaml_content)
+
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
+    assert result.exit_code == 1
+    assert "Error" in result.stdout
+    assert "content_type is required" in result.stdout
+    mock_cli_client.upload_file.assert_not_called()
+    mock_cli_client.apply_resource.assert_not_called()
+
+
+def test_apply_file_upload_failure(cli_runner, mock_cli_client, tmp_path):
+    """Test that upload API errors are handled gracefully."""
+    test_file = tmp_path / "document.pdf"
+    test_file.write_bytes(b"PDF content")
+
+    yaml_content = """provider: pragma
+resource: file
+name: upload-fail
+config:
+  content: "@./document.pdf"
+  content_type: application/pdf
+"""
+    yaml_file = tmp_path / "file.yaml"
+    yaml_file.write_text(yaml_content)
+
+    response = httpx.Response(500, json={"detail": "Storage service unavailable"})
+    mock_cli_client.upload_file.side_effect = httpx.HTTPStatusError(
+        "500 Internal Server Error", request=httpx.Request("POST", "http://test"), response=response
+    )
+
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
+    assert result.exit_code == 1
+    assert "Error" in result.stdout
+    assert "Failed to upload file" in result.stdout
+    mock_cli_client.apply_resource.assert_not_called()
+
+
+def test_apply_file_content_removed_after_upload(cli_runner, mock_cli_client, tmp_path):
+    """Test that content is removed from config after successful upload."""
+    test_file = tmp_path / "image.png"
+    test_file.write_bytes(b"\x89PNG\r\n\x1a\n binary image data")
+
+    yaml_content = """provider: pragma
+resource: file
+name: my-image
+config:
+  content: "@./image.png"
+  content_type: image/png
+  description: "A test image"
+"""
+    yaml_file = tmp_path / "file.yaml"
+    yaml_file.write_text(yaml_content)
+
+    mock_cli_client.upload_file.return_value = {
+        "url": "gs://bucket/tenant/files/my-image",
+        "size": 25,
+        "content_type": "image/png",
+    }
+    mock_cli_client.apply_resource.return_value = mock_resource(
+        "pragma", "file", "my-image", "draft", {"content_type": "image/png", "description": "A test image"}
+    )
+
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
+    assert result.exit_code == 0
+
+    call_kwargs = mock_cli_client.apply_resource.call_args[1]
+    config = call_kwargs["resource"]["config"]
+    assert "content" not in config
+    assert config["content_type"] == "image/png"
+    assert config["description"] == "A test image"
