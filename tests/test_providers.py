@@ -5,6 +5,7 @@ import tarfile
 from datetime import UTC, datetime
 from io import BytesIO
 
+import httpx
 import pytest
 import yaml
 from pragma_sdk import (
@@ -428,8 +429,6 @@ def test_status_displays_deployment_info(cli_runner, mock_pragma_client):
 
 def test_status_handles_not_found(cli_runner, mock_pragma_client):
     """Status command handles deployment not found."""
-    import httpx
-
     mock_response = httpx.Response(404, json={"detail": "Deployment not found"})
     mock_pragma_client.get_deployment_status.side_effect = httpx.HTTPStatusError(
         "Not found", request=httpx.Request("GET", "http://test"), response=mock_response
