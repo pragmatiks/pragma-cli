@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Pre-commit hook to prevent unittest.mock usage in test files.
+"""Pre-commit hook to enforce test conventions.
 
-This script checks staged test files for forbidden unittest.mock imports,
-enforcing the project's policy to use pytest-mock exclusively.
+Checks for:
+1. unittest.mock usage (should use pytest-mock)
+2. Test* class definitions (should use standalone functions)
 """
 
 import re
@@ -25,10 +26,9 @@ def check_file_for_unittest(file_path: Path) -> list[tuple[int, str]]:
         content = file_path.read_text()
         lines = content.split("\n")
 
-        # Patterns to detect unittest usage
         patterns = [
-            r"^\s*from\s+unittest",  # from unittest ...
-            r"^\s*import\s+unittest",  # import unittest
+            r"^\s*from\s+unittest",
+            r"^\s*import\s+unittest",
         ]
 
         for line_num, line in enumerate(lines, start=1):
@@ -44,8 +44,36 @@ def check_file_for_unittest(file_path: Path) -> list[tuple[int, str]]:
     return violations
 
 
+def check_file_for_test_classes(file_path: Path) -> list[tuple[int, str]]:
+    """Check a file for Test* class definitions.
+
+    Args:
+        file_path: Path to the test file to check.
+
+    Returns:
+        List of (line_number, line_content) tuples where Test classes were found.
+    """
+    violations = []
+
+    try:
+        content = file_path.read_text()
+        lines = content.split("\n")
+
+        pattern = r"^class\s+Test\w*"
+
+        for line_num, line in enumerate(lines, start=1):
+            if re.search(pattern, line):
+                violations.append((line_num, line.strip()))
+
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}", file=sys.stderr)
+        return []
+
+    return violations
+
+
 def main(file_paths: list[str]) -> int:
-    """Check provided test files for unittest usage.
+    """Check provided test files for policy violations.
 
     Args:
         file_paths: List of file paths provided by pre-commit.
@@ -56,24 +84,29 @@ def main(file_paths: list[str]) -> int:
     if not file_paths:
         return 0
 
-    # Filter for test files only
     test_files = [Path(p) for p in file_paths if "tests" in Path(p).parts]
 
     if not test_files:
         return 0
 
-    found_violations = False
+    unittest_violations = {}
+    class_violations = {}
 
     for file_path in test_files:
-        violations = check_file_for_unittest(file_path)
+        unittest_results = check_file_for_unittest(file_path)
+        if unittest_results:
+            unittest_violations[file_path] = unittest_results
 
-        if violations:
-            found_violations = True
+        class_results = check_file_for_test_classes(file_path)
+        if class_results:
+            class_violations[file_path] = class_results
+
+    if unittest_violations:
+        for file_path, violations in unittest_violations.items():
             print(f"\n❌ Found unittest usage in {file_path}:")
             for line_num, line_content in violations:
                 print(f"  Line {line_num}: {line_content}")
 
-    if found_violations:
         print(
             "\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -93,6 +126,34 @@ def main(file_paths: list[str]) -> int:
             "         mock_func = mocker.patch('module.function')\n"
             "\n"
         )
+
+    if class_violations:
+        for file_path, violations in class_violations.items():
+            print(f"\n❌ Found Test class in {file_path}:")
+            for line_num, line_content in violations:
+                print(f"  Line {line_num}: {line_content}")
+
+        print(
+            "\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "POLICY VIOLATION: Test classes are forbidden\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "\n"
+            "This project uses standalone test functions, not test classes.\n"
+            "Classes add unnecessary indentation and make fixtures harder to use.\n"
+            "\n"
+            "  ❌ WRONG:\n"
+            "     class TestUserService:\n"
+            "         def test_create_user(self, mock_db):\n"
+            "             ...\n"
+            "\n"
+            "  ✅ CORRECT:\n"
+            "     def test_user_service_create_user(mock_db):\n"
+            "         ...\n"
+            "\n"
+        )
+
+    if unittest_violations or class_violations:
         return 1
 
     return 0
