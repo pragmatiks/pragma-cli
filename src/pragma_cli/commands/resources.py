@@ -514,10 +514,20 @@ def describe(
 
 @app.command()
 def apply(
-    file: list[typer.FileText],
+    file: Annotated[
+        list[typer.FileText] | None,
+        typer.Option("--file", "-f", help="YAML file(s) defining resources to apply."),
+    ] = None,
+    positional_file: Annotated[
+        list[typer.FileText] | None, typer.Argument(show_default=False, help="YAML file(s) (same as -f).")
+    ] = None,
     draft: Annotated[bool, typer.Option("--draft", "-d", help="Keep in draft state (don't deploy)")] = False,
 ):
     """Apply resources from YAML files (multi-document supported).
+
+    Usage:
+        pragma resources apply -f <file.yaml>
+        pragma resources apply <file.yaml>
 
     By default, resources are queued for immediate processing (deployed).
     Use --draft to keep resources in draft state without deploying.
@@ -529,8 +539,13 @@ def apply(
     Raises:
         typer.Exit: If the apply operation fails.
     """
+    files = file or positional_file
+    if not files:
+        console.print("[red]Provide -f <file> or a positional file path.[/red]")
+        raise typer.Exit(1)
+
     client = get_client()
-    for f in file:
+    for f in files:
         base_dir = Path(f.name).parent
         resources = yaml.safe_load_all(f.read())
 
