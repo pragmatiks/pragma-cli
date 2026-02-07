@@ -11,7 +11,7 @@ from pragma_cli.commands import auth, config, ops, providers, resources
 from pragma_cli.config import get_current_context
 
 
-app = typer.Typer()
+app = typer.Typer(pretty_exceptions_enable=False)
 
 
 def _version_callback(value: bool) -> None:

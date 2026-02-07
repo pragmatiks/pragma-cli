@@ -550,22 +550,63 @@ def apply(
 
 @app.command()
 def delete(
-    resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
-    name: Annotated[str, typer.Argument(autocompletion=completion_resource_names)],
+    resource_id: Annotated[
+        str | None, typer.Argument(autocompletion=completion_resource_ids, show_default=False)
+    ] = None,
+    name: Annotated[str | None, typer.Argument(autocompletion=completion_resource_names, show_default=False)] = None,
+    file: Annotated[
+        list[typer.FileText] | None,
+        typer.Option("--file", "-f", help="YAML file(s) defining resources to delete."),
+    ] = None,
 ):
-    """Delete a resource.
+    """Delete resources by type/name or from YAML files.
+
+    Usage:
+        pragma resources delete <provider/resource> <name>
+        pragma resources delete -f <file.yaml>
 
     Raises:
-        typer.Exit: If the resource is not found or deletion fails.
+        typer.Exit: If arguments are invalid or deletion fails.
     """
+    if file:
+        _delete_from_files(file)
+    elif resource_id and name:
+        _delete_single(resource_id, name)
+    else:
+        console.print("[red]Provide either -f <file> or <provider/resource> <name>.[/red]")
+        raise typer.Exit(1)
+
+
+def _delete_single(resource_id: str, name: str) -> None:
     client = get_client()
     provider, resource = parse_resource_id(resource_id)
+
     try:
         client.delete_resource(provider=provider, resource=resource, name=name)
         print(f"Deleted {resource_id}/{name}")
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error deleting {resource_id}/{name}:[/red] {_format_api_error(e)}")
         raise typer.Exit(1)
+
+
+def _delete_from_files(files: list[typer.FileText]) -> None:
+    client = get_client()
+
+    for f in files:
+        resources = yaml.safe_load_all(f.read())
+
+        for resource in resources:
+            provider = resource.get("provider", "?")
+            resource_type = resource.get("resource", "?")
+            name = resource.get("name", "?")
+            res_id = f"{provider}/{resource_type}/{name}"
+
+            try:
+                client.delete_resource(provider=provider, resource=resource_type, name=name)
+                print(f"Deleted {res_id}")
+            except httpx.HTTPStatusError as e:
+                console.print(f"[red]Error deleting {res_id}:[/red] {_format_api_error(e)}")
+                raise typer.Exit(1)
 
 
 tags_app = typer.Typer()
