@@ -614,9 +614,14 @@ def _delete_from_files(files: list[typer.FileText]) -> None:
             if not isinstance(resource, dict):
                 continue
 
-            provider = resource.get("provider", "?")
-            resource_type = resource.get("resource", "?")
-            name = resource.get("name", "?")
+            provider = resource.get("provider")
+            resource_type = resource.get("resource")
+            name = resource.get("name")
+
+            if not all([provider, resource_type, name]):
+                console.print(f"[red]Skipping invalid resource (missing provider, resource, or name):[/red] {resource}")
+                continue
+
             res_id = f"{provider}/{resource_type}/{name}"
 
             try:
