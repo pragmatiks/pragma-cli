@@ -596,6 +596,9 @@ def _delete_from_files(files: list[typer.FileText]) -> None:
         resources = yaml.safe_load_all(f.read())
 
         for resource in resources:
+            if not isinstance(resource, dict):
+                continue
+
             provider = resource.get("provider", "?")
             resource_type = resource.get("resource", "?")
             name = resource.get("name", "?")
