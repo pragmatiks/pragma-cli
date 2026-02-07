@@ -1,6 +1,6 @@
 [project]
 name = "pragmatiks-cli"
-version = "0.16.0"
+version = "0.16.1"
 description = "Command-line interface for Pragmatiks"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -65,7 +65,7 @@ addopts = ["-v"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.16.0"
+version = "0.16.1"
 version_files = ["pyproject.toml:^version"]
 tag_format = "v$version"
 update_changelog_on_bump = true

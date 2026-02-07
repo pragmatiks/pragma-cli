@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.16.1 (2026-02-07)
+
+### Refactor
+
+- add ty type checking to Taskfile check task
+
 ## v0.16.0 (2026-02-07)
 
 ### Feat
