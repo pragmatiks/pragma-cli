@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.16.0 (2026-02-07)
+
+### Feat
+
+- support deleting resources from YAML files (#8)
+
 ## v0.15.1 (2026-01-31)
 
 ### Fix
