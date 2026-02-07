@@ -2,17 +2,19 @@ version: "3"
 
 tasks:
   install:
-    cmd: uv sync --all-groups
     desc: Install dependencies
+    cmd: uv sync --all-groups
 
   format:
+    desc: Format code
     cmd: uv run ruff format .
-    desc: Format Python code with ruff
 
   check:
-    cmd: uv run ruff check --fix .
-    desc: Check Python code with ruff and auto-fix issues
+    desc: Lint and type check
+    cmds:
+      - uv run ruff check --fix .
+      - uvx ty check
 
   test:
+    desc: Run tests
     cmd: uv run pytest tests/ --cov=pragma_cli --cov-report=term-missing {{.CLI_ARGS}}
-    desc: Run all tests with coverage
