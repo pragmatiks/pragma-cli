@@ -514,10 +514,20 @@ def describe(
 
 @app.command()
 def apply(
-    file: list[typer.FileText],
+    file: Annotated[
+        list[typer.FileText] | None,
+        typer.Option("--file", "-f", help="YAML file(s) defining resources to apply."),
+    ] = None,
+    positional_file: Annotated[
+        list[typer.FileText] | None, typer.Argument(show_default=False, help="YAML file(s) (same as -f).")
+    ] = None,
     draft: Annotated[bool, typer.Option("--draft", "-d", help="Keep in draft state (don't deploy)")] = False,
 ):
     """Apply resources from YAML files (multi-document supported).
+
+    Usage:
+        pragma resources apply -f <file.yaml>
+        pragma resources apply <file.yaml>
 
     By default, resources are queued for immediate processing (deployed).
     Use --draft to keep resources in draft state without deploying.
@@ -529,8 +539,13 @@ def apply(
     Raises:
         typer.Exit: If the apply operation fails.
     """
+    files = file or positional_file
+    if not files:
+        console.print("[red]Provide -f <file> or a positional file path.[/red]")
+        raise typer.Exit(1)
+
     client = get_client()
-    for f in file:
+    for f in files:
         base_dir = Path(f.name).parent
         resources = yaml.safe_load_all(f.read())
 
@@ -550,22 +565,71 @@ def apply(
 
 @app.command()
 def delete(
-    resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
-    name: Annotated[str, typer.Argument(autocompletion=completion_resource_names)],
+    resource_id: Annotated[
+        str | None, typer.Argument(autocompletion=completion_resource_ids, show_default=False)
+    ] = None,
+    name: Annotated[str | None, typer.Argument(autocompletion=completion_resource_names, show_default=False)] = None,
+    file: Annotated[
+        list[typer.FileText] | None,
+        typer.Option("--file", "-f", help="YAML file(s) defining resources to delete."),
+    ] = None,
 ):
-    """Delete a resource.
+    """Delete resources by type/name or from YAML files.
+
+    Usage:
+        pragma resources delete <provider/resource> <name>
+        pragma resources delete -f <file.yaml>
 
     Raises:
-        typer.Exit: If the resource is not found or deletion fails.
+        typer.Exit: If arguments are invalid or deletion fails.
     """
+    if file:
+        _delete_from_files(file)
+    elif resource_id and name:
+        _delete_single(resource_id, name)
+    else:
+        console.print("[red]Provide either -f <file> or <provider/resource> <name>.[/red]")
+        raise typer.Exit(1)
+
+
+def _delete_single(resource_id: str, name: str) -> None:
     client = get_client()
     provider, resource = parse_resource_id(resource_id)
+
     try:
         client.delete_resource(provider=provider, resource=resource, name=name)
         print(f"Deleted {resource_id}/{name}")
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error deleting {resource_id}/{name}:[/red] {_format_api_error(e)}")
         raise typer.Exit(1)
+
+
+def _delete_from_files(files: list[typer.FileText]) -> None:
+    client = get_client()
+
+    for f in files:
+        resources = yaml.safe_load_all(f.read())
+
+        for resource in resources:
+            if not isinstance(resource, dict):
+                continue
+
+            provider = resource.get("provider")
+            resource_type = resource.get("resource")
+            name = resource.get("name")
+
+            if not all([provider, resource_type, name]):
+                console.print(f"[red]Skipping invalid resource (missing provider, resource, or name):[/red] {resource}")
+                continue
+
+            res_id = f"{provider}/{resource_type}/{name}"
+
+            try:
+                client.delete_resource(provider=provider, resource=resource_type, name=name)
+                print(f"Deleted {res_id}")
+            except httpx.HTTPStatusError as e:
+                console.print(f"[red]Error deleting {res_id}:[/red] {_format_api_error(e)}")
+                raise typer.Exit(1)
 
 
 tags_app = typer.Typer()
