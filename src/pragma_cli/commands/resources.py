@@ -395,10 +395,12 @@ def _format_state_color(state: str) -> str:
     """
     state_colors = {
         "draft": "dim",
+        "waiting": "yellow",
         "pending": "yellow",
         "processing": "cyan",
         "ready": "green",
         "failed": "red",
+        "deleting": "dark_orange",
     }
     color = state_colors.get(state.lower(), "white")
     return f"[{color}]{state}[/{color}]"
