@@ -1,0 +1,67 @@
+language: "en-US"
+early_access: true
+tone_instructions: "Alpha-stage CLI. Breaking changes are fine — prioritize UX consistency, helpful error messages, and correct output formatting."
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  commit_status: true
+  fail_commit_status: false
+  sequence_diagrams: false
+  poem: false
+  in_progress_fortune: false
+  suggested_labels: true
+  suggested_reviewers: false
+  related_issues: true
+  related_prs: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+
+  path_filters:
+    - "!scripts/**"
+    - "!assets/**"
+    - "!**/*.lock"
+
+  path_instructions:
+    - path: "src/pragma_cli/**"
+      instructions: |
+        CLI commands (Typer-based). Watch for:
+        - Consistent output formatting (tables, status indicators)
+        - User-facing error messages (clear, actionable)
+        - Exit code correctness
+        - SDK type usage matches latest pragma-sdk definitions
+    - path: "tests/**"
+      instructions: |
+        CLI tests. Verify command output formatting and error handling.
+
+  tools:
+    ruff:
+      enabled: true
+    shellcheck:
+      enabled: true
+    semgrep:
+      enabled: true
+
+chat:
+  auto_reply: true
+  integrations:
+    linear:
+      usage: "auto"
+
+knowledge_base:
+  learnings:
+    scope: "auto"
+  issues:
+    scope: "auto"
+  pull_requests:
+    scope: "auto"
+  linear:
+    usage: "auto"
