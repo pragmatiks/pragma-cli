@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.17.0 (2026-02-23)
+
+### Feat
+
+- add WAITING and DELETING to CLI status display (#10)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v0.19.0
+
 ## v0.16.1 (2026-02-07)
 
 ### Refactor
