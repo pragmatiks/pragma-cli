@@ -13,9 +13,9 @@ from pragma_sdk import (
     BuildStatus,
     DeploymentStatus,
     ProviderInfo,
-    ProviderStatus,
     PushResult,
 )
+from pragma_sdk.models import ProviderStatus
 from pytest_mock import MockerFixture
 from typer.testing import CliRunner
 
@@ -638,3 +638,78 @@ def test_status_yaml_output(cli_runner, mock_pragma_client):
     assert data["provider_id"] == "test"
     assert data["status"] == "progressing"
     assert data["healthy"] is False
+
+
+# --- Tests for publish command ---
+
+
+def test_publish_success(cli_runner, provider_project, mock_pragma_client):
+    """Publish creates tarball, calls publish API, and polls build status."""
+    publish_result = mock_pragma_client.publish_store_provider.return_value
+    publish_result.provider_name = "test"
+    publish_result.version = "1.0.0"
+    publish_result.status = "building"
+
+    build_status = mock_pragma_client.get_store_build_status.return_value
+    build_status.status = "published"
+
+    result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0"])
+
+    assert result.exit_code == 0
+    assert "Publishing provider: test" in result.output
+    assert "Created tarball:" in result.output
+    assert "Published:" in result.output
+    assert "Build successful:" in result.output
+
+    mock_pragma_client.publish_store_provider.assert_called_once()
+    call_args = mock_pragma_client.publish_store_provider.call_args
+    assert call_args[0][0] == "test"
+    assert isinstance(call_args[0][1], bytes)
+    assert call_args[0][2] == "1.0.0"
+    assert call_args[1]["changelog"] is None
+    assert call_args[1]["force"] is False
+
+
+def test_publish_force(cli_runner, provider_project, mock_pragma_client):
+    """Publish with --force passes force flag to SDK."""
+    publish_result = mock_pragma_client.publish_store_provider.return_value
+    publish_result.provider_name = "test"
+    publish_result.version = "1.0.0"
+    publish_result.status = "building"
+
+    build_status = mock_pragma_client.get_store_build_status.return_value
+    build_status.status = "published"
+
+    result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0", "--force"])
+
+    assert result.exit_code == 0
+    call_args = mock_pragma_client.publish_store_provider.call_args
+    assert call_args[1]["force"] is True
+
+
+def test_publish_duplicate_hash(cli_runner, provider_project, mock_pragma_client):
+    """Publish handles 409 (duplicate source hash) with helpful message."""
+    mock_response = httpx.Response(409, json={"detail": "Duplicate source hash"})
+    mock_pragma_client.publish_store_provider.side_effect = httpx.HTTPStatusError(
+        "Conflict", request=httpx.Request("POST", "http://test"), response=mock_response
+    )
+
+    result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0"])
+
+    assert result.exit_code == 1
+    assert "source hash already exists" in result.output
+    assert "--force" in result.output
+
+
+def test_publish_no_wait(cli_runner, provider_project, mock_pragma_client):
+    """Publish with --no-wait returns immediately after publish."""
+    publish_result = mock_pragma_client.publish_store_provider.return_value
+    publish_result.provider_name = "test"
+    publish_result.version = "1.0.0"
+    publish_result.status = "building"
+
+    result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0", "--no-wait"])
+
+    assert result.exit_code == 0
+    assert "Build running in background" in result.output
+    mock_pragma_client.get_store_build_status.assert_not_called()
