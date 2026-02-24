@@ -26,7 +26,9 @@ TRUST_TIER_STYLES = {
 }
 
 
-def _format_trust_tier(tier: str) -> str:
+def _format_trust_tier(tier: str | None) -> str:
+    if not tier:
+        return "[dim]-[/dim]"
     color = TRUST_TIER_STYLES.get(tier, "white")
     return f"[{color}]{tier}[/{color}]"
 
@@ -39,8 +41,9 @@ def _format_api_error(error: httpx.HTTPStatusError) -> str:
 
     if isinstance(detail, str):
         return detail
-
-    return detail.get("message", str(error))
+    if isinstance(detail, dict):
+        return detail.get("message", str(error))
+    return str(detail)
 
 
 def _fetch_with_spinner(description: str, fetch_fn):
@@ -88,7 +91,7 @@ def list_providers(
         pragma store list -o json
     """  # noqa: DOC501
     client = get_client()
-    tag_list = [t.strip() for t in tags.split(",")] if tags else None
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
 
     try:
         result = _fetch_with_spinner(
@@ -147,7 +150,7 @@ def search_providers(
         pragma store search ml --tags embeddings -o json
     """  # noqa: DOC501
     client = get_client()
-    tag_list = [t.strip() for t in tags.split(",")] if tags else None
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
 
     try:
         result = _fetch_with_spinner(

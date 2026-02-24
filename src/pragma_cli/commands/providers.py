@@ -1052,26 +1052,30 @@ def publish(
                 force=force,
             )
 
-        console.print(f"[green]Published:[/green] {result.provider_name} v{result.version}")
+        published_version = result.version
+        console.print(f"[green]Published:[/green] {result.provider_name} v{published_version}")
 
         if not wait:
             console.print()
             console.print("[dim]Build running in background.[/dim]")
             return
 
-        _poll_publish_status(client, provider_id, version)
+        _poll_publish_status(client, provider_id, published_version)
 
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 409:
             console.print("[yellow]Warning:[/yellow] A version with this source hash already exists.")
             console.print("[dim]Use --force to publish anyway.[/dim]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
         if e.response.status_code == 413:
             console.print("[red]Error:[/red] Tarball is too large.")
             console.print(f"[dim]Size: {len(tarball) / 1024:.1f} KB[/dim]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
         console.print(f"[red]Error:[/red] {e.response.text}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1) from e
 
 
 def _poll_publish_status(client: PragmaClient, provider_id: str, version: str) -> None:
@@ -1096,7 +1100,7 @@ def _poll_publish_status(client: PragmaClient, provider_id: str, version: str) -
             build_status = client.get_store_build_status(provider_id, version)
             current_status = getattr(build_status, "status", None)
 
-            if current_status != "building":
+            if current_status in ("published", "failed"):
                 break
 
             elapsed = time.time() - start_time
