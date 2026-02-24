@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.18.0 (2026-02-24)
+
+### Feat
+
+- add store CLI commands and providers publish (#11)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v0.20.0
+
 ## v0.17.0 (2026-02-23)
 
 ### Feat
