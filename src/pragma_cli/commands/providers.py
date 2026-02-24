@@ -954,3 +954,164 @@ def _get_build_status_color(status: BuildStatus) -> str:
         BuildStatus.SUCCESS: "green",
         BuildStatus.FAILED: "red",
     }.get(status, "white")
+
+
+PUBLISH_POLL_INTERVAL = 2.0
+PUBLISH_POLL_TIMEOUT = 600
+
+
+@app.command()
+def publish(
+    version: Annotated[
+        str,
+        typer.Option("--version", "-v", help="Semantic version for this release (required)"),
+    ],
+    changelog: Annotated[
+        str | None,
+        typer.Option("--changelog", help="Changelog text for this version"),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Force publish even if source hash already exists"),
+    ] = False,
+    directory: Annotated[
+        Path,
+        typer.Option("--directory", "-d", help="Provider source directory"),
+    ] = Path("."),
+    package: Annotated[
+        str | None,
+        typer.Option("--package", "-p", help="Provider package name (auto-detected if not specified)"),
+    ] = None,
+    wait: Annotated[
+        bool,
+        typer.Option("--wait/--no-wait", help="Wait for build to complete"),
+    ] = True,
+):
+    """Publish a provider to the store.
+
+    Creates a tarball of the provider source and publishes it to the
+    Pragmatiks Provider Store with the specified semantic version.
+
+    Examples:
+        pragma providers publish --version 1.0.0
+        pragma providers publish --version 1.1.0 --changelog "Added new resources"
+        pragma providers publish --version 2.0.0 --force
+        pragma providers publish --version 1.0.0 --no-wait
+
+    Raises:
+        typer.Exit: If provider detection fails or publish fails.
+    """
+    provider_name = package or detect_provider_package()
+
+    if not provider_name:
+        console.print("[red]Error:[/red] Could not detect provider package.")
+        console.print("Run from a provider directory or specify --package")
+        raise typer.Exit(1)
+
+    provider_id = provider_name.replace("_", "-").removesuffix("-provider")
+
+    if not directory.exists():
+        console.print(f"[red]Error:[/red] Directory not found: {directory}")
+        raise typer.Exit(1)
+
+    client = get_client()
+
+    if client._auth is None:
+        console.print("[red]Error:[/red] Authentication required. Run 'pragma auth login' first.")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Publishing provider:[/bold] {provider_id}")
+    console.print(f"[dim]Version:[/dim] {version}")
+    console.print(f"[dim]Source directory:[/dim] {directory.absolute()}")
+    console.print()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=True,
+    ) as progress:
+        progress.add_task("Creating tarball...", total=None)
+        tarball = create_tarball(directory)
+
+    console.print(f"[green]Created tarball:[/green] {len(tarball) / 1024:.1f} KB")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            progress.add_task("Publishing to store...", total=None)
+            result = client.publish_store_provider(
+                provider_id,
+                tarball,
+                version,
+                changelog=changelog,
+                force=force,
+            )
+
+        console.print(f"[green]Published:[/green] {result.provider_name} v{result.version}")
+
+        if not wait:
+            console.print()
+            console.print("[dim]Build running in background.[/dim]")
+            return
+
+        _poll_publish_status(client, provider_id, version)
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 409:
+            console.print("[yellow]Warning:[/yellow] A version with this source hash already exists.")
+            console.print("[dim]Use --force to publish anyway.[/dim]")
+            raise typer.Exit(1)
+        if e.response.status_code == 413:
+            console.print("[red]Error:[/red] Tarball is too large.")
+            console.print(f"[dim]Size: {len(tarball) / 1024:.1f} KB[/dim]")
+            raise typer.Exit(1)
+        console.print(f"[red]Error:[/red] {e.response.text}")
+        raise typer.Exit(1)
+
+
+def _poll_publish_status(client: PragmaClient, provider_id: str, version: str) -> None:
+    """Poll store build status until completion or timeout.
+
+    Args:
+        client: SDK client instance.
+        provider_id: Provider identifier.
+        version: Semantic version string.
+    """  # noqa: DOC501
+    start_time = time.time()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Building...", total=None)
+
+        while True:
+            build_status = client.get_store_build_status(provider_id, version)
+            current_status = getattr(build_status, "status", None)
+
+            if current_status != "building":
+                break
+
+            elapsed = time.time() - start_time
+
+            if elapsed > PUBLISH_POLL_TIMEOUT:
+                console.print("[red]Error:[/red] Build timed out")
+                raise typer.Exit(1)
+
+            progress.update(task, description=f"Building... ({current_status})")
+            time.sleep(PUBLISH_POLL_INTERVAL)
+
+    if current_status == "published":
+        console.print(f"[green]Build successful:[/green] {provider_id} v{version}")
+    elif current_status == "failed":
+        console.print(f"[red]Build failed:[/red] {provider_id} v{version}")
+        raise typer.Exit(1)
+    else:
+        console.print(f"[dim]Build status:[/dim] {current_status}")
