@@ -419,10 +419,6 @@ def publish(
         bool,
         typer.Option("--force", help="Force publish even if source hash already exists"),
     ] = False,
-    deploy: Annotated[
-        bool,
-        typer.Option("--deploy", help="Install after successful publish for quick iteration"),
-    ] = False,
     directory: Annotated[
         Path,
         typer.Option("--directory", "-d", help="Provider source directory"),
@@ -448,7 +444,6 @@ def publish(
         pragma providers publish --version 1.0.0 --org myorg
         pragma providers publish --version 1.1.0 --org myorg --changelog "Added new resources"
         pragma providers publish --version 2.0.0 --org myorg --force
-        pragma providers publish --version 1.0.0 --org myorg --deploy
         pragma providers publish --version 1.0.0 --org myorg --no-wait
 
     Raises:
@@ -500,11 +495,6 @@ def publish(
             return
 
         _poll_publish_status(client, provider_id, published_version)
-
-        if deploy:
-            console.print()
-            console.print("[bold]Installing provider...[/bold]")
-            _install_after_publish(client, provider_id, published_version)
 
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 409:
@@ -568,40 +558,6 @@ def _poll_publish_status(client: PragmaClient, provider_id: str, version: str) -
         raise typer.Exit(1)
     else:
         console.print(f"[dim]Build status:[/dim] {current_status}")
-
-
-def _install_after_publish(client: PragmaClient, provider_id: str, version: str) -> None:
-    """Install a provider after a successful publish (--deploy flag).
-
-    Args:
-        client: SDK client instance.
-        provider_id: Provider identifier.
-        version: Version to install.
-    """  # noqa: DOC501
-    try:
-        result = _fetch_with_spinner(
-            "Installing...",
-            lambda: client.install_provider(provider_id, version=version),
-        )
-        console.print(f"[green]Installed:[/green] {provider_id} v{result.installed_version}")
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 409:
-            console.print(f"[yellow]Already installed.[/yellow] Upgrading to v{version}...")
-
-            try:
-                result = _fetch_with_spinner(
-                    "Upgrading...",
-                    lambda: client.upgrade_provider(provider_id, target_version=version),
-                )
-                console.print(f"[green]Upgraded:[/green] {provider_id} -> v{result.installed_version}")
-            except httpx.HTTPStatusError as upgrade_err:
-                console.print(f"[red]Error upgrading:[/red] {_format_api_error(upgrade_err)}")
-                raise typer.Exit(1) from upgrade_err
-
-            return
-
-        console.print(f"[red]Error installing:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -991,6 +947,9 @@ def deploy(
 
         if deploy_result.image:
             console.print(f"[dim]Image:[/dim] {deploy_result.image}")
+    except httpx.HTTPStatusError as e:
+        console.print(_format_api_error(e))
+        raise typer.Exit(1)
     except Exception as e:
         if isinstance(e, typer.Exit):
             raise
@@ -1285,6 +1244,11 @@ def _print_installed_table(providers) -> None:
     console.print(table)
 
 
+def _serialize_datetime(obj: object, attr: str) -> str | None:
+    val = getattr(obj, attr, None)
+    return val.isoformat() if val else None
+
+
 def _provider_summary_to_dict(provider) -> dict:
     """Convert a store provider summary to a plain dict for JSON/YAML output.
 
@@ -1328,14 +1292,14 @@ def _provider_detail_to_dict(detail) -> dict:
         "latest_version": getattr(provider, "latest_version", None),
         "install_count": getattr(provider, "install_count", 0),
         "readme": getattr(provider, "readme", None),
-        "created_at": str(getattr(provider, "created_at", None)),
-        "updated_at": str(getattr(provider, "updated_at", None)),
+        "created_at": _serialize_datetime(provider, "created_at"),
+        "updated_at": _serialize_datetime(provider, "updated_at"),
         "versions": [
             {
                 "version": v.version,
                 "status": getattr(v, "status", None),
                 "runtime_version": getattr(v, "runtime_version", None),
-                "published_at": str(getattr(v, "published_at", None)),
+                "published_at": _serialize_datetime(v, "published_at"),
                 "changelog": getattr(v, "changelog", None),
             }
             for v in versions
@@ -1357,7 +1321,7 @@ def _installed_provider_to_dict(provider) -> dict:
         "installed_version": provider.installed_version,
         "upgrade_policy": getattr(provider, "upgrade_policy", None),
         "resource_tier": getattr(provider, "resource_tier", None),
-        "installed_at": str(getattr(provider, "installed_at", None)),
+        "installed_at": _serialize_datetime(provider, "installed_at"),
         "latest_version": getattr(provider, "latest_version", None),
         "upgrade_available": getattr(provider, "upgrade_available", False),
     }
