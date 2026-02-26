@@ -1,7 +1,10 @@
 """Tests for CLI auto-completion functions."""
 
+from __future__ import annotations
+
+from types import SimpleNamespace
+
 import typer
-from pragma_sdk import ProviderInfo
 
 from pragma_cli.commands.completions import (
     completion_provider_ids,
@@ -15,17 +18,22 @@ def mock_resource(provider: str, resource: str, name: str) -> dict:
     return {"provider": provider, "resource": resource, "name": name}
 
 
-def mock_provider(provider_id: str) -> ProviderInfo:
-    """Create a mock provider for testing completions."""
-    return ProviderInfo(provider_id=provider_id)
+def mock_provider(name: str) -> SimpleNamespace:
+    """Create a mock provider summary for testing completions."""
+    return SimpleNamespace(name=name)
+
+
+def mock_paginated(*providers: SimpleNamespace) -> SimpleNamespace:
+    """Wrap providers in a mock paginated response."""
+    return SimpleNamespace(items=list(providers))
 
 
 def test_completion_provider_ids_all_match(mock_cli_client):
-    mock_cli_client.list_providers.return_value = [
+    mock_cli_client.list_providers.return_value = mock_paginated(
         mock_provider("postgres"),
         mock_provider("mysql"),
         mock_provider("redis"),
-    ]
+    )
 
     results = list(completion_provider_ids(""))
 
@@ -35,11 +43,11 @@ def test_completion_provider_ids_all_match(mock_cli_client):
 
 
 def test_completion_provider_ids_partial_match(mock_cli_client):
-    mock_cli_client.list_providers.return_value = [
+    mock_cli_client.list_providers.return_value = mock_paginated(
         mock_provider("postgres"),
         mock_provider("mysql"),
         mock_provider("redis"),
-    ]
+    )
 
     results = list(completion_provider_ids("post"))
 
@@ -47,9 +55,9 @@ def test_completion_provider_ids_partial_match(mock_cli_client):
 
 
 def test_completion_provider_ids_no_match(mock_cli_client):
-    mock_cli_client.list_providers.return_value = [
+    mock_cli_client.list_providers.return_value = mock_paginated(
         mock_provider("postgres"),
-    ]
+    )
 
     results = list(completion_provider_ids("xyz"))
 
@@ -57,9 +65,9 @@ def test_completion_provider_ids_no_match(mock_cli_client):
 
 
 def test_completion_provider_ids_case_insensitive(mock_cli_client):
-    mock_cli_client.list_providers.return_value = [
+    mock_cli_client.list_providers.return_value = mock_paginated(
         mock_provider("postgres"),
-    ]
+    )
 
     results = list(completion_provider_ids("POST"))
 
