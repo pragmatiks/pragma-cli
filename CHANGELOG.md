@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.18.1 (2026-02-26)
+
+### Refactor
+
+- unify provider commands with org/name namespacing (#12)
+
 ## v0.18.0 (2026-02-24)
 
 ### Feat
