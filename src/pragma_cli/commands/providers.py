@@ -405,11 +405,11 @@ def update(
 def publish(
     version: Annotated[
         str,
-        typer.Option("--version", "-v", help="Semantic version for this release (required)"),
+        typer.Option("--version", "-v", help="Semantic version for this release", show_default="required"),
     ],
     org: Annotated[
         str,
-        typer.Option("--org", help="Organization namespace for the provider"),
+        typer.Option("--org", help="Organization namespace for the provider", show_default="required"),
     ],
     changelog: Annotated[
         str | None,
@@ -1056,7 +1056,10 @@ def delete(
         console.print(f"[green]✓[/green] Provider [bold]{name}[/bold] deleted successfully")
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 409:
-            detail = e.response.json().get("detail", "Provider has resources")
+            try:
+                detail = e.response.json().get("detail", "Provider has resources")
+            except Exception:
+                detail = "Provider has resources"
             console.print(f"[red]Error:[/red] {detail}")
         else:
             console.print(f"[red]Error:[/red] {_format_api_error(e)}")
