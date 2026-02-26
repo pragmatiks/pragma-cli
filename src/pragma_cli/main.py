@@ -7,7 +7,7 @@ import typer
 from pragma_sdk import PragmaClient
 
 from pragma_cli import set_client
-from pragma_cli.commands import auth, config, ops, providers, resources, store
+from pragma_cli.commands import auth, config, ops, providers, resources
 from pragma_cli.config import get_current_context
 
 
@@ -88,7 +88,6 @@ app.add_typer(auth.app, name="auth")
 app.add_typer(config.app, name="config")
 app.add_typer(ops.app, name="ops")
 app.add_typer(providers.app, name="providers")
-app.add_typer(store.app, name="store")
 
 if __name__ == "__main__":  # pragma: no cover
     app()
