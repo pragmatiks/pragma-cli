@@ -12,7 +12,7 @@ import tarfile
 import time
 import tomllib
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import copier
 import httpx
@@ -162,7 +162,7 @@ def _require_auth(client: PragmaClient) -> None:
         raise typer.Exit(1)
 
 
-def _fetch_with_spinner(description: str, fetch_fn):
+def _fetch_with_spinner(description: str, fetch_fn) -> Any:
     """Execute a function with a spinner progress indicator.
 
     Args:
@@ -341,7 +341,7 @@ def init(
         )
     except Exception as e:
         typer.echo(f"Error creating provider: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     package_name = name.lower().replace("-", "_").replace(" ", "_") + "_provider"
 
@@ -395,7 +395,7 @@ def update(
         copier.run_update(dst_path=project_dir, unsafe=True)
     except Exception as e:
         typer.echo(f"Error updating provider: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     typer.echo("")
     typer.echo("Provider project updated successfully.")
@@ -596,10 +596,10 @@ def install(
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             console.print(f"[red]Error:[/red] Provider '{name}' not found in the store.")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     provider = detail.provider
     display = getattr(provider, "display_name", None) or name
@@ -630,10 +630,10 @@ def install(
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 409:
             console.print(f"[yellow]Warning:[/yellow] Provider '{name}' is already installed.")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     console.print(f"[green]Installed:[/green] {name} v{result.installed_version}")
 
@@ -683,15 +683,15 @@ def uninstall(
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             console.print(f"[red]Error:[/red] Provider '{name}' is not installed.")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
         if e.response.status_code == 409:
             console.print(f"[red]Error:[/red] Provider '{name}' has active resources.")
             console.print("[dim]Use --cascade to delete all resources with the provider.[/dim]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     console.print(f"[green]Uninstalled:[/green] {name}")
 
@@ -734,14 +734,14 @@ def upgrade(
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             console.print(f"[red]Error:[/red] Provider '{name}' is not installed.")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
         if e.response.status_code == 409:
             console.print(f"[yellow]Warning:[/yellow] Provider '{name}' is already on the requested version.")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     console.print(f"[green]Upgraded:[/green] {name} -> v{result.installed_version}")
 
@@ -812,7 +812,7 @@ def list_providers(
         )
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     if not result.items:
         if query:
@@ -844,7 +844,7 @@ def _list_installed_providers(client: PragmaClient, output: OutputFormat) -> Non
         )
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     if not providers:
         console.print("[dim]No providers installed.[/dim]")
@@ -883,10 +883,10 @@ def info(
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             console.print(f"[red]Error:[/red] Provider '{name}' not found in the store.")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     if output == OutputFormat.TABLE:
         _print_provider_info(detail)
@@ -949,13 +949,13 @@ def deploy(
             console.print(f"[dim]Image:[/dim] {deploy_result.image}")
     except httpx.HTTPStatusError as e:
         console.print(_format_api_error(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         if isinstance(e, typer.Exit):
             raise
 
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -995,10 +995,10 @@ def status(
         else:
             console.print(f"[red]Error:[/red] {e.response.text}")
 
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     if output == OutputFormat.TABLE:
         _print_deployment_status(provider_id, result)
@@ -1061,13 +1061,13 @@ def delete(
         else:
             console.print(f"[red]Error:[/red] {_format_api_error(e)}")
 
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         if isinstance(e, typer.Exit):
             raise
 
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 def _print_deployment_status(provider_id: str, result: DeploymentResult) -> None:
