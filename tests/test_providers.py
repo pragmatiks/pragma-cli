@@ -483,6 +483,45 @@ def test_read_pragma_metadata_tags_not_list(tmp_path):
     assert "tags" not in metadata
 
 
+def test_read_pragma_metadata_tags_mixed_types(tmp_path):
+    """Ignores tags when list contains non-string elements."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "test-provider"\n\n[tool.pragma]\ndisplay_name = "Test"\ntags = ["ok", 1]\n'
+    )
+
+    metadata = read_pragma_metadata(tmp_path)
+
+    assert metadata["display_name"] == "Test"
+    assert "tags" not in metadata
+
+
+def test_read_pragma_metadata_display_name_not_string(tmp_path):
+    """Ignores display_name when value is not a string."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "test-provider"\n\n[tool.pragma]\ndisplay_name = 42\ndescription = "A provider"\n'
+    )
+
+    metadata = read_pragma_metadata(tmp_path)
+
+    assert "display_name" not in metadata
+    assert metadata["description"] == "A provider"
+
+
+def test_read_pragma_metadata_description_not_string(tmp_path):
+    """Ignores description when value is not a string."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "test-provider"\n\n[tool.pragma]\ndisplay_name = "Test"\ndescription = 99\n'
+    )
+
+    metadata = read_pragma_metadata(tmp_path)
+
+    assert metadata["display_name"] == "Test"
+    assert "description" not in metadata
+
+
 # ---------------------------------------------------------------------------
 # Install command tests
 # ---------------------------------------------------------------------------

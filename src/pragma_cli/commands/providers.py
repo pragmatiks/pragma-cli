@@ -169,16 +169,22 @@ def read_pragma_metadata(directory: Path) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
 
     if (display_name := pragma_config.get("display_name")) is not None:
-        metadata["display_name"] = display_name
+        if not isinstance(display_name, str):
+            console.print("[yellow]Warning:[/yellow] [tool.pragma] display_name must be a string, ignoring.")
+        else:
+            metadata["display_name"] = display_name
 
     if (description := pragma_config.get("description")) is not None:
-        metadata["description"] = description
+        if not isinstance(description, str):
+            console.print("[yellow]Warning:[/yellow] [tool.pragma] description must be a string, ignoring.")
+        else:
+            metadata["description"] = description
 
     tags = pragma_config.get("tags")
 
     if tags is not None:
-        if not isinstance(tags, list):
-            console.print("[yellow]Warning:[/yellow] [tool.pragma] tags must be a TOML array, ignoring.")
+        if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+            console.print("[yellow]Warning:[/yellow] [tool.pragma] tags must be a list of strings, ignoring.")
         else:
             metadata["tags"] = tags
 
