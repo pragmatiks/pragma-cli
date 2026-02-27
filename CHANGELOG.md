@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.19.0 (2026-02-27)
+
+### Feat
+
+- send store metadata from pyproject.toml on publish (#13)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v0.21.1
+
 ## v0.18.1 (2026-02-26)
 
 ### Refactor
