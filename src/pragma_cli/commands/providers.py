@@ -7,7 +7,6 @@ Pragmatiks providers.
 from __future__ import annotations
 
 import io
-import json
 import os
 import tarfile
 import time
@@ -149,14 +148,14 @@ def detect_provider_package() -> str | None:
     return None
 
 
-def read_pragma_metadata(directory: Path) -> dict[str, str]:
+def read_pragma_metadata(directory: Path) -> dict[str, Any]:
     """Read provider store metadata from pyproject.toml [tool.pragma].
 
     Args:
         directory: Provider source directory containing pyproject.toml.
 
     Returns:
-        Dict with optional keys: display_name, description, tags (JSON-encoded).
+        Dict with optional keys: display_name, description, tags.
     """
     pyproject = directory / "pyproject.toml"
 
@@ -167,16 +166,21 @@ def read_pragma_metadata(directory: Path) -> dict[str, str]:
         data = tomllib.load(f)
 
     pragma_config = data.get("tool", {}).get("pragma", {})
-    metadata: dict[str, str] = {}
+    metadata: dict[str, Any] = {}
 
-    if display_name := pragma_config.get("display_name"):
+    if (display_name := pragma_config.get("display_name")) is not None:
         metadata["display_name"] = display_name
 
-    if description := pragma_config.get("description"):
+    if (description := pragma_config.get("description")) is not None:
         metadata["description"] = description
 
-    if tags := pragma_config.get("tags"):
-        metadata["tags"] = json.dumps(tags)
+    tags = pragma_config.get("tags")
+
+    if tags is not None:
+        if not isinstance(tags, list):
+            console.print("[yellow]Warning:[/yellow] [tool.pragma] tags must be a TOML array, ignoring.")
+        else:
+            metadata["tags"] = tags
 
     return metadata
 

@@ -395,7 +395,7 @@ def test_publish_sends_metadata(cli_runner, provider_project, mock_pragma_client
     call_kwargs = mock_pragma_client.publish_provider.call_args[1]
     assert call_kwargs["display_name"] == "Test Provider"
     assert call_kwargs["description"] == "A test provider"
-    assert call_kwargs["tags"] == json.dumps(["test", "example"])
+    assert call_kwargs["tags"] == ["test", "example"]
 
 
 def test_publish_without_metadata(cli_runner, provider_project, mock_pragma_client):
@@ -439,7 +439,7 @@ def test_read_pragma_metadata_full(tmp_path):
 
     assert metadata["display_name"] == "Google Cloud Platform"
     assert metadata["description"] == "Official GCP provider"
-    assert metadata["tags"] == json.dumps(["cloud", "gcp"])
+    assert metadata["tags"] == ["cloud", "gcp"]
 
 
 def test_read_pragma_metadata_partial(tmp_path):
@@ -468,6 +468,19 @@ def test_read_pragma_metadata_no_pyproject(tmp_path):
     """Returns empty dict when pyproject.toml is missing."""
     metadata = read_pragma_metadata(tmp_path)
     assert metadata == {}
+
+
+def test_read_pragma_metadata_tags_not_list(tmp_path):
+    """Ignores tags when value is a string instead of a TOML array."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "test-provider"\n\n[tool.pragma]\ndisplay_name = "Test"\ntags = "cloud,gcp"\n'
+    )
+
+    metadata = read_pragma_metadata(tmp_path)
+
+    assert metadata["display_name"] == "Test"
+    assert "tags" not in metadata
 
 
 # ---------------------------------------------------------------------------
