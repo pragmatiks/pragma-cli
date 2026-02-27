@@ -148,6 +148,49 @@ def detect_provider_package() -> str | None:
     return None
 
 
+def read_pragma_metadata(directory: Path) -> dict[str, Any]:
+    """Read provider store metadata from pyproject.toml [tool.pragma].
+
+    Args:
+        directory: Provider source directory containing pyproject.toml.
+
+    Returns:
+        Dict with optional keys: display_name, description, tags.
+    """
+    pyproject = directory / "pyproject.toml"
+
+    if not pyproject.exists():
+        return {}
+
+    with open(pyproject, "rb") as f:
+        data = tomllib.load(f)
+
+    pragma_config = data.get("tool", {}).get("pragma", {})
+    metadata: dict[str, Any] = {}
+
+    if (display_name := pragma_config.get("display_name")) is not None:
+        if not isinstance(display_name, str):
+            console.print("[yellow]Warning:[/yellow] [tool.pragma] display_name must be a string, ignoring.")
+        else:
+            metadata["display_name"] = display_name
+
+    if (description := pragma_config.get("description")) is not None:
+        if not isinstance(description, str):
+            console.print("[yellow]Warning:[/yellow] [tool.pragma] description must be a string, ignoring.")
+        else:
+            metadata["description"] = description
+
+    tags = pragma_config.get("tags")
+
+    if tags is not None:
+        if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+            console.print("[yellow]Warning:[/yellow] [tool.pragma] tags must be a list of strings, ignoring.")
+        else:
+            metadata["tags"] = tags
+
+    return metadata
+
+
 def _require_auth(client: PragmaClient) -> None:
     """Verify the client is authenticated, exit with error if not.
 
@@ -466,6 +509,8 @@ def publish(
     client = get_client()
     _require_auth(client)
 
+    metadata = read_pragma_metadata(directory)
+
     console.print(f"[bold]Publishing provider:[/bold] {provider_id}")
     console.print(f"[dim]Version:[/dim] {version}")
     console.print(f"[dim]Source directory:[/dim] {directory.absolute()}")
@@ -483,6 +528,7 @@ def publish(
                 version,
                 changelog=changelog,
                 force=force,
+                **metadata,
             ),
         )
 
