@@ -23,6 +23,7 @@ from pragma_cli.commands.providers import (
     create_tarball,
     detect_provider_package,
     get_template_source,
+    read_pragma_metadata,
 )
 from pragma_cli.main import app
 
@@ -366,6 +367,107 @@ def test_publish_fails_without_pyproject(cli_runner, tmp_path, monkeypatch):
     result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0", "--org", "myorg"])
     assert result.exit_code == 1
     assert "Could not detect provider package" in result.output
+
+
+def test_publish_sends_metadata(cli_runner, provider_project, mock_pragma_client):
+    """Publish reads metadata from [tool.pragma] and passes it to SDK."""
+    pyproject = provider_project / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "test-provider"\n\n'
+        "[tool.pragma]\n"
+        'display_name = "Test Provider"\n'
+        'description = "A test provider"\n'
+        'tags = ["test", "example"]\n'
+    )
+
+    publish_result = mock_pragma_client.publish_provider.return_value
+    publish_result.provider_name = "myorg/test"
+    publish_result.version = "1.0.0"
+    publish_result.status = "building"
+
+    build_status = mock_pragma_client.get_publish_status.return_value
+    build_status.status = "published"
+
+    result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0", "--org", "myorg"])
+
+    assert result.exit_code == 0
+
+    call_kwargs = mock_pragma_client.publish_provider.call_args[1]
+    assert call_kwargs["display_name"] == "Test Provider"
+    assert call_kwargs["description"] == "A test provider"
+    assert call_kwargs["tags"] == json.dumps(["test", "example"])
+
+
+def test_publish_without_metadata(cli_runner, provider_project, mock_pragma_client):
+    """Publish works without [tool.pragma] metadata."""
+    publish_result = mock_pragma_client.publish_provider.return_value
+    publish_result.provider_name = "myorg/test"
+    publish_result.version = "1.0.0"
+    publish_result.status = "building"
+
+    build_status = mock_pragma_client.get_publish_status.return_value
+    build_status.status = "published"
+
+    result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0", "--org", "myorg"])
+
+    assert result.exit_code == 0
+
+    call_kwargs = mock_pragma_client.publish_provider.call_args[1]
+    assert "display_name" not in call_kwargs
+    assert "description" not in call_kwargs
+    assert "tags" not in call_kwargs
+
+
+# ---------------------------------------------------------------------------
+# read_pragma_metadata tests
+# ---------------------------------------------------------------------------
+
+
+def test_read_pragma_metadata_full(tmp_path):
+    """Reads all metadata fields from [tool.pragma]."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "gcp-provider"\n\n'
+        "[tool.pragma]\n"
+        'provider = "pragmatiks/gcp"\n'
+        'display_name = "Google Cloud Platform"\n'
+        'description = "Official GCP provider"\n'
+        'tags = ["cloud", "gcp"]\n'
+    )
+
+    metadata = read_pragma_metadata(tmp_path)
+
+    assert metadata["display_name"] == "Google Cloud Platform"
+    assert metadata["description"] == "Official GCP provider"
+    assert metadata["tags"] == json.dumps(["cloud", "gcp"])
+
+
+def test_read_pragma_metadata_partial(tmp_path):
+    """Reads only provided metadata fields."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "test-provider"\n\n[tool.pragma]\ndisplay_name = "Test"\n')
+
+    metadata = read_pragma_metadata(tmp_path)
+
+    assert metadata["display_name"] == "Test"
+    assert "description" not in metadata
+    assert "tags" not in metadata
+
+
+def test_read_pragma_metadata_no_section(tmp_path):
+    """Returns empty dict when [tool.pragma] is missing."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "test-provider"')
+
+    metadata = read_pragma_metadata(tmp_path)
+
+    assert metadata == {}
+
+
+def test_read_pragma_metadata_no_pyproject(tmp_path):
+    """Returns empty dict when pyproject.toml is missing."""
+    metadata = read_pragma_metadata(tmp_path)
+    assert metadata == {}
 
 
 # ---------------------------------------------------------------------------

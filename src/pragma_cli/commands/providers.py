@@ -7,6 +7,7 @@ Pragmatiks providers.
 from __future__ import annotations
 
 import io
+import json
 import os
 import tarfile
 import time
@@ -146,6 +147,38 @@ def detect_provider_package() -> str | None:
         return name.replace("-", "_")
 
     return None
+
+
+def read_pragma_metadata(directory: Path) -> dict[str, str]:
+    """Read provider store metadata from pyproject.toml [tool.pragma].
+
+    Args:
+        directory: Provider source directory containing pyproject.toml.
+
+    Returns:
+        Dict with optional keys: display_name, description, tags (JSON-encoded).
+    """
+    pyproject = directory / "pyproject.toml"
+
+    if not pyproject.exists():
+        return {}
+
+    with open(pyproject, "rb") as f:
+        data = tomllib.load(f)
+
+    pragma_config = data.get("tool", {}).get("pragma", {})
+    metadata: dict[str, str] = {}
+
+    if display_name := pragma_config.get("display_name"):
+        metadata["display_name"] = display_name
+
+    if description := pragma_config.get("description"):
+        metadata["description"] = description
+
+    if tags := pragma_config.get("tags"):
+        metadata["tags"] = json.dumps(tags)
+
+    return metadata
 
 
 def _require_auth(client: PragmaClient) -> None:
@@ -466,6 +499,8 @@ def publish(
     client = get_client()
     _require_auth(client)
 
+    metadata = read_pragma_metadata(directory)
+
     console.print(f"[bold]Publishing provider:[/bold] {provider_id}")
     console.print(f"[dim]Version:[/dim] {version}")
     console.print(f"[dim]Source directory:[/dim] {directory.absolute()}")
@@ -483,6 +518,7 @@ def publish(
                 version,
                 changelog=changelog,
                 force=force,
+                **metadata,
             ),
         )
 
