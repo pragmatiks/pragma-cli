@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.20.0 (2026-03-01)
+
+### Feat
+
+- show immutable indicator in resource describe output (PRA-225) (#14)
+
 ## v0.19.0 (2026-02-27)
 
 ### Feat
