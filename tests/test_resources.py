@@ -391,6 +391,7 @@ def test_describe_resource_ready(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
+    mock_cli_client.list_resource_types.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
     assert result.exit_code == 0
     assert "gcp/secret/my-secret" in result.stdout
@@ -417,6 +418,7 @@ def test_describe_resource_failed(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": "Secret Manager API not enabled for project",
     }
+    mock_cli_client.list_resource_types.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "failed-secret"])
     assert result.exit_code == 0
     assert "failed" in result.stdout
@@ -441,6 +443,7 @@ def test_describe_resource_with_dependencies(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
+    mock_cli_client.list_resource_types.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "dep-secret"])
     assert result.exit_code == 0
     assert "Dependencies" in result.stdout
@@ -470,6 +473,7 @@ def test_describe_resource_with_field_reference(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
+    mock_cli_client.list_resource_types.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "ref-secret"])
     assert result.exit_code == 0
     # FieldReference should be formatted as provider/resource/name#field
@@ -728,6 +732,7 @@ def test_describe_json_output(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
+    mock_cli_client.list_resource_types.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret", "-o", "json"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)
@@ -752,6 +757,7 @@ def test_describe_yaml_output(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
+    mock_cli_client.list_resource_types.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret", "--output", "yaml"])
     assert result.exit_code == 0
     data = yaml.safe_load(result.stdout)
@@ -933,3 +939,138 @@ config:
     assert "content" not in config
     assert config["content_type"] == "image/png"
     assert config["description"] == "A test image"
+
+
+# --- Tests for immutable field indicator in describe ---
+
+
+def test_describe_shows_immutable_indicator(cli_runner, mock_cli_client):
+    """Test describe shows [immutable] marker for immutable config fields."""
+    mock_cli_client.get_resource.return_value = {
+        "provider": "gcp",
+        "resource": "bucket",
+        "name": "my-bucket",
+        "lifecycle_state": "ready",
+        "config": {"region": "europe-west4", "storage_class": "STANDARD"},
+        "outputs": {},
+        "dependencies": [],
+        "tags": [],
+        "created_at": "2026-01-16T10:00:00Z",
+        "updated_at": "2026-01-16T10:30:00Z",
+        "error": None,
+    }
+    mock_cli_client.list_resource_types.return_value = [
+        {
+            "provider": "gcp",
+            "resource": "bucket",
+            "schema": {
+                "properties": {
+                    "region": {"type": "string", "immutable": True},
+                    "storage_class": {"type": "string"},
+                },
+            },
+            "description": "GCP Cloud Storage bucket",
+        },
+    ]
+
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/bucket", "my-bucket"])
+    assert result.exit_code == 0
+    assert "[immutable]" in result.stdout
+    assert "region" in result.stdout
+    assert "storage_class" in result.stdout
+
+
+def test_describe_immutable_only_on_marked_fields(cli_runner, mock_cli_client):
+    """Test that [immutable] only appears on fields marked immutable in schema."""
+    mock_cli_client.get_resource.return_value = {
+        "provider": "gcp",
+        "resource": "bucket",
+        "name": "my-bucket",
+        "lifecycle_state": "ready",
+        "config": {"region": "europe-west4", "storage_class": "STANDARD"},
+        "outputs": {},
+        "dependencies": [],
+        "tags": [],
+        "created_at": "2026-01-16T10:00:00Z",
+        "updated_at": "2026-01-16T10:30:00Z",
+        "error": None,
+    }
+    mock_cli_client.list_resource_types.return_value = [
+        {
+            "provider": "gcp",
+            "resource": "bucket",
+            "schema": {
+                "properties": {
+                    "region": {"type": "string", "immutable": True},
+                    "storage_class": {"type": "string"},
+                },
+            },
+            "description": "GCP Cloud Storage bucket",
+        },
+    ]
+
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/bucket", "my-bucket"])
+    assert result.exit_code == 0
+
+    for line in result.stdout.splitlines():
+        if "storage_class" in line:
+            assert "[immutable]" not in line
+        if "region" in line and ":" in line:
+            assert "[immutable]" in line
+
+
+def test_describe_no_immutable_when_schema_unavailable(cli_runner, mock_cli_client):
+    """Test describe works without [immutable] when resource type schema is unavailable."""
+    mock_cli_client.get_resource.return_value = {
+        "provider": "gcp",
+        "resource": "secret",
+        "name": "my-secret",
+        "lifecycle_state": "ready",
+        "config": {"project_id": "my-project"},
+        "outputs": {},
+        "dependencies": [],
+        "tags": [],
+        "created_at": "2026-01-16T10:00:00Z",
+        "updated_at": "2026-01-16T10:30:00Z",
+        "error": None,
+    }
+
+    response = httpx.Response(500, text="Internal Server Error")
+    mock_cli_client.list_resource_types.side_effect = httpx.HTTPStatusError(
+        "API unavailable", request=None, response=response
+    )
+
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
+    assert result.exit_code == 0
+    assert "project_id" in result.stdout
+    assert "[immutable]" not in result.stdout
+
+
+def test_describe_no_immutable_when_no_matching_type(cli_runner, mock_cli_client):
+    """Test describe works without [immutable] when resource type not found in types list."""
+    mock_cli_client.get_resource.return_value = {
+        "provider": "gcp",
+        "resource": "secret",
+        "name": "my-secret",
+        "lifecycle_state": "ready",
+        "config": {"project_id": "my-project"},
+        "outputs": {},
+        "dependencies": [],
+        "tags": [],
+        "created_at": "2026-01-16T10:00:00Z",
+        "updated_at": "2026-01-16T10:30:00Z",
+        "error": None,
+    }
+    mock_cli_client.list_resource_types.return_value = [
+        {
+            "provider": "gcp",
+            "resource": "bucket",
+            "schema": {"properties": {"region": {"type": "string", "immutable": True}}},
+            "description": "GCP bucket",
+        },
+    ]
+
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
+    assert result.exit_code == 0
+    assert "project_id" in result.stdout
+    assert "[immutable]" not in result.stdout

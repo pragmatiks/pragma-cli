@@ -428,9 +428,35 @@ def _format_config_value(value, *, redact_keys: set[str] | None = None) -> str:
     return str(value)
 
 
+def _get_immutable_fields(res: dict) -> set[str]:
+    """Fetch the set of immutable config field names from the resource definition schema.
+
+    Returns:
+        Set of field names marked as immutable in the resource type schema.
+        Empty set if the definition cannot be fetched.
+    """
+    try:
+        client = get_client()
+        types = client.list_resource_types(provider=res["provider"])
+    except httpx.HTTPStatusError:
+        return set()
+
+    for resource_type in types:
+        if resource_type.get("resource") != res["resource"]:
+            continue
+
+        schema = resource_type.get("schema", {})
+        properties = schema.get("properties", {})
+
+        return {name for name, prop in properties.items() if prop.get("immutable")}
+
+    return set()
+
+
 def _print_resource_details(res: dict) -> None:
     """Print resource details in a formatted table."""
     resource_id = f"{res['provider']}/{res['resource']}/{res['name']}"
+    immutable_fields = _get_immutable_fields(res)
 
     console.print()
     console.print(f"[bold]Resource:[/bold] {resource_id}")
@@ -458,7 +484,11 @@ def _print_resource_details(res: dict) -> None:
         console.print("[bold]Config:[/bold]")
         for key, value in config.items():
             formatted = _format_config_value(value)
-            console.print(f"  {key}: {formatted}")
+
+            if key in immutable_fields:
+                console.print(f"  {key}: {formatted} [dim]\\[immutable][/dim]")
+            else:
+                console.print(f"  {key}: {formatted}")
 
     outputs = res.get("outputs", {})
     if outputs:
