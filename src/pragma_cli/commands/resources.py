@@ -438,7 +438,7 @@ def _get_immutable_fields(res: dict) -> set[str]:
     try:
         client = get_client()
         types = client.list_resource_types(provider=res["provider"])
-    except Exception:
+    except httpx.HTTPStatusError:
         return set()
 
     for resource_type in types:

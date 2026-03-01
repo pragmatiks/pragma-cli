@@ -1034,7 +1034,11 @@ def test_describe_no_immutable_when_schema_unavailable(cli_runner, mock_cli_clie
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.side_effect = Exception("API unavailable")
+
+    response = httpx.Response(500, text="Internal Server Error")
+    mock_cli_client.list_resource_types.side_effect = httpx.HTTPStatusError(
+        "API unavailable", request=None, response=response
+    )
 
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
     assert result.exit_code == 0
