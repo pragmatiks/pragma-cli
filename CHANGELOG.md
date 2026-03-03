@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.21.0 (2026-03-03)
+
+### Feat
+
+- add --reveal flag and schema-driven sensitive field display (PRA-227) (#15)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v0.23.0
+
 ## v0.20.0 (2026-03-01)
 
 ### Feat
