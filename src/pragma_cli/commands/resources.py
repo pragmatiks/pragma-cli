@@ -406,57 +406,86 @@ def _format_state_color(state: str) -> str:
     return f"[{color}]{state}[/{color}]"
 
 
-def _format_config_value(value, *, redact_keys: set[str] | None = None) -> str:
-    """Format a config value, redacting sensitive fields.
+def _format_config_value(value) -> str:
+    """Format a config value for display.
+
+    Renders FieldReference dicts as provider/resource/name#field shorthand.
 
     Returns:
-        Formatted string representation with sensitive values masked.
+        Formatted string representation of the value.
     """
-    redact_keys = redact_keys or {"credentials", "password", "secret", "token", "key", "data"}
     if isinstance(value, dict):
         if "provider" in value and "resource" in value and "name" in value and "field" in value:
             return f"{value['provider']}/{value['resource']}/{value['name']}#{value['field']}"
-        formatted = {}
-        for k, v in value.items():
-            if k.lower() in redact_keys:
-                formatted[k] = "********"
-            else:
-                formatted[k] = _format_config_value(v, redact_keys=redact_keys)
+        formatted = {k: _format_config_value(v) for k, v in value.items()}
         return str(formatted)
     elif isinstance(value, list):
-        return str([_format_config_value(v, redact_keys=redact_keys) for v in value])
+        return str([_format_config_value(v) for v in value])
     return str(value)
 
 
-def _get_immutable_fields(res: dict) -> set[str]:
-    """Fetch the set of immutable config field names from the resource definition schema.
+def _get_field_metadata(res: dict) -> tuple[set[str], set[str], set[str]]:
+    """Fetch field metadata from the resource definition schema.
+
+    Reads both the config schema and outputs schema to determine which
+    fields are marked as immutable or sensitive.
 
     Returns:
-        Set of field names marked as immutable in the resource type schema.
-        Empty set if the definition cannot be fetched.
+        Tuple of (immutable_fields, sensitive_config_fields, sensitive_output_fields).
+        Empty sets if the definition cannot be fetched.
     """
     try:
         client = get_client()
         types = client.list_resource_types(provider=res["provider"])
-    except httpx.HTTPStatusError:
-        return set()
+    except (httpx.HTTPError, RuntimeError):
+        return set(), set(), set()
 
     for resource_type in types:
         if resource_type.get("resource") != res["resource"]:
             continue
 
-        schema = resource_type.get("schema", {})
-        properties = schema.get("properties", {})
+        schema = resource_type.get("schema") or {}
+        properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
 
-        return {name for name, prop in properties.items() if prop.get("immutable")}
+        immutable = {name for name, prop in properties.items() if isinstance(prop, dict) and prop.get("immutable")}
+        sensitive = {name for name, prop in properties.items() if isinstance(prop, dict) and prop.get("sensitive")}
 
-    return set()
+        outputs_schema = resource_type.get("outputs_schema") or {}
+        output_properties = outputs_schema.get("properties", {}) if isinstance(outputs_schema, dict) else {}
+
+        sensitive_outputs = {
+            name for name, prop in output_properties.items() if isinstance(prop, dict) and prop.get("sensitive")
+        }
+
+        return immutable, sensitive, sensitive_outputs
+
+    return set(), set(), set()
+
+
+def _format_field_labels(key: str, immutable_fields: set[str], sensitive_fields: set[str]) -> str:
+    r"""Build the metadata label suffix for a field.
+
+    Returns:
+        Label string like " [dim]\[immutable] \[sensitive][/dim]" or empty.
+    """
+    labels: list[str] = []
+
+    if key in immutable_fields:
+        labels.append("immutable")
+    if key in sensitive_fields:
+        labels.append("sensitive")
+
+    if not labels:
+        return ""
+
+    tag_str = " ".join(f"\\[{label}]" for label in labels)
+    return f" [dim]{tag_str}[/dim]"
 
 
 def _print_resource_details(res: dict) -> None:
     """Print resource details in a formatted table."""
     resource_id = f"{res['provider']}/{res['resource']}/{res['name']}"
-    immutable_fields = _get_immutable_fields(res)
+    immutable_fields, sensitive_config_fields, sensitive_output_fields = _get_field_metadata(res)
 
     console.print()
     console.print(f"[bold]Resource:[/bold] {resource_id}")
@@ -484,18 +513,16 @@ def _print_resource_details(res: dict) -> None:
         console.print("[bold]Config:[/bold]")
         for key, value in config.items():
             formatted = _format_config_value(value)
-
-            if key in immutable_fields:
-                console.print(f"  {key}: {formatted} [dim]\\[immutable][/dim]")
-            else:
-                console.print(f"  {key}: {formatted}")
+            labels = _format_field_labels(key, immutable_fields, sensitive_config_fields)
+            console.print(f"  {key}: {formatted}{labels}")
 
     outputs = res.get("outputs", {})
     if outputs:
         console.print()
         console.print("[bold]Outputs:[/bold]")
         for key, value in outputs.items():
-            console.print(f"  {key}: {value}")
+            labels = _format_field_labels(key, set(), sensitive_output_fields)
+            console.print(f"  {key}: {value}{labels}")
 
     dependencies = res.get("dependencies", [])
     if dependencies:
@@ -519,15 +546,18 @@ def describe(
     resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
     name: Annotated[str, typer.Argument(autocompletion=completion_resource_names)],
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
+    reveal: Annotated[bool, typer.Option("--reveal", help="Show sensitive field values")] = False,
 ):
     """Show detailed information about a resource.
 
     Displays the resource's config, outputs, dependencies, and error messages.
+    Sensitive fields are redacted by default. Use --reveal to show their values.
 
     Examples:
         pragma resources describe gcp/secret my-test-secret
         pragma resources describe postgres/database my-db
         pragma resources describe gcp/secret my-secret -o json
+        pragma resources describe gcp/secret my-secret --reveal
 
     Raises:
         typer.Exit: If the resource is not found or an error occurs.
@@ -536,7 +566,7 @@ def describe(
     provider, resource = parse_resource_id(resource_id)
 
     try:
-        res = client.get_resource(provider=provider, resource=resource, name=name)
+        res = client.get_resource(provider=provider, resource=resource, name=name, reveal=reveal)
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1)

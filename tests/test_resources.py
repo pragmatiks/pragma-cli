@@ -400,7 +400,9 @@ def test_describe_resource_ready(cli_runner, mock_cli_client):
     assert "my-project" in result.stdout
     assert "secret_name" in result.stdout
     assert "test, gcp" in result.stdout
-    mock_cli_client.get_resource.assert_called_once_with(provider="gcp", resource="secret", name="my-secret")
+    mock_cli_client.get_resource.assert_called_once_with(
+        provider="gcp", resource="secret", name="my-secret", reveal=False
+    )
 
 
 def test_describe_resource_failed(cli_runner, mock_cli_client):
@@ -1074,3 +1076,153 @@ def test_describe_no_immutable_when_no_matching_type(cli_runner, mock_cli_client
     assert result.exit_code == 0
     assert "project_id" in result.stdout
     assert "[immutable]" not in result.stdout
+
+
+# --- Tests for --reveal flag ---
+
+
+def test_describe_passes_reveal_true(cli_runner, mock_cli_client):
+    """Test describe passes reveal=True to get_resource when --reveal is used."""
+    mock_cli_client.get_resource.return_value = {
+        "provider": "gcp",
+        "resource": "secret",
+        "name": "my-secret",
+        "lifecycle_state": "ready",
+        "config": {"project_id": "my-project"},
+        "outputs": {},
+        "dependencies": [],
+        "tags": [],
+        "created_at": "2026-01-16T10:00:00Z",
+        "updated_at": "2026-01-16T10:30:00Z",
+        "error": None,
+    }
+    mock_cli_client.list_resource_types.return_value = []
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret", "--reveal"])
+    assert result.exit_code == 0
+    mock_cli_client.get_resource.assert_called_once_with(
+        provider="gcp", resource="secret", name="my-secret", reveal=True
+    )
+
+
+# --- Tests for [sensitive] indicator in describe ---
+
+
+def test_describe_shows_sensitive_config_indicator(cli_runner, mock_cli_client):
+    """Test describe shows [sensitive] marker for sensitive config fields."""
+    mock_cli_client.get_resource.return_value = {
+        "provider": "gcp",
+        "resource": "secret",
+        "name": "my-secret",
+        "lifecycle_state": "ready",
+        "config": {"project_id": "my-project", "credentials": "********"},
+        "outputs": {},
+        "dependencies": [],
+        "tags": [],
+        "created_at": "2026-01-16T10:00:00Z",
+        "updated_at": "2026-01-16T10:30:00Z",
+        "error": None,
+    }
+    mock_cli_client.list_resource_types.return_value = [
+        {
+            "provider": "gcp",
+            "resource": "secret",
+            "schema": {
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "credentials": {"type": "string", "sensitive": True},
+                },
+            },
+            "description": "GCP Secret Manager secret",
+        },
+    ]
+
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
+    assert result.exit_code == 0
+    assert "[sensitive]" in result.stdout
+
+    for line in result.stdout.splitlines():
+        if "project_id" in line:
+            assert "[sensitive]" not in line
+        if "credentials" in line and ":" in line:
+            assert "[sensitive]" in line
+
+
+def test_describe_shows_sensitive_output_indicator(cli_runner, mock_cli_client):
+    """Test describe shows [sensitive] marker for sensitive output fields."""
+    mock_cli_client.get_resource.return_value = {
+        "provider": "gcp",
+        "resource": "secret",
+        "name": "my-secret",
+        "lifecycle_state": "ready",
+        "config": {"project_id": "my-project"},
+        "outputs": {"secret_name": "projects/my-project/secrets/test", "access_token": "********"},
+        "dependencies": [],
+        "tags": [],
+        "created_at": "2026-01-16T10:00:00Z",
+        "updated_at": "2026-01-16T10:30:00Z",
+        "error": None,
+    }
+    mock_cli_client.list_resource_types.return_value = [
+        {
+            "provider": "gcp",
+            "resource": "secret",
+            "schema": {"properties": {"project_id": {"type": "string"}}},
+            "outputs_schema": {
+                "properties": {
+                    "secret_name": {"type": "string"},
+                    "access_token": {"type": "string", "sensitive": True},
+                },
+            },
+            "description": "GCP Secret Manager secret",
+        },
+    ]
+
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
+    assert result.exit_code == 0
+
+    for line in result.stdout.splitlines():
+        if "secret_name" in line:
+            assert "[sensitive]" not in line
+        if "access_token" in line and ":" in line:
+            assert "[sensitive]" in line
+
+
+def test_describe_shows_immutable_and_sensitive_labels(cli_runner, mock_cli_client):
+    """Test describe shows both [immutable] and [sensitive] for fields with both markers."""
+    mock_cli_client.get_resource.return_value = {
+        "provider": "gcp",
+        "resource": "bucket",
+        "name": "my-bucket",
+        "lifecycle_state": "ready",
+        "config": {"api_key": "********", "region": "europe-west4"},
+        "outputs": {},
+        "dependencies": [],
+        "tags": [],
+        "created_at": "2026-01-16T10:00:00Z",
+        "updated_at": "2026-01-16T10:30:00Z",
+        "error": None,
+    }
+    mock_cli_client.list_resource_types.return_value = [
+        {
+            "provider": "gcp",
+            "resource": "bucket",
+            "schema": {
+                "properties": {
+                    "api_key": {"type": "string", "immutable": True, "sensitive": True},
+                    "region": {"type": "string"},
+                },
+            },
+            "description": "GCP Cloud Storage bucket",
+        },
+    ]
+
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/bucket", "my-bucket"])
+    assert result.exit_code == 0
+
+    for line in result.stdout.splitlines():
+        if "api_key" in line and ":" in line:
+            assert "[immutable]" in line
+            assert "[sensitive]" in line
+        if "region" in line and ":" in line:
+            assert "[immutable]" not in line
+            assert "[sensitive]" not in line
