@@ -437,23 +437,25 @@ def _get_field_metadata(res: dict) -> tuple[set[str], set[str], set[str]]:
     try:
         client = get_client()
         types = client.list_resource_types(provider=res["provider"])
-    except httpx.HTTPStatusError:
+    except (httpx.HTTPError, RuntimeError):
         return set(), set(), set()
 
     for resource_type in types:
         if resource_type.get("resource") != res["resource"]:
             continue
 
-        schema = resource_type.get("schema", {})
-        properties = schema.get("properties", {})
+        schema = resource_type.get("schema") or {}
+        properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
 
-        immutable = {name for name, prop in properties.items() if prop.get("immutable")}
-        sensitive = {name for name, prop in properties.items() if prop.get("sensitive")}
+        immutable = {name for name, prop in properties.items() if isinstance(prop, dict) and prop.get("immutable")}
+        sensitive = {name for name, prop in properties.items() if isinstance(prop, dict) and prop.get("sensitive")}
 
-        outputs_schema = resource_type.get("outputs_schema", {})
-        output_properties = outputs_schema.get("properties", {})
+        outputs_schema = resource_type.get("outputs_schema") or {}
+        output_properties = outputs_schema.get("properties", {}) if isinstance(outputs_schema, dict) else {}
 
-        sensitive_outputs = {name for name, prop in output_properties.items() if prop.get("sensitive")}
+        sensitive_outputs = {
+            name for name, prop in output_properties.items() if isinstance(prop, dict) and prop.get("sensitive")
+        }
 
         return immutable, sensitive, sensitive_outputs
 
