@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.21.1 (2026-03-04)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v0.26.0
+- **deps**: update pragmatiks-sdk to v0.25.0
+- **deps**: update pragmatiks-sdk to v0.24.0
+
 ## v0.21.0 (2026-03-03)
 
 ### Feat
