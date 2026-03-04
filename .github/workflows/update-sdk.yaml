@@ -13,11 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -43,22 +45,31 @@ jobs:
       - name: Update lockfile
         run: uv sync --no-sources --all-groups
 
-      - name: Commit and push
+      - name: Commit changes
         id: commit
         run: |
           git add .
           if git diff --staged --quiet; then
             echo "No changes to commit"
-            echo "pushed=false" >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> $GITHUB_OUTPUT
           else
-            git commit -m "fix(deps): update pragmatiks-sdk to v${{ inputs.sdk_version }}"
-            git pull --rebase
-            git push
-            echo "pushed=true" >> $GITHUB_OUTPUT
+            git commit -m "chore(deps): update pragmatiks-sdk to v${{ inputs.sdk_version }}"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Trigger publish workflow
-        if: steps.commit.outputs.pushed == 'true'
+      - name: Create PR
+        if: steps.commit.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run publish.yaml
+        run: |
+          SDK_VERSION="${{ inputs.sdk_version }}"
+          BRANCH="chore/update-sdk-${SDK_VERSION}"
+
+          git checkout -b "${BRANCH}"
+          git push origin "${BRANCH}"
+
+          gh pr create \
+            --title "chore(deps): update pragmatiks-sdk to v${SDK_VERSION}" \
+            --body "Automated SDK dependency update to v${SDK_VERSION}."
+
+          gh pr merge --squash --auto
