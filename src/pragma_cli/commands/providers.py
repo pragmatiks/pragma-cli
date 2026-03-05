@@ -766,7 +766,7 @@ def upgrade(
     console.print()
 
     if not yes:
-        confirm = typer.confirm("Proceed with upgrade?")
+        confirm = typer.confirm(f"Upgrade {name} to v{target}?")
 
         if not confirm:
             console.print("[dim]Cancelled.[/dim]")
