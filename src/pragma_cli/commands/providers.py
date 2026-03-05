@@ -792,6 +792,62 @@ def upgrade(
     console.print(f"[green]Upgraded:[/green] {name} -> v{result.installed_version}")
 
 
+@app.command()
+def downgrade(
+    name: Annotated[str, typer.Argument(help="Provider name (org/name format)")],
+    version: Annotated[str, typer.Option("--version", "-v", help="Target version to downgrade to")],
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip confirmation prompt"),
+    ] = False,
+) -> None:
+    """Downgrade an installed provider to a previous version.
+
+    Requires an explicit target version. Migrations run sequentially
+    through each intermediate version in reverse order.
+
+    Examples:
+        pragma providers downgrade pragmatiks/qdrant --version 1.0.0
+        pragma providers downgrade pragmatiks/postgres -v 1.2.0 -y
+    """  # noqa: DOC501
+    client = get_client()
+    _require_auth(client)
+
+    console.print(f"[bold]Downgrading:[/bold] {name} -> v{version}")
+    console.print()
+
+    if not yes:
+        confirm = typer.confirm(f"Downgrade {name} to v{version}?")
+
+        if not confirm:
+            console.print("[dim]Cancelled.[/dim]")
+            raise typer.Exit(0)
+
+    try:
+        result = _fetch_with_spinner(
+            "Downgrading provider...",
+            lambda: client.downgrade_provider(name, target_version=version),
+        )
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            console.print(f"[red]Error:[/red] Provider '{name}' is not installed.")
+            raise typer.Exit(1) from e
+
+        if e.response.status_code == 409:
+            console.print(f"[yellow]Warning:[/yellow] Provider '{name}' is already on v{version}.")
+            raise typer.Exit(1) from e
+
+        if e.response.status_code == 422:
+            console.print(f"[red]Error:[/red] {_format_api_error(e)}")
+            console.print("[dim]The version chain between current and target may be broken.[/dim]")
+            raise typer.Exit(1) from e
+
+        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
+        raise typer.Exit(1) from e
+
+    console.print(f"[green]Downgraded:[/green] {name} -> v{result.installed_version}")
+
+
 @app.command("list")
 def list_providers(
     trust_tier: Annotated[

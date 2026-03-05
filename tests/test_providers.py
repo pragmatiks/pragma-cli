@@ -730,6 +730,64 @@ def test_upgrade_already_on_version(cli_runner, mock_pragma_client):
 
 
 # ---------------------------------------------------------------------------
+# Downgrade command tests
+# ---------------------------------------------------------------------------
+
+
+def test_downgrade_success(cli_runner, mock_pragma_client, mocker):
+    """Downgrade command downgrades provider to specified version."""
+    downgraded = mocker.Mock()
+    downgraded.installed_version = "1.0.0"
+    mock_pragma_client.downgrade_provider.return_value = downgraded
+
+    result = cli_runner.invoke(app, ["providers", "downgrade", "qdrant", "--version", "1.0.0", "-y"])
+
+    assert result.exit_code == 0
+    assert "Downgraded" in result.output
+    assert "1.0.0" in result.output
+    mock_pragma_client.downgrade_provider.assert_called_once_with("qdrant", target_version="1.0.0")
+
+
+def test_downgrade_already_on_version(cli_runner, mock_pragma_client):
+    """Downgrade command handles 409 (already on version)."""
+    mock_response = httpx.Response(409, json={"detail": "Already on version"})
+    mock_pragma_client.downgrade_provider.side_effect = httpx.HTTPStatusError(
+        "Conflict", request=httpx.Request("POST", "http://test"), response=mock_response
+    )
+
+    result = cli_runner.invoke(app, ["providers", "downgrade", "qdrant", "--version", "1.0.0", "-y"])
+
+    assert result.exit_code == 1
+    assert "already on v1.0.0" in result.output
+
+
+def test_downgrade_not_installed(cli_runner, mock_pragma_client):
+    """Downgrade command handles 404 (provider not installed)."""
+    mock_response = httpx.Response(404, json={"detail": "Not found"})
+    mock_pragma_client.downgrade_provider.side_effect = httpx.HTTPStatusError(
+        "Not Found", request=httpx.Request("POST", "http://test"), response=mock_response
+    )
+
+    result = cli_runner.invoke(app, ["providers", "downgrade", "qdrant", "--version", "1.0.0", "-y"])
+
+    assert result.exit_code == 1
+    assert "not installed" in result.output
+
+
+def test_downgrade_version_chain_broken(cli_runner, mock_pragma_client):
+    """Downgrade command handles 422 (version chain broken)."""
+    mock_response = httpx.Response(422, json={"detail": "Missing intermediate version 1.5.0"})
+    mock_pragma_client.downgrade_provider.side_effect = httpx.HTTPStatusError(
+        "Unprocessable Entity", request=httpx.Request("POST", "http://test"), response=mock_response
+    )
+
+    result = cli_runner.invoke(app, ["providers", "downgrade", "qdrant", "--version", "1.0.0", "-y"])
+
+    assert result.exit_code == 1
+    assert "version chain" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
 # List command tests (store browsing)
 # ---------------------------------------------------------------------------
 
