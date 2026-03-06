@@ -15,6 +15,7 @@ from pragma_sdk import (
     DeploymentResult,
     DeploymentStatus,
 )
+from pydantic import ValidationError
 from pytest_mock import MockerFixture
 from typer.testing import CliRunner
 
@@ -477,8 +478,34 @@ def test_pragma_provider_config_validates_provider():
 
 def test_pragma_provider_config_rejects_missing_provider():
     """Validation fails without provider field."""
-    with pytest.raises(Exception, match="provider"):
+    with pytest.raises(ValidationError, match="provider"):
         PragmaProviderConfig()
+
+
+def test_pragma_provider_config_rejects_slashes():
+    """Provider name with slash is rejected to prevent malformed store IDs."""
+    with pytest.raises(ValidationError, match="must not contain slashes"):
+        PragmaProviderConfig(provider="myorg/postgres")
+
+
+def test_pragma_provider_config_strips_whitespace():
+    """Provider name with surrounding whitespace is stripped."""
+    config = PragmaProviderConfig(provider="  postgres  ")
+    assert config.provider == "postgres"
+
+
+# ---------------------------------------------------------------------------
+# read_provider_config error handling tests
+# ---------------------------------------------------------------------------
+
+
+def test_read_provider_config_handles_malformed_toml(tmp_path):
+    """Malformed TOML prints a friendly error instead of a traceback."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text("this is not valid [[[ toml")
+
+    with pytest.raises(Exit):
+        read_provider_config(tmp_path)
 
 
 # ---------------------------------------------------------------------------

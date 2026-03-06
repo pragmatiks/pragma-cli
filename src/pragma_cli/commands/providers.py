@@ -22,7 +22,7 @@ from pragma_sdk import (
     DeploymentStatus,
     PragmaClient,
 )
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -136,6 +136,28 @@ class PragmaProviderConfig(BaseModel):
     description: str | None = None
     tags: list[str] = []
 
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v: str) -> str:
+        """Strip whitespace and reject slashes in provider name.
+
+        Args:
+            v: Raw provider name value.
+
+        Returns:
+            Stripped provider name.
+
+        Raises:
+            ValueError: If the provider name contains a slash.
+        """
+        v = v.strip()
+
+        if "/" in v:
+            msg = "Provider name must not contain slashes (the org prefix is added automatically)"
+            raise ValueError(msg)
+
+        return v
+
 
 def read_provider_config(directory: Path | None = None) -> PragmaProviderConfig:
     """Read and validate provider configuration from [tool.pragma] in pyproject.toml.
@@ -155,10 +177,17 @@ def read_provider_config(directory: Path | None = None) -> PragmaProviderConfig:
         console.print("[red]Error:[/red] No pyproject.toml found in current directory.")
         raise typer.Exit(1)
 
-    with open(pyproject, "rb") as f:
-        data = tomllib.load(f)
+    try:
+        with open(pyproject, "rb") as f:
+            data = tomllib.load(f)
 
-    pragma_config = data.get("tool", {}).get("pragma", {})
+        pragma_config = data.get("tool", {}).get("pragma")
+
+        if not isinstance(pragma_config, dict):
+            pragma_config = {}
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Failed to parse pyproject.toml: {e}")
+        raise typer.Exit(1) from e
 
     if not pragma_config.get("provider"):
         console.print(
