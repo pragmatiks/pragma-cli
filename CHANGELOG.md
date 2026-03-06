@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.22.0 (2026-03-06)
+
+### Feat
+
+- add provider downgrade command (PRA-226) (#16)
+
 ## v0.21.1 (2026-03-04)
 
 ### Fix
