@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.22.1 (2026-03-06)
+
+### Refactor
+
+- read provider name from [tool.pragma].provider (#17)
+
 ## v0.22.0 (2026-03-06)
 
 ### Feat
