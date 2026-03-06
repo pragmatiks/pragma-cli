@@ -10,6 +10,7 @@ from io import BytesIO
 import httpx
 import pytest
 import yaml
+from click.exceptions import Exit
 from pragma_sdk import (
     DeploymentResult,
     DeploymentStatus,
@@ -20,10 +21,10 @@ from typer.testing import CliRunner
 from pragma_cli.commands.providers import (
     DEFAULT_TEMPLATE_URL,
     TARBALL_EXCLUDES,
+    PragmaProviderConfig,
     create_tarball,
-    detect_provider_package,
     get_template_source,
-    read_pragma_metadata,
+    read_provider_config,
 )
 from pragma_cli.main import app
 
@@ -115,7 +116,7 @@ def mock_pragma_client(mocker: MockerFixture):
 def provider_project(tmp_path, monkeypatch):
     """Create a minimal provider project structure."""
     pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text('[project]\nname = "test-provider"')
+    pyproject.write_text('[project]\nname = "test-provider"\n\n[tool.pragma]\nprovider = "test"\n')
 
     src_dir = tmp_path / "src" / "test_provider"
     src_dir.mkdir(parents=True)
@@ -263,25 +264,68 @@ def test_tarball_excludes_contains_common_patterns():
 
 
 # ---------------------------------------------------------------------------
-# Provider detection tests
+# Provider config tests
 # ---------------------------------------------------------------------------
 
 
-def test_detect_provider_package_from_pyproject(tmp_path, monkeypatch):
-    """Detects package name from pyproject.toml."""
+def test_read_provider_config_from_pyproject(tmp_path):
+    """Reads provider name from [tool.pragma] in pyproject.toml."""
     pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text('[project]\nname = "postgres-provider"')
-    monkeypatch.chdir(tmp_path)
+    pyproject.write_text('[project]\nname = "postgres-provider"\n\n[tool.pragma]\nprovider = "postgres"\n')
 
-    result = detect_provider_package()
-    assert result == "postgres_provider"
+    config = read_provider_config(tmp_path)
+    assert config.provider == "postgres"
 
 
-def test_detect_provider_package_returns_none_without_pyproject(tmp_path, monkeypatch):
-    """Returns None when no pyproject.toml exists."""
-    monkeypatch.chdir(tmp_path)
-    result = detect_provider_package()
-    assert result is None
+def test_read_provider_config_exits_without_pyproject(tmp_path):
+    """Exits with error when no pyproject.toml exists."""
+    with pytest.raises(Exit):
+        read_provider_config(tmp_path)
+
+
+def test_read_provider_config_exits_without_provider_field(tmp_path):
+    """Exits with error when [tool.pragma].provider is missing."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "test-provider"\n')
+
+    with pytest.raises(Exit):
+        read_provider_config(tmp_path)
+
+
+def test_read_provider_config_with_all_fields(tmp_path):
+    """Reads all optional fields from [tool.pragma]."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "gcp-provider"\n\n'
+        "[tool.pragma]\n"
+        'provider = "gcp"\n'
+        'package = "gcp_provider"\n'
+        'display_name = "Google Cloud Platform"\n'
+        'description = "Official GCP provider"\n'
+        'tags = ["cloud", "gcp"]\n'
+    )
+
+    config = read_provider_config(tmp_path)
+
+    assert config.provider == "gcp"
+    assert config.package == "gcp_provider"
+    assert config.display_name == "Google Cloud Platform"
+    assert config.description == "Official GCP provider"
+    assert config.tags == ["cloud", "gcp"]
+
+
+def test_read_provider_config_defaults(tmp_path):
+    """Optional fields have sensible defaults."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "test-provider"\n\n[tool.pragma]\nprovider = "test"\n')
+
+    config = read_provider_config(tmp_path)
+
+    assert config.provider == "test"
+    assert config.package is None
+    assert config.display_name is None
+    assert config.description is None
+    assert config.tags == []
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +410,7 @@ def test_publish_fails_without_pyproject(cli_runner, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0", "--org", "myorg"])
     assert result.exit_code == 1
-    assert "Could not detect provider package" in result.output
+    assert "No pyproject.toml found" in result.output
 
 
 def test_publish_sends_metadata(cli_runner, provider_project, mock_pragma_client):
@@ -375,6 +419,7 @@ def test_publish_sends_metadata(cli_runner, provider_project, mock_pragma_client
     pyproject.write_text(
         '[project]\nname = "test-provider"\n\n'
         "[tool.pragma]\n"
+        'provider = "test"\n'
         'display_name = "Test Provider"\n'
         'description = "A test provider"\n'
         'tags = ["test", "example"]\n'
@@ -419,107 +464,21 @@ def test_publish_without_metadata(cli_runner, provider_project, mock_pragma_clie
 
 
 # ---------------------------------------------------------------------------
-# read_pragma_metadata tests
+# PragmaProviderConfig validation tests
 # ---------------------------------------------------------------------------
 
 
-def test_read_pragma_metadata_full(tmp_path):
-    """Reads all metadata fields from [tool.pragma]."""
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(
-        '[project]\nname = "gcp-provider"\n\n'
-        "[tool.pragma]\n"
-        'provider = "pragmatiks/gcp"\n'
-        'display_name = "Google Cloud Platform"\n'
-        'description = "Official GCP provider"\n'
-        'tags = ["cloud", "gcp"]\n'
-    )
-
-    metadata = read_pragma_metadata(tmp_path)
-
-    assert metadata["display_name"] == "Google Cloud Platform"
-    assert metadata["description"] == "Official GCP provider"
-    assert metadata["tags"] == ["cloud", "gcp"]
+def test_pragma_provider_config_validates_provider():
+    """Provider field is required."""
+    config = PragmaProviderConfig(provider="qdrant")
+    assert config.provider == "qdrant"
+    assert config.tags == []
 
 
-def test_read_pragma_metadata_partial(tmp_path):
-    """Reads only provided metadata fields."""
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text('[project]\nname = "test-provider"\n\n[tool.pragma]\ndisplay_name = "Test"\n')
-
-    metadata = read_pragma_metadata(tmp_path)
-
-    assert metadata["display_name"] == "Test"
-    assert "description" not in metadata
-    assert "tags" not in metadata
-
-
-def test_read_pragma_metadata_no_section(tmp_path):
-    """Returns empty dict when [tool.pragma] is missing."""
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text('[project]\nname = "test-provider"')
-
-    metadata = read_pragma_metadata(tmp_path)
-
-    assert metadata == {}
-
-
-def test_read_pragma_metadata_no_pyproject(tmp_path):
-    """Returns empty dict when pyproject.toml is missing."""
-    metadata = read_pragma_metadata(tmp_path)
-    assert metadata == {}
-
-
-def test_read_pragma_metadata_tags_not_list(tmp_path):
-    """Ignores tags when value is a string instead of a TOML array."""
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(
-        '[project]\nname = "test-provider"\n\n[tool.pragma]\ndisplay_name = "Test"\ntags = "cloud,gcp"\n'
-    )
-
-    metadata = read_pragma_metadata(tmp_path)
-
-    assert metadata["display_name"] == "Test"
-    assert "tags" not in metadata
-
-
-def test_read_pragma_metadata_tags_mixed_types(tmp_path):
-    """Ignores tags when list contains non-string elements."""
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(
-        '[project]\nname = "test-provider"\n\n[tool.pragma]\ndisplay_name = "Test"\ntags = ["ok", 1]\n'
-    )
-
-    metadata = read_pragma_metadata(tmp_path)
-
-    assert metadata["display_name"] == "Test"
-    assert "tags" not in metadata
-
-
-def test_read_pragma_metadata_display_name_not_string(tmp_path):
-    """Ignores display_name when value is not a string."""
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(
-        '[project]\nname = "test-provider"\n\n[tool.pragma]\ndisplay_name = 42\ndescription = "A provider"\n'
-    )
-
-    metadata = read_pragma_metadata(tmp_path)
-
-    assert "display_name" not in metadata
-    assert metadata["description"] == "A provider"
-
-
-def test_read_pragma_metadata_description_not_string(tmp_path):
-    """Ignores description when value is not a string."""
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(
-        '[project]\nname = "test-provider"\n\n[tool.pragma]\ndisplay_name = "Test"\ndescription = 99\n'
-    )
-
-    metadata = read_pragma_metadata(tmp_path)
-
-    assert metadata["display_name"] == "Test"
-    assert "description" not in metadata
+def test_pragma_provider_config_rejects_missing_provider():
+    """Validation fails without provider field."""
+    with pytest.raises(Exception, match="provider"):
+        PragmaProviderConfig()
 
 
 # ---------------------------------------------------------------------------
