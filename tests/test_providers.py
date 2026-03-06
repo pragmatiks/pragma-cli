@@ -464,6 +464,66 @@ def test_publish_without_metadata(cli_runner, provider_project, mock_pragma_clie
     assert "tags" not in call_kwargs
 
 
+def test_publish_auto_detects_version_from_pyproject(cli_runner, provider_project, mock_pragma_client):
+    """Publish reads version from [project].version when --version is not provided."""
+    pyproject = provider_project / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "test-provider"\nversion = "2.3.0"\n\n[tool.pragma]\nprovider = "test"\n')
+
+    publish_result = mock_pragma_client.publish_provider.return_value
+    publish_result.provider_name = "myorg/test"
+    publish_result.version = "2.3.0"
+    publish_result.status = "building"
+
+    build_status = mock_pragma_client.get_publish_status.return_value
+    build_status.status = "published"
+
+    result = cli_runner.invoke(app, ["providers", "publish", "--org", "myorg"])
+
+    assert result.exit_code == 0
+    call_args = mock_pragma_client.publish_provider.call_args
+    assert call_args[0][2] == "2.3.0"
+
+
+def test_publish_auto_detects_org_from_get_me(cli_runner, provider_project, mock_pragma_client):
+    """Publish reads org from client.get_me() when --org is not provided."""
+    user_info = mock_pragma_client.get_me.return_value
+    user_info.organization_name = "autoorg"
+
+    publish_result = mock_pragma_client.publish_provider.return_value
+    publish_result.provider_name = "autoorg/test"
+    publish_result.version = "1.0.0"
+    publish_result.status = "building"
+
+    build_status = mock_pragma_client.get_publish_status.return_value
+    build_status.status = "published"
+
+    result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0"])
+
+    assert result.exit_code == 0
+    assert "Publishing provider: autoorg/test" in result.output
+    call_args = mock_pragma_client.publish_provider.call_args
+    assert call_args[0][0] == "autoorg/test"
+
+
+def test_publish_error_when_version_cannot_be_determined(cli_runner, provider_project, mock_pragma_client):
+    """Publish exits with error when version is missing from both CLI and pyproject.toml."""
+    result = cli_runner.invoke(app, ["providers", "publish", "--org", "myorg"])
+
+    assert result.exit_code == 1
+    assert "Could not detect version" in result.output
+
+
+def test_publish_error_when_org_cannot_be_determined(cli_runner, provider_project, mock_pragma_client):
+    """Publish exits with error when org is missing and get_me returns None."""
+    user_info = mock_pragma_client.get_me.return_value
+    user_info.organization_name = None
+
+    result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0"])
+
+    assert result.exit_code == 1
+    assert "Could not detect organization" in result.output
+
+
 # ---------------------------------------------------------------------------
 # PragmaProviderConfig validation tests
 # ---------------------------------------------------------------------------

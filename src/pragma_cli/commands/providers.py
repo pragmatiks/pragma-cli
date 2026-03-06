@@ -456,16 +456,43 @@ def update(
     typer.echo("Provider project updated successfully.")
 
 
+def _read_pyproject_version(directory: Path) -> str | None:
+    """Read the version from [project].version in pyproject.toml.
+
+    Args:
+        directory: Directory containing pyproject.toml.
+
+    Returns:
+        Version string if found, None otherwise.
+    """
+    pyproject = directory / "pyproject.toml"
+
+    if not pyproject.exists():
+        return None
+
+    try:
+        with open(pyproject, "rb") as f:
+            data = tomllib.load(f)
+
+        return data.get("project", {}).get("version")
+    except Exception:
+        return None
+
+
 @app.command()
 def publish(
     version: Annotated[
-        str,
-        typer.Option("--version", "-v", help="Semantic version for this release", show_default="required"),
-    ],
+        str | None,
+        typer.Option(
+            "--version",
+            "-v",
+            help="Semantic version for this release (auto-detected from pyproject.toml if omitted)",
+        ),
+    ] = None,
     org: Annotated[
-        str,
-        typer.Option("--org", help="Organization namespace for the provider", show_default="required"),
-    ],
+        str | None,
+        typer.Option("--org", help="Organization namespace (auto-detected from authenticated user if omitted)"),
+    ] = None,
     changelog: Annotated[
         str | None,
         typer.Option("--changelog", help="Changelog text for this version"),
@@ -491,17 +518,21 @@ def publish(
     The provider name is read from [tool.pragma].provider in pyproject.toml
     and namespaced under the specified organization.
 
+    Version and organization are auto-detected when not provided:
+    - Version is read from [project].version in pyproject.toml
+    - Organization is read from the authenticated user's context
+
     Examples:
+        pragma providers publish
         pragma providers publish --version 1.0.0 --org myorg
-        pragma providers publish --version 1.1.0 --org myorg --changelog "Added new resources"
-        pragma providers publish --version 2.0.0 --org myorg --force
-        pragma providers publish --version 1.0.0 --org myorg --no-wait
+        pragma providers publish --version 1.1.0 --changelog "Added new resources"
+        pragma providers publish --force
+        pragma providers publish --no-wait
 
     Raises:
         typer.Exit: If provider detection fails or publish fails.
     """
     config = read_provider_config(directory)
-    provider_id = f"{org}/{config.provider}"
 
     if not directory.exists():
         console.print(f"[red]Error:[/red] Directory not found: {directory}")
@@ -509,6 +540,28 @@ def publish(
 
     client = get_client()
     _require_auth(client)
+
+    if version is None:
+        version = _read_pyproject_version(directory)
+
+        if version is None:
+            console.print(
+                "[red]Error:[/red] Could not detect version. Set [project].version in pyproject.toml or pass --version."
+            )
+            raise typer.Exit(1)
+
+    if org is None:
+        try:
+            user_info = client.get_me()
+            org = user_info.organization_name
+        except Exception:
+            org = None
+
+        if org is None:
+            console.print("[red]Error:[/red] Could not detect organization. Pass --org explicitly.")
+            raise typer.Exit(1)
+
+    provider_id = f"{org}/{config.provider}"
 
     metadata: dict[str, Any] = {}
 
