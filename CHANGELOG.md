@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.23.0 (2026-03-06)
+
+### Feat
+
+- auto-detect version and org in publish command
+
 ## v0.22.1 (2026-03-06)
 
 ### Refactor
