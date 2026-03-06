@@ -22,6 +22,7 @@ from pragma_sdk import (
     DeploymentStatus,
     PragmaClient,
 )
+from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -126,69 +127,80 @@ def get_template_source() -> str:
     return DEFAULT_TEMPLATE_URL
 
 
-def detect_provider_package() -> str | None:
-    """Detect provider package name from current directory.
+class PragmaProviderConfig(BaseModel):
+    """Validated provider configuration from [tool.pragma] in pyproject.toml."""
 
-    Returns:
-        Package name with underscores if found, None otherwise.
-    """
-    pyproject = Path("pyproject.toml")
+    provider: str
+    package: str | None = None
+    display_name: str | None = None
+    description: str | None = None
+    tags: list[str] = []
 
-    if not pyproject.exists():
-        return None
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v: str) -> str:
+        """Strip whitespace and reject slashes in provider name.
 
-    with open(pyproject, "rb") as f:
-        data = tomllib.load(f)
+        Args:
+            v: Raw provider name value.
 
-    name = data.get("project", {}).get("name", "")
+        Returns:
+            Stripped provider name.
 
-    if name and name.endswith("-provider"):
-        return name.replace("-", "_")
+        Raises:
+            ValueError: If the provider name contains a slash.
+        """
+        v = v.strip()
 
-    return None
+        if "/" in v:
+            msg = "Provider name must not contain slashes (the org prefix is added automatically)"
+            raise ValueError(msg)
+
+        return v
 
 
-def read_pragma_metadata(directory: Path) -> dict[str, Any]:
-    """Read provider store metadata from pyproject.toml [tool.pragma].
+def read_provider_config(directory: Path | None = None) -> PragmaProviderConfig:
+    """Read and validate provider configuration from [tool.pragma] in pyproject.toml.
 
     Args:
-        directory: Provider source directory containing pyproject.toml.
+        directory: Directory containing pyproject.toml. Defaults to current directory.
 
     Returns:
-        Dict with optional keys: display_name, description, tags.
+        Validated provider configuration.
+
+    Raises:
+        typer.Exit: If pyproject.toml is missing or [tool.pragma].provider is not configured.
     """
-    pyproject = directory / "pyproject.toml"
+    pyproject = (directory or Path(".")) / "pyproject.toml"
 
     if not pyproject.exists():
-        return {}
+        console.print("[red]Error:[/red] No pyproject.toml found in current directory.")
+        raise typer.Exit(1)
 
-    with open(pyproject, "rb") as f:
-        data = tomllib.load(f)
+    try:
+        with open(pyproject, "rb") as f:
+            data = tomllib.load(f)
 
-    pragma_config = data.get("tool", {}).get("pragma", {})
-    metadata: dict[str, Any] = {}
+        pragma_config = data.get("tool", {}).get("pragma")
 
-    if (display_name := pragma_config.get("display_name")) is not None:
-        if not isinstance(display_name, str):
-            console.print("[yellow]Warning:[/yellow] [tool.pragma] display_name must be a string, ignoring.")
-        else:
-            metadata["display_name"] = display_name
+        if not isinstance(pragma_config, dict):
+            pragma_config = {}
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Failed to parse pyproject.toml: {e}")
+        raise typer.Exit(1) from e
 
-    if (description := pragma_config.get("description")) is not None:
-        if not isinstance(description, str):
-            console.print("[yellow]Warning:[/yellow] [tool.pragma] description must be a string, ignoring.")
-        else:
-            metadata["description"] = description
+    if not pragma_config.get("provider"):
+        console.print(
+            "[red]Error:[/red] Missing [tool.pragma] provider field in pyproject.toml.\n"
+            'Add a [tool.pragma] section with at least: provider = "your-provider-name"'
+        )
+        raise typer.Exit(1)
 
-    tags = pragma_config.get("tags")
-
-    if tags is not None:
-        if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
-            console.print("[yellow]Warning:[/yellow] [tool.pragma] tags must be a list of strings, ignoring.")
-        else:
-            metadata["tags"] = tags
-
-    return metadata
+    try:
+        return PragmaProviderConfig.model_validate(pragma_config)
+    except ValidationError as e:
+        console.print(f"[red]Error:[/red] Invalid [tool.pragma] configuration: {e}")
+        raise typer.Exit(1) from e
 
 
 def _require_auth(client: PragmaClient) -> None:
@@ -466,10 +478,6 @@ def publish(
         Path,
         typer.Option("--directory", "-d", help="Provider source directory"),
     ] = Path("."),
-    package: Annotated[
-        str | None,
-        typer.Option("--package", "-p", help="Provider package name (auto-detected if not specified)"),
-    ] = None,
     wait: Annotated[
         bool,
         typer.Option("--wait/--no-wait", help="Wait for build to complete"),
@@ -480,8 +488,8 @@ def publish(
     Creates a tarball of the provider source and publishes it to the
     Pragmatiks Provider Store with the specified semantic version.
 
-    The provider name is read from pyproject.toml [project].name and
-    namespaced under the specified organization.
+    The provider name is read from [tool.pragma].provider in pyproject.toml
+    and namespaced under the specified organization.
 
     Examples:
         pragma providers publish --version 1.0.0 --org myorg
@@ -492,15 +500,8 @@ def publish(
     Raises:
         typer.Exit: If provider detection fails or publish fails.
     """
-    provider_name = package or detect_provider_package()
-
-    if not provider_name:
-        console.print("[red]Error:[/red] Could not detect provider package.")
-        console.print("Run from a provider directory or specify --package")
-        raise typer.Exit(1)
-
-    provider_id = provider_name.replace("_", "-").removesuffix("-provider")
-    provider_id = f"{org}/{provider_id}"
+    config = read_provider_config(directory)
+    provider_id = f"{org}/{config.provider}"
 
     if not directory.exists():
         console.print(f"[red]Error:[/red] Directory not found: {directory}")
@@ -509,7 +510,16 @@ def publish(
     client = get_client()
     _require_auth(client)
 
-    metadata = read_pragma_metadata(directory)
+    metadata: dict[str, Any] = {}
+
+    if config.display_name is not None:
+        metadata["display_name"] = config.display_name
+
+    if config.description is not None:
+        metadata["description"] = config.description
+
+    if config.tags:
+        metadata["tags"] = config.tags
 
     console.print(f"[bold]Publishing provider:[/bold] {provider_id}")
     console.print(f"[dim]Version:[/dim] {version}")
