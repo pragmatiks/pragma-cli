@@ -39,7 +39,7 @@ pragma = "pragma_cli.main:app"
 
 ### Resources
 - `pragma resources list` - List resources with optional filters
-- `pragma resources types` - List available resource types
+- `pragma resources schemas` - List available resource schemas
 - `pragma resources get <type> [name]` - Get resource(s) by type
 - `pragma resources describe <type> <name>` - Show detailed resource info
 - `pragma resources apply <file>` - Apply resources from YAML
