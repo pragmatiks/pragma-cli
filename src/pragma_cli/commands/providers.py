@@ -958,7 +958,7 @@ def list_providers(
     client = get_client()
 
     if installed:
-        _list_installed_providers(client, output)
+        _list_installations(client, output)
         return
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
@@ -993,8 +993,8 @@ def list_providers(
         output_data(data, output)
 
 
-def _list_installed_providers(client: PragmaClient, output: OutputFormat) -> None:
-    """List installed providers for the current tenant.
+def _list_installations(client: PragmaClient, output: OutputFormat) -> None:
+    """List provider installations for the current tenant.
 
     Args:
         client: SDK client instance.
@@ -1005,7 +1005,7 @@ def _list_installed_providers(client: PragmaClient, output: OutputFormat) -> Non
     try:
         providers = _fetch_with_spinner(
             "Fetching installed providers...",
-            lambda: client.list_installed_providers(),
+            lambda: client.list_installations(),
         )
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")

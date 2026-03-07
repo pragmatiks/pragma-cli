@@ -240,11 +240,11 @@ def format_state(state: str) -> str:
     return escape(f"[{state}]")
 
 
-def _print_resource_types_table(types: list[dict]) -> None:
-    """Print resource types in a formatted table.
+def _print_resource_schemas_table(types: list[dict]) -> None:
+    """Print resource schemas in a formatted table.
 
     Args:
-        types: List of resource type dictionaries to display.
+        types: List of resource schema dictionaries to display.
     """
     console.print()
     table = Table(show_header=True, header_style="bold")
@@ -264,36 +264,36 @@ def _print_resource_types_table(types: list[dict]) -> None:
     console.print()
 
 
-@app.command("types")
-def list_resource_types(
+@app.command("schemas")
+def list_resource_schemas(
     provider: Annotated[str | None, typer.Option("--provider", "-p", help="Filter by provider")] = None,
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
 ):
-    """List available resource types from deployed providers.
+    """List available resource schemas from deployed providers.
 
-    Displays resource definitions (types) that have been registered by providers.
+    Displays resource schemas that have been registered by providers.
     Use this to discover what resources you can create.
 
     Examples:
-        pragma resources types
-        pragma resources types --provider gcp
-        pragma resources types -o json
+        pragma resources schemas
+        pragma resources schemas --provider gcp
+        pragma resources schemas -o json
 
     Raises:
-        typer.Exit: If an error occurs while fetching resource types.
+        typer.Exit: If an error occurs while fetching resource schemas.
     """
     client = get_client()
     try:
-        types = client.list_resource_types(provider=provider)
+        types = client.list_resource_schemas(provider=provider)
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1)
 
     if not types:
-        console.print("[dim]No resource types found.[/dim]")
+        console.print("[dim]No resource schemas found.[/dim]")
         return
 
-    output_data(types, output, table_renderer=_print_resource_types_table)
+    output_data([t.model_dump() for t in types], output, table_renderer=_print_resource_schemas_table)
 
 
 @app.command("list")
@@ -436,21 +436,21 @@ def _get_field_metadata(res: dict) -> tuple[set[str], set[str], set[str]]:
     """
     try:
         client = get_client()
-        types = client.list_resource_types(provider=res["provider"])
+        types = client.list_resource_schemas(provider=res["provider"])
     except (httpx.HTTPError, RuntimeError):
         return set(), set(), set()
 
     for resource_type in types:
-        if resource_type.get("resource") != res["resource"]:
+        if resource_type.resource != res["resource"]:
             continue
 
-        schema = resource_type.get("schema") or {}
+        schema = resource_type.config_schema or {}
         properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
 
         immutable = {name for name, prop in properties.items() if isinstance(prop, dict) and prop.get("immutable")}
         sensitive = {name for name, prop in properties.items() if isinstance(prop, dict) and prop.get("sensitive")}
 
-        outputs_schema = resource_type.get("outputs_schema") or {}
+        outputs_schema = resource_type.outputs_schema or {}
         output_properties = outputs_schema.get("properties", {}) if isinstance(outputs_schema, dict) else {}
 
         sensitive_outputs = {

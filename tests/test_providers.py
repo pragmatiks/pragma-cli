@@ -971,7 +971,7 @@ def test_list_installed_table(cli_runner, mock_pragma_client, mocker):
         ),
         _make_installed_provider(mocker, name="postgres", version="3.1.0", upgrade_available=False),
     ]
-    mock_pragma_client.list_installed_providers.return_value = providers
+    mock_pragma_client.list_installations.return_value = providers
 
     result = cli_runner.invoke(app, ["providers", "list", "--installed"])
 
@@ -985,7 +985,7 @@ def test_list_installed_table(cli_runner, mock_pragma_client, mocker):
 
 def test_list_installed_empty(cli_runner, mock_pragma_client):
     """List --installed shows message when nothing installed."""
-    mock_pragma_client.list_installed_providers.return_value = []
+    mock_pragma_client.list_installations.return_value = []
 
     result = cli_runner.invoke(app, ["providers", "list", "--installed"])
 
