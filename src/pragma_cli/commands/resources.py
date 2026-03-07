@@ -131,7 +131,7 @@ def _resolve_secret_references(resource: dict, base_dir: Path) -> dict:
                 resolved_data[key] = file_path.read_text()
             except OSError as e:
                 console.print(f"[red]Error:[/red] Cannot read file {file_path}: {e}")
-                raise typer.Exit(1)
+                raise typer.Exit(1) from e
         else:
             resolved_data[key] = value
 
@@ -179,7 +179,7 @@ def _resolve_file_references(resource: dict, base_dir: Path) -> dict:
         file_content = file_path.read_bytes()
     except OSError as e:
         console.print(f"[red]Error:[/red] Cannot read file {file_path}: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     name = resource.get("name")
     if not name:
@@ -191,7 +191,7 @@ def _resolve_file_references(resource: dict, base_dir: Path) -> dict:
         client.upload_file(name, file_content, content_type)
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] Failed to upload file: {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     resolved_resource = resource.copy()
     resolved_config = {k: v for k, v in config.items() if k != "content"}
@@ -287,7 +287,7 @@ def list_resource_schemas(
         types = client.list_resource_schemas(provider=provider)
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     if not types:
         console.print("[dim]No resource schemas found.[/dim]")
@@ -569,7 +569,7 @@ def describe(
         res = client.get_resource(provider=provider, resource=resource, name=name, reveal=reveal)
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     output_data(res, output, table_renderer=_print_resource_details)
 
@@ -622,7 +622,7 @@ def apply(
                 print(f"Applied {res_id} {format_state(result['lifecycle_state'])}")
             except httpx.HTTPStatusError as e:
                 console.print(f"[red]Error applying {res_id}:[/red] {_format_api_error(e)}")
-                raise typer.Exit(1)
+                raise typer.Exit(1) from e
 
 
 @app.command()
@@ -663,7 +663,7 @@ def _delete_single(resource_id: str, name: str) -> None:
         print(f"Deleted {resource_id}/{name}")
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error deleting {resource_id}/{name}:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 def _delete_from_files(files: list[typer.FileText]) -> None:
@@ -691,7 +691,7 @@ def _delete_from_files(files: list[typer.FileText]) -> None:
                 print(f"Deleted {res_id}")
             except httpx.HTTPStatusError as e:
                 console.print(f"[red]Error deleting {res_id}:[/red] {_format_api_error(e)}")
-                raise typer.Exit(1)
+                raise typer.Exit(1) from e
 
 
 tags_app = typer.Typer()
@@ -714,7 +714,7 @@ def _fetch_resource(resource_id: str, name: str) -> tuple[str, str, dict]:
         return provider, resource, data
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 def _apply_tags(provider: str, resource: str, name: str, config: dict, tags: list[str] | None) -> None:
@@ -736,7 +736,7 @@ def _apply_tags(provider: str, resource: str, name: str, config: dict, tags: lis
         )
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @tags_app.command("list")

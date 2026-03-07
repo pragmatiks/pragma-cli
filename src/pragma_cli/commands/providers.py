@@ -1401,7 +1401,7 @@ def _print_installed_table(providers) -> None:
             upgrade_display = "[dim]-[/dim]"
 
         table.add_row(
-            p.store_provider_name,
+            p.provider_name,
             p.installed_version,
             getattr(p, "resource_tier", None) or "[dim]-[/dim]",
             getattr(p, "upgrade_policy", None) or "[dim]-[/dim]",
@@ -1485,7 +1485,7 @@ def _installed_provider_to_dict(provider) -> dict:
         Dictionary representation.
     """
     return {
-        "store_provider_name": provider.store_provider_name,
+        "provider_name": provider.provider_name,
         "installed_version": provider.installed_version,
         "upgrade_policy": getattr(provider, "upgrade_policy", None),
         "resource_tier": getattr(provider, "resource_tier", None),

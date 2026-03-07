@@ -631,7 +631,7 @@ def _make_installed_provider(
     latest_version: str | None = None,
 ):
     p = mocker.Mock()
-    p.store_provider_name = name
+    p.provider_name = name
     p.installed_version = version
     p.upgrade_policy = upgrade_policy
     p.resource_tier = resource_tier
@@ -648,7 +648,7 @@ def test_install_success(cli_runner, mock_pragma_client, mocker):
     mock_pragma_client.get_provider.return_value = detail
 
     installed = mocker.Mock()
-    installed.store_provider_name = "qdrant"
+    installed.provider_name = "qdrant"
     installed.installed_version = "1.0.0"
     mock_pragma_client.install_provider.return_value = installed
 
@@ -673,7 +673,7 @@ def test_install_yes_flag(cli_runner, mock_pragma_client, mocker):
     mock_pragma_client.get_provider.return_value = detail
 
     installed = mocker.Mock()
-    installed.store_provider_name = "qdrant"
+    installed.provider_name = "qdrant"
     installed.installed_version = "1.0.0"
     mock_pragma_client.install_provider.return_value = installed
 
