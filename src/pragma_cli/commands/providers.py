@@ -958,7 +958,7 @@ def list_providers(
     client = get_client()
 
     if installed:
-        _list_installed_providers(client, output)
+        _list_installations(client, output)
         return
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
@@ -993,8 +993,8 @@ def list_providers(
         output_data(data, output)
 
 
-def _list_installed_providers(client: PragmaClient, output: OutputFormat) -> None:
-    """List installed providers for the current tenant.
+def _list_installations(client: PragmaClient, output: OutputFormat) -> None:
+    """List provider installations for the current tenant.
 
     Args:
         client: SDK client instance.
@@ -1005,7 +1005,7 @@ def _list_installed_providers(client: PragmaClient, output: OutputFormat) -> Non
     try:
         providers = _fetch_with_spinner(
             "Fetching installed providers...",
-            lambda: client.list_installed_providers(),
+            lambda: client.list_installations(),
         )
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
@@ -1401,7 +1401,7 @@ def _print_installed_table(providers) -> None:
             upgrade_display = "[dim]-[/dim]"
 
         table.add_row(
-            p.store_provider_name,
+            p.provider_name,
             p.installed_version,
             getattr(p, "resource_tier", None) or "[dim]-[/dim]",
             getattr(p, "upgrade_policy", None) or "[dim]-[/dim]",
@@ -1485,7 +1485,7 @@ def _installed_provider_to_dict(provider) -> dict:
         Dictionary representation.
     """
     return {
-        "store_provider_name": provider.store_provider_name,
+        "provider_name": provider.provider_name,
         "installed_version": provider.installed_version,
         "upgrade_policy": getattr(provider, "upgrade_policy", None),
         "resource_tier": getattr(provider, "resource_tier", None),

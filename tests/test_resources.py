@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 import yaml
+from pragma_sdk.models.api import ResourceSchema
 
 from pragma_cli.main import app
 
@@ -391,7 +392,7 @@ def test_describe_resource_ready(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.return_value = []
+    mock_cli_client.list_resource_schemas.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
     assert result.exit_code == 0
     assert "gcp/secret/my-secret" in result.stdout
@@ -420,7 +421,7 @@ def test_describe_resource_failed(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": "Secret Manager API not enabled for project",
     }
-    mock_cli_client.list_resource_types.return_value = []
+    mock_cli_client.list_resource_schemas.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "failed-secret"])
     assert result.exit_code == 0
     assert "failed" in result.stdout
@@ -445,7 +446,7 @@ def test_describe_resource_with_dependencies(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.return_value = []
+    mock_cli_client.list_resource_schemas.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "dep-secret"])
     assert result.exit_code == 0
     assert "Dependencies" in result.stdout
@@ -475,7 +476,7 @@ def test_describe_resource_with_field_reference(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.return_value = []
+    mock_cli_client.list_resource_schemas.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "ref-secret"])
     assert result.exit_code == 0
     # FieldReference should be formatted as provider/resource/name#field
@@ -609,13 +610,13 @@ def test_delete_shows_error(cli_runner, mock_cli_client):
 
 
 def test_types_shows_table(cli_runner, mock_cli_client):
-    """Test types command shows resource types in a table."""
-    mock_cli_client.list_resource_types.return_value = [
-        {"provider": "gcp", "resource": "secret", "description": "GCP Secret Manager secret"},
-        {"provider": "gcp", "resource": "bucket", "description": "GCP Cloud Storage bucket"},
-        {"provider": "postgres", "resource": "database", "description": None},
+    """Test schemas command shows resource schemas in a table."""
+    mock_cli_client.list_resource_schemas.return_value = [
+        ResourceSchema(provider="gcp", resource="secret", description="GCP Secret Manager secret"),
+        ResourceSchema(provider="gcp", resource="bucket", description="GCP Cloud Storage bucket"),
+        ResourceSchema(provider="postgres", resource="database", description=None),
     ]
-    result = cli_runner.invoke(app, ["resources", "types"])
+    result = cli_runner.invoke(app, ["resources", "schemas"])
     assert result.exit_code == 0
     assert "Provider" in result.stdout
     assert "Resource" in result.stdout
@@ -626,35 +627,35 @@ def test_types_shows_table(cli_runner, mock_cli_client):
     assert "bucket" in result.stdout
     assert "postgres" in result.stdout
     assert "database" in result.stdout
-    mock_cli_client.list_resource_types.assert_called_once_with(provider=None)
+    mock_cli_client.list_resource_schemas.assert_called_once_with(provider=None)
 
 
 def test_types_with_provider_filter(cli_runner, mock_cli_client):
     """Test types command filters by provider."""
-    mock_cli_client.list_resource_types.return_value = [
-        {"provider": "gcp", "resource": "secret", "description": "GCP Secret Manager secret"},
+    mock_cli_client.list_resource_schemas.return_value = [
+        ResourceSchema(provider="gcp", resource="secret", description="GCP Secret Manager secret"),
     ]
-    result = cli_runner.invoke(app, ["resources", "types", "--provider", "gcp"])
+    result = cli_runner.invoke(app, ["resources", "schemas", "--provider", "gcp"])
     assert result.exit_code == 0
     assert "gcp" in result.stdout
-    mock_cli_client.list_resource_types.assert_called_once_with(provider="gcp")
+    mock_cli_client.list_resource_schemas.assert_called_once_with(provider="gcp")
 
 
 def test_types_empty_list(cli_runner, mock_cli_client):
     """Test types command handles empty list."""
-    mock_cli_client.list_resource_types.return_value = []
-    result = cli_runner.invoke(app, ["resources", "types"])
+    mock_cli_client.list_resource_schemas.return_value = []
+    result = cli_runner.invoke(app, ["resources", "schemas"])
     assert result.exit_code == 0
-    assert "No resource types found" in result.stdout
+    assert "No resource schemas found" in result.stdout
 
 
 def test_types_shows_error(cli_runner, mock_cli_client):
     """Test types command shows error on failure."""
     response = httpx.Response(500, json={"detail": "Internal server error"})
-    mock_cli_client.list_resource_types.side_effect = httpx.HTTPStatusError(
+    mock_cli_client.list_resource_schemas.side_effect = httpx.HTTPStatusError(
         "500 Internal Server Error", request=httpx.Request("GET", "http://test"), response=response
     )
-    result = cli_runner.invoke(app, ["resources", "types"])
+    result = cli_runner.invoke(app, ["resources", "schemas"])
     assert result.exit_code == 1
     assert "Error" in result.stdout
 
@@ -734,7 +735,7 @@ def test_describe_json_output(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.return_value = []
+    mock_cli_client.list_resource_schemas.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret", "-o", "json"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)
@@ -759,7 +760,7 @@ def test_describe_yaml_output(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.return_value = []
+    mock_cli_client.list_resource_schemas.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret", "--output", "yaml"])
     assert result.exit_code == 0
     data = yaml.safe_load(result.stdout)
@@ -769,11 +770,11 @@ def test_describe_yaml_output(cli_runner, mock_cli_client):
 
 def test_types_json_output(cli_runner, mock_cli_client):
     """Test types command with JSON output format."""
-    mock_cli_client.list_resource_types.return_value = [
-        {"provider": "gcp", "resource": "secret", "description": "GCP Secret Manager secret"},
-        {"provider": "postgres", "resource": "database", "description": None},
+    mock_cli_client.list_resource_schemas.return_value = [
+        ResourceSchema(provider="gcp", resource="secret", description="GCP Secret Manager secret"),
+        ResourceSchema(provider="postgres", resource="database", description=None),
     ]
-    result = cli_runner.invoke(app, ["resources", "types", "-o", "json"])
+    result = cli_runner.invoke(app, ["resources", "schemas", "-o", "json"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     assert isinstance(data, list)
@@ -785,10 +786,10 @@ def test_types_json_output(cli_runner, mock_cli_client):
 
 def test_types_yaml_output(cli_runner, mock_cli_client):
     """Test types command with YAML output format."""
-    mock_cli_client.list_resource_types.return_value = [
-        {"provider": "gcp", "resource": "secret", "description": "GCP Secret Manager secret"},
+    mock_cli_client.list_resource_schemas.return_value = [
+        ResourceSchema(provider="gcp", resource="secret", description="GCP Secret Manager secret"),
     ]
-    result = cli_runner.invoke(app, ["resources", "types", "--output", "yaml"])
+    result = cli_runner.invoke(app, ["resources", "schemas", "--output", "yaml"])
     assert result.exit_code == 0
     data = yaml.safe_load(result.stdout)
     assert isinstance(data, list)
@@ -961,18 +962,18 @@ def test_describe_shows_immutable_indicator(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.return_value = [
-        {
-            "provider": "gcp",
-            "resource": "bucket",
-            "schema": {
+    mock_cli_client.list_resource_schemas.return_value = [
+        ResourceSchema(
+            provider="gcp",
+            resource="bucket",
+            config_schema={
                 "properties": {
                     "region": {"type": "string", "immutable": True},
                     "storage_class": {"type": "string"},
                 },
             },
-            "description": "GCP Cloud Storage bucket",
-        },
+            description="GCP Cloud Storage bucket",
+        ),
     ]
 
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/bucket", "my-bucket"])
@@ -997,18 +998,18 @@ def test_describe_immutable_only_on_marked_fields(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.return_value = [
-        {
-            "provider": "gcp",
-            "resource": "bucket",
-            "schema": {
+    mock_cli_client.list_resource_schemas.return_value = [
+        ResourceSchema(
+            provider="gcp",
+            resource="bucket",
+            config_schema={
                 "properties": {
                     "region": {"type": "string", "immutable": True},
                     "storage_class": {"type": "string"},
                 },
             },
-            "description": "GCP Cloud Storage bucket",
-        },
+            description="GCP Cloud Storage bucket",
+        ),
     ]
 
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/bucket", "my-bucket"])
@@ -1038,7 +1039,7 @@ def test_describe_no_immutable_when_schema_unavailable(cli_runner, mock_cli_clie
     }
 
     response = httpx.Response(500, text="Internal Server Error")
-    mock_cli_client.list_resource_types.side_effect = httpx.HTTPStatusError(
+    mock_cli_client.list_resource_schemas.side_effect = httpx.HTTPStatusError(
         "API unavailable", request=None, response=response
     )
 
@@ -1063,13 +1064,13 @@ def test_describe_no_immutable_when_no_matching_type(cli_runner, mock_cli_client
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.return_value = [
-        {
-            "provider": "gcp",
-            "resource": "bucket",
-            "schema": {"properties": {"region": {"type": "string", "immutable": True}}},
-            "description": "GCP bucket",
-        },
+    mock_cli_client.list_resource_schemas.return_value = [
+        ResourceSchema(
+            provider="gcp",
+            resource="bucket",
+            config_schema={"properties": {"region": {"type": "string", "immutable": True}}},
+            description="GCP bucket",
+        ),
     ]
 
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
@@ -1096,7 +1097,7 @@ def test_describe_passes_reveal_true(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.return_value = []
+    mock_cli_client.list_resource_schemas.return_value = []
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret", "--reveal"])
     assert result.exit_code == 0
     mock_cli_client.get_resource.assert_called_once_with(
@@ -1122,18 +1123,18 @@ def test_describe_shows_sensitive_config_indicator(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.return_value = [
-        {
-            "provider": "gcp",
-            "resource": "secret",
-            "schema": {
+    mock_cli_client.list_resource_schemas.return_value = [
+        ResourceSchema(
+            provider="gcp",
+            resource="secret",
+            config_schema={
                 "properties": {
                     "project_id": {"type": "string"},
                     "credentials": {"type": "string", "sensitive": True},
                 },
             },
-            "description": "GCP Secret Manager secret",
-        },
+            description="GCP Secret Manager secret",
+        ),
     ]
 
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
@@ -1162,19 +1163,19 @@ def test_describe_shows_sensitive_output_indicator(cli_runner, mock_cli_client):
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.return_value = [
-        {
-            "provider": "gcp",
-            "resource": "secret",
-            "schema": {"properties": {"project_id": {"type": "string"}}},
-            "outputs_schema": {
+    mock_cli_client.list_resource_schemas.return_value = [
+        ResourceSchema(
+            provider="gcp",
+            resource="secret",
+            config_schema={"properties": {"project_id": {"type": "string"}}},
+            outputs_schema={
                 "properties": {
                     "secret_name": {"type": "string"},
                     "access_token": {"type": "string", "sensitive": True},
                 },
             },
-            "description": "GCP Secret Manager secret",
-        },
+            description="GCP Secret Manager secret",
+        ),
     ]
 
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
@@ -1202,18 +1203,18 @@ def test_describe_shows_immutable_and_sensitive_labels(cli_runner, mock_cli_clie
         "updated_at": "2026-01-16T10:30:00Z",
         "error": None,
     }
-    mock_cli_client.list_resource_types.return_value = [
-        {
-            "provider": "gcp",
-            "resource": "bucket",
-            "schema": {
+    mock_cli_client.list_resource_schemas.return_value = [
+        ResourceSchema(
+            provider="gcp",
+            resource="bucket",
+            config_schema={
                 "properties": {
                     "api_key": {"type": "string", "immutable": True, "sensitive": True},
                     "region": {"type": "string"},
                 },
             },
-            "description": "GCP Cloud Storage bucket",
-        },
+            description="GCP Cloud Storage bucket",
+        ),
     ]
 
     result = cli_runner.invoke(app, ["resources", "describe", "gcp/bucket", "my-bucket"])
