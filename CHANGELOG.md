@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.23.1 (2026-03-08)
+
+### Refactor
+
+- update CLI for SDK 0.27.0 renames (PRA-253) (#18)
+
 ## v0.23.0 (2026-03-06)
 
 ### Feat
