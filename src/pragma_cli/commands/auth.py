@@ -3,7 +3,7 @@
 import os
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import typer
@@ -33,18 +33,24 @@ def _get_callback_url() -> str:
     return f"http://localhost:{CALLBACK_PORT}{CALLBACK_PATH}"
 
 
-def _get_login_url(context_config: ContextConfig) -> str:
+def _get_login_url(context_config: ContextConfig, org: str | None = None) -> str:
     """Build the login URL for a given context.
 
     Args:
         context_config: The context configuration to get auth URL from.
+        org: Organization slug to pre-select (skips org picker).
 
     Returns:
         Full login URL with callback parameter.
     """
     auth_url = context_config.get_auth_url()
     callback_url = _get_callback_url()
-    return f"{auth_url}/auth/callback?callback={callback_url}"
+    url = f"{auth_url}/auth/callback?callback={quote(callback_url, safe='')}"
+
+    if org:
+        url += f"&org={quote(org, safe='')}"
+
+    return url
 
 
 class CallbackHandler(BaseHTTPRequestHandler):
@@ -164,6 +170,7 @@ def clear_credentials(context_name: str | None = None):
 @app.command()
 def login(
     context: str | None = typer.Option(None, help="Context to authenticate for (default: current)"),
+    org: str | None = typer.Option(None, help="Organization slug to authenticate with (skips org picker)"),
 ):
     """Authenticate with Pragma using browser-based Clerk login.
 
@@ -173,6 +180,7 @@ def login(
     Example:
         pragma auth login
         pragma auth login --context production
+        pragma auth login --org ycombinator
 
     Raises:
         typer.Exit: If context not found or authentication fails/times out.
@@ -189,7 +197,7 @@ def login(
 
     context_config = config.contexts[context]
     auth_url = context_config.get_auth_url()
-    login_url = _get_login_url(context_config)
+    login_url = _get_login_url(context_config, org=org)
 
     print(f"[cyan]Authenticating for context:[/cyan] {context}")
     print(f"[cyan]API URL:[/cyan] {context_config.api_url}")
