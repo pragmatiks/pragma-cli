@@ -710,7 +710,7 @@ def install(
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
-    provider = detail.provider
+    provider = detail
     display = getattr(provider, "display_name", None) or name
     install_version = version or getattr(provider, "latest_version", "latest")
 
