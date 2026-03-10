@@ -1041,7 +1041,7 @@ def info(
     client = get_client()
 
     try:
-        detail = _fetch_with_spinner(
+        provider = _fetch_with_spinner(
             f"Fetching provider '{name}'...",
             lambda: client.get_provider(name),
         )
@@ -1053,10 +1053,18 @@ def info(
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
+    try:
+        versions = _fetch_with_spinner(
+            "Fetching versions...",
+            lambda: client.list_provider_versions(name),
+        )
+    except httpx.HTTPStatusError:
+        versions = []
+
     if output == OutputFormat.TABLE:
-        _print_provider_info(detail)
+        _print_provider_info(provider, versions)
     else:
-        data = _provider_detail_to_dict(detail)
+        data = _provider_detail_to_dict(provider, versions)
         output_data(data, output)
 
 
@@ -1315,14 +1323,14 @@ def _print_store_list_table(result) -> None:
     console.print(f"[dim]Showing {offset + 1}-{showing_end} of {total} providers[/dim]")
 
 
-def _print_provider_info(detail) -> None:
+def _print_provider_info(provider, versions: list | None = None) -> None:
     """Print detailed provider information in a panel with version table.
 
     Args:
-        detail: Store provider detail response.
+        provider: Provider metadata object.
+        versions: List of provider version objects.
     """
-    provider = detail.provider
-    versions = detail.versions or []
+    versions = versions or []
 
     trust_tier = getattr(provider, "trust_tier", "community")
     author = getattr(getattr(provider, "author", None), "org_name", None) or "[dim]-[/dim]"
@@ -1438,17 +1446,17 @@ def _provider_summary_to_dict(provider) -> dict:
     }
 
 
-def _provider_detail_to_dict(detail) -> dict:
-    """Convert a store provider detail to a plain dict for JSON/YAML output.
+def _provider_detail_to_dict(provider, versions: list | None = None) -> dict:
+    """Convert a provider and its versions to a plain dict for JSON/YAML output.
 
     Args:
-        detail: Store provider detail object.
+        provider: Provider metadata object.
+        versions: List of provider version objects.
 
     Returns:
         Dictionary representation.
     """
-    provider = detail.provider
-    versions = detail.versions or []
+    versions = versions or []
 
     return {
         "name": provider.name,

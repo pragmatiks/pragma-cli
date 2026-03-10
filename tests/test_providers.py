@@ -604,13 +604,6 @@ def _make_paginated_response(mocker: MockerFixture, items, total=None):
     return response
 
 
-def _make_store_detail(mocker: MockerFixture, provider=None, versions=None):
-    detail = mocker.Mock()
-    detail.provider = provider or mocker.Mock()
-    detail.versions = versions or []
-    return detail
-
-
 def _make_version(mocker: MockerFixture, version="1.0.0", status="published", runtime_version="0.5.0"):
     v = mocker.Mock()
     v.version = version
@@ -644,8 +637,7 @@ def _make_installed_provider(
 def test_install_success(cli_runner, mock_pragma_client, mocker):
     """Install command installs provider with confirmation."""
     provider = _make_provider_summary(mocker, name="qdrant", display_name="Qdrant")
-    detail = _make_store_detail(mocker, provider=provider)
-    mock_pragma_client.get_provider.return_value = detail
+    mock_pragma_client.get_provider.return_value = provider
 
     installed = mocker.Mock()
     installed.provider_name = "qdrant"
@@ -669,8 +661,7 @@ def test_install_success(cli_runner, mock_pragma_client, mocker):
 def test_install_yes_flag(cli_runner, mock_pragma_client, mocker):
     """Install command skips confirmation with --yes."""
     provider = _make_provider_summary(mocker, name="qdrant")
-    detail = _make_store_detail(mocker, provider=provider)
-    mock_pragma_client.get_provider.return_value = detail
+    mock_pragma_client.get_provider.return_value = provider
 
     installed = mocker.Mock()
     installed.provider_name = "qdrant"
@@ -687,8 +678,7 @@ def test_install_yes_flag(cli_runner, mock_pragma_client, mocker):
 def test_install_already_installed(cli_runner, mock_pragma_client, mocker):
     """Install command handles 409 (already installed)."""
     provider = _make_provider_summary(mocker, name="qdrant")
-    detail = _make_store_detail(mocker, provider=provider)
-    mock_pragma_client.get_provider.return_value = detail
+    mock_pragma_client.get_provider.return_value = provider
 
     mock_response = httpx.Response(409, json={"detail": "Already installed"})
     mock_pragma_client.install_provider.side_effect = httpx.HTTPStatusError(
@@ -1008,8 +998,8 @@ def test_info_table(cli_runner, mock_pragma_client, mocker):
         _make_version(mocker, version="1.0.0", status="published"),
         _make_version(mocker, version="0.9.0", status="published"),
     ]
-    detail = _make_store_detail(mocker, provider=provider, versions=versions)
-    mock_pragma_client.get_provider.return_value = detail
+    mock_pragma_client.get_provider.return_value = provider
+    mock_pragma_client.list_provider_versions.return_value = versions
 
     result = cli_runner.invoke(app, ["providers", "info", "qdrant"])
 
