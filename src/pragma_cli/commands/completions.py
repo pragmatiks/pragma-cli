@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import typer
 from pragma_sdk import PragmaClient
 
 from pragma_cli.config import get_current_context
@@ -50,51 +49,59 @@ def completion_provider_ids(incomplete: str):
 
 
 def completion_resource_ids(incomplete: str):
-    """Complete resource identifiers in provider/resource format based on existing resources.
+    """Progressively complete resource identifiers in provider/resource/name format.
+
+    Completion progresses through three levels based on slash count:
+    - No slash: complete provider names (appends trailing slash)
+    - One slash: complete resource types for the given provider (appends trailing slash)
+    - Two slashes: complete resource instance names
 
     Args:
-        incomplete: Partial input to complete against available resource types.
+        incomplete: Partial input to complete against available resources.
 
     Yields:
-        Resource identifiers matching the incomplete input.
+        Resource identifier segments matching the incomplete input.
     """
     client = _get_completion_client()
     if client is None:
         return
-    try:
-        resources = client.list_resources()
-    except Exception:
-        return
 
-    seen = set()
-    for res in resources:
-        resource_id = f"{res['provider']}/{res['resource']}"
-        if resource_id not in seen and resource_id.lower().startswith(incomplete.lower()):
-            seen.add(resource_id)
-            yield resource_id
+    slash_count = incomplete.count("/")
 
+    if slash_count == 0:
+        try:
+            resources = client.list_resources()
+        except Exception:
+            return
 
-def completion_resource_names(ctx: typer.Context, incomplete: str):
-    """Complete resource instance names.
+        providers = sorted({r["provider"] for r in resources})
 
-    Args:
-        ctx: Typer context containing parsed parameters including resource_id.
-        incomplete: Partial input to complete.
+        for provider in providers:
+            if provider.lower().startswith(incomplete.lower()):
+                yield provider + "/"
 
-    Yields:
-        Resource names matching the incomplete input for the selected resource type.
-    """
-    client = _get_completion_client()
-    if client is None:
-        return
-    resource_id = ctx.params.get("resource_id")
-    if not resource_id or "/" not in resource_id:
-        return
-    provider, resource = resource_id.split("/", 1)
-    try:
-        resources = client.list_resources(provider=provider, resource=resource)
-    except Exception:
-        return
-    for res in resources:
-        if res["name"].startswith(incomplete):
-            yield res["name"]
+    elif slash_count == 1:
+        provider, partial = incomplete.split("/", 1)
+
+        try:
+            resources = client.list_resources(provider=provider)
+        except Exception:
+            return
+
+        types = sorted({r["resource"] for r in resources})
+
+        for resource_type in types:
+            if resource_type.lower().startswith(partial.lower()):
+                yield f"{provider}/{resource_type}/"
+
+    elif slash_count >= 2:
+        provider, resource_type, partial_name = incomplete.split("/", 2)
+
+        try:
+            resources = client.list_resources(provider=provider, resource=resource_type)
+        except Exception:
+            return
+
+        for r in resources:
+            if r["name"].lower().startswith(partial_name.lower()):
+                yield f"{provider}/{resource_type}/{r['name']}"
