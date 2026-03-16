@@ -17,6 +17,7 @@ from typing import Annotated, Any
 import copier
 import httpx
 import typer
+import yaml
 from pragma_sdk import (
     DeploymentResult,
     DeploymentStatus,
@@ -669,6 +670,71 @@ def _poll_publish_status(client: PragmaClient, provider_id: str, version: str) -
         console.print(f"[dim]Build status:[/dim] {current_status}")
 
 
+def _merge_install_config(
+    config_flags: list[str] | None,
+    config_file_path: str | None,
+) -> dict[str, str] | None:
+    """Merge config from --config-file and --config flags.
+
+    File values are loaded first, then individual flags override.
+    Returns None if no config is provided.
+    """  # noqa: DOC201, DOC501
+    result: dict[str, str] = {}
+
+    if config_file_path is not None:
+        path = Path(config_file_path)
+
+        if not path.exists():
+            console.print(f"[red]Error:[/red] Config file not found: {config_file_path}")
+            raise typer.Exit(1)
+
+        try:
+            with path.open(encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            console.print(f"[red]Error:[/red] Failed to parse config file '{config_file_path}': {e}")
+            raise typer.Exit(1) from e
+        except (OSError, UnicodeError) as e:
+            console.print(f"[red]Error:[/red] Could not read config file '{config_file_path}': {e}")
+            raise typer.Exit(1) from e
+
+        if data is None:
+            console.print(f"[red]Error:[/red] Config file is empty: {config_file_path}")
+            raise typer.Exit(1)
+
+        if not isinstance(data, dict):
+            console.print(f"[red]Error:[/red] Config file must contain a YAML mapping, got {type(data).__name__}")
+            raise typer.Exit(1)
+
+        for key, value in data.items():
+            if isinstance(value, bool):
+                result[str(key)] = "true" if value else "false"
+            elif isinstance(value, (str, int, float)):
+                result[str(key)] = str(value)
+            else:
+                console.print(
+                    f"[red]Error:[/red] Config key '{key}' has unsupported type {type(value).__name__}. "
+                    "Only strings, numbers, and booleans are allowed."
+                )
+                raise typer.Exit(1)
+
+    if config_flags is not None:
+        for entry in config_flags:
+            if "=" not in entry:
+                console.print(f"[red]Error:[/red] Invalid config format '{entry}'. Expected KEY=VALUE.")
+                raise typer.Exit(1)
+
+            key, _, value = entry.partition("=")
+
+            if not key:
+                console.print(f"[red]Error:[/red] Config key cannot be empty in '{entry}'.")
+                raise typer.Exit(1)
+
+            result[key] = value
+
+    return result if result else None
+
+
 @app.command()
 def install(
     name: Annotated[str, typer.Argument(help="Provider name (org/name format)")],
@@ -681,6 +747,14 @@ def install(
         str,
         typer.Option("--upgrade-policy", help="Upgrade policy (manual, auto-minor, auto-patch)"),
     ] = "manual",
+    config: Annotated[
+        list[str] | None,
+        typer.Option("--config", "-c", help="Configuration key=value pair (repeatable)"),
+    ] = None,
+    config_file: Annotated[
+        str | None,
+        typer.Option("--config-file", help="Path to YAML file with configuration key-value pairs"),
+    ] = None,
     yes: Annotated[
         bool,
         typer.Option("--yes", "-y", help="Skip confirmation prompt"),
@@ -692,10 +766,14 @@ def install(
         pragma providers install pragmatiks/qdrant
         pragma providers install pragmatiks/postgres --version 1.2.0
         pragma providers install pragmatiks/redis --resource-tier performance --upgrade-policy auto-minor
+        pragma providers install pragmatiks/qdrant --config SOME_KEY=some_value
+        pragma providers install pragmatiks/qdrant --config-file config.yaml --config OVERRIDE_KEY=value
         pragma providers install pragmatiks/qdrant -y
     """  # noqa: DOC501
     client = get_client()
     _require_auth(client)
+
+    merged_config = _merge_install_config(config, config_file)
 
     try:
         detail = _fetch_with_spinner(
@@ -717,6 +795,12 @@ def install(
     console.print(f"[bold]Provider:[/bold] {display} ({name})")
     console.print(f"[bold]Version:[/bold]  {install_version}")
     console.print(f"[bold]Tier:[/bold]     {resource_tier}")
+
+    if merged_config:
+        console.print("[bold]Config:[/bold]")
+        for key, value in sorted(merged_config.items()):
+            console.print(f"  {key} = {value}", markup=False)
+
     console.print()
 
     if not yes:
@@ -734,6 +818,7 @@ def install(
                 version=version,
                 resource_tier=resource_tier,
                 upgrade_policy=upgrade_policy,
+                config=merged_config,
             ),
         )
     except httpx.HTTPStatusError as e:

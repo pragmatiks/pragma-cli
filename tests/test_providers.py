@@ -23,6 +23,7 @@ from pragma_cli.commands.providers import (
     DEFAULT_TEMPLATE_URL,
     TARBALL_EXCLUDES,
     PragmaProviderConfig,
+    _merge_install_config,
     create_tarball,
     get_template_source,
     read_provider_config,
@@ -655,6 +656,7 @@ def test_install_success(cli_runner, mock_pragma_client, mocker):
         version=None,
         resource_tier="standard",
         upgrade_policy="manual",
+        config=None,
     )
 
 
@@ -1187,3 +1189,84 @@ def test_list_installed_requires_auth(cli_runner, mock_pragma_client):
 
     assert result.exit_code == 1
     assert "Authentication required" in result.output
+
+
+# ---------------------------------------------------------------------------
+# _merge_install_config tests
+# ---------------------------------------------------------------------------
+
+
+def test_merge_install_config_returns_none_when_no_input():
+    assert _merge_install_config(None, None) is None
+
+
+def test_merge_install_config_parses_flags():
+    result = _merge_install_config(["KEY1=val1", "KEY2=val2"], None)
+    assert result == {"KEY1": "val1", "KEY2": "val2"}
+
+
+def test_merge_install_config_handles_equals_in_value():
+    result = _merge_install_config(["KEY=val=ue"], None)
+    assert result == {"KEY": "val=ue"}
+
+
+def test_merge_install_config_allows_empty_value():
+    result = _merge_install_config(["KEY="], None)
+    assert result == {"KEY": ""}
+
+
+def test_merge_install_config_rejects_missing_equals():
+    with pytest.raises(Exit):
+        _merge_install_config(["INVALID"], None)
+
+
+def test_merge_install_config_rejects_empty_key():
+    with pytest.raises(Exit):
+        _merge_install_config(["=value"], None)
+
+
+def test_merge_install_config_loads_yaml_file(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("KEY1: value1\nKEY2: value2\n")
+    result = _merge_install_config(None, str(config_file))
+    assert result == {"KEY1": "value1", "KEY2": "value2"}
+
+
+def test_merge_install_config_yaml_booleans_lowercase(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("ENABLED: true\nDISABLED: false\n")
+    result = _merge_install_config(None, str(config_file))
+    assert result == {"ENABLED": "true", "DISABLED": "false"}
+
+
+def test_merge_install_config_yaml_numbers(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("PORT: 8080\nRATIO: 1.5\n")
+    result = _merge_install_config(None, str(config_file))
+    assert result == {"PORT": "8080", "RATIO": "1.5"}
+
+
+def test_merge_install_config_yaml_rejects_nested(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("NESTED:\n  a: b\n")
+    with pytest.raises(Exit):
+        _merge_install_config(None, str(config_file))
+
+
+def test_merge_install_config_flags_override_file(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("KEY1: from_file\nKEY2: from_file\n")
+    result = _merge_install_config(["KEY1=from_flag"], str(config_file))
+    assert result == {"KEY1": "from_flag", "KEY2": "from_file"}
+
+
+def test_merge_install_config_empty_yaml_file(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("")
+    with pytest.raises(Exit):
+        _merge_install_config(None, str(config_file))
+
+
+def test_merge_install_config_missing_file():
+    with pytest.raises(Exit):
+        _merge_install_config(None, "/nonexistent/config.yaml")
