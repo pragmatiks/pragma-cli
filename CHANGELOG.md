@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.25.3 (2026-03-16)
+
+### Fix
+
+- use PyPI JSON API for version availability polling (#25)
+
 ## v0.25.2 (2026-03-16)
 
 ### Fix
