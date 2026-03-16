@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.24.0 (2026-03-16)
+
+### Feat
+
+- add --config and --config-file to providers install (#20)
+
 ## v0.23.1 (2026-03-08)
 
 ### Refactor
