@@ -688,8 +688,15 @@ def _merge_install_config(
             console.print(f"[red]Error:[/red] Config file not found: {config_file_path}")
             raise typer.Exit(1)
 
-        with path.open() as f:
-            data = yaml.safe_load(f)
+        try:
+            with path.open(encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            console.print(f"[red]Error:[/red] Failed to parse config file '{config_file_path}': {e}")
+            raise typer.Exit(1) from e
+        except (OSError, UnicodeError) as e:
+            console.print(f"[red]Error:[/red] Could not read config file '{config_file_path}': {e}")
+            raise typer.Exit(1) from e
 
         if data is None:
             console.print(f"[red]Error:[/red] Config file is empty: {config_file_path}")
@@ -792,7 +799,7 @@ def install(
     if merged_config:
         console.print("[bold]Config:[/bold]")
         for key, value in sorted(merged_config.items()):
-            console.print(f"  {key} = {value}")
+            console.print(f"  {key} = {value}", markup=False)
 
     console.print()
 
