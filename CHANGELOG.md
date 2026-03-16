@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.26.0 (2026-03-16)
+
+### Feat
+
+- use provider/resource/name format for resource IDs (#27)
+
 ## v0.25.3 (2026-03-16)
 
 ### Fix
