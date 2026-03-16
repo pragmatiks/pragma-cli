@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.25.2 (2026-03-16)
+
+### Fix
+
+- unset VIRTUAL_ENV in ty pre-commit hook (#24)
+
 ## v0.25.1 (2026-03-16)
 
 ### Fix
