@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.25.0 (2026-03-16)
+
+### Feat
+
+- add pragma resources deactivate command (#22)
+
 ## v0.24.0 (2026-03-16)
 
 ### Feat
