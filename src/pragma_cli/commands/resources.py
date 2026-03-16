@@ -9,6 +9,7 @@ from typing import Annotated
 import httpx
 import typer
 import yaml
+from pragma_sdk.models import format_resource_id
 from rich import print
 from rich.console import Console
 from rich.markup import escape
@@ -691,6 +692,77 @@ def _delete_from_files(files: list[typer.FileText]) -> None:
                 print(f"Deleted {res_id}")
             except httpx.HTTPStatusError as e:
                 console.print(f"[red]Error deleting {res_id}:[/red] {_format_api_error(e)}")
+                raise typer.Exit(1) from e
+
+
+@app.command()
+def deactivate(
+    resource_id: Annotated[
+        str | None, typer.Argument(autocompletion=completion_resource_ids, show_default=False)
+    ] = None,
+    name: Annotated[str | None, typer.Argument(autocompletion=completion_resource_names, show_default=False)] = None,
+    file: Annotated[
+        list[typer.FileText] | None,
+        typer.Option("--file", "-f", help="YAML file(s) defining resources to deactivate."),
+    ] = None,
+):
+    """Deactivate resources by type/name or from YAML files.
+
+    Usage:
+        pragma resources deactivate <provider/resource> <name>
+        pragma resources deactivate -f <file.yaml>
+
+    Raises:
+        typer.Exit: If arguments are invalid or deactivation fails.
+    """
+    if file:
+        _deactivate_from_files(file)
+    elif resource_id and name:
+        _deactivate_single(resource_id, name)
+    else:
+        console.print("[red]Provide either -f <file> or <provider/resource> <name>.[/red]")
+        raise typer.Exit(1)
+
+
+def _deactivate_single(resource_id: str, name: str) -> None:
+    client = get_client()
+    provider, resource = parse_resource_id(resource_id)
+    full_id = format_resource_id(provider, resource, name)
+
+    try:
+        client._request("POST", f"/resources/{full_id}/deactivate")
+        print(f"Deactivated {resource_id}/{name}")
+    except httpx.HTTPStatusError as e:
+        console.print(f"[red]Error deactivating {resource_id}/{name}:[/red] {_format_api_error(e)}")
+        raise typer.Exit(1) from e
+
+
+def _deactivate_from_files(files: list[typer.FileText]) -> None:
+    client = get_client()
+
+    for f in files:
+        resources = yaml.safe_load_all(f.read())
+
+        for resource in resources:
+            if not isinstance(resource, dict):
+                continue
+
+            provider = resource.get("provider")
+            resource_type = resource.get("resource")
+            name = resource.get("name")
+
+            if not all([provider, resource_type, name]):
+                console.print(f"[red]Skipping invalid resource (missing provider, resource, or name):[/red] {resource}")
+                continue
+
+            res_id = f"{provider}/{resource_type}/{name}"
+            full_id = format_resource_id(provider, resource_type, name)
+
+            try:
+                client._request("POST", f"/resources/{full_id}/deactivate")
+                print(f"Deactivated {res_id}")
+            except httpx.HTTPStatusError as e:
+                console.print(f"[red]Error deactivating {res_id}:[/red] {_format_api_error(e)}")
                 raise typer.Exit(1) from e
 
 
