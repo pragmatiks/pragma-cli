@@ -9,22 +9,37 @@ from typing import Annotated
 import httpx
 import typer
 import yaml
-from pragma_sdk.models import format_resource_id
 from rich import print
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
 from pragma_cli import get_client
-from pragma_cli.commands.completions import (
-    completion_resource_ids,
-    completion_resource_names,
-)
+from pragma_cli.commands.completions import completion_resource_ids
 from pragma_cli.helpers import OutputFormat, output_data, parse_resource_id
 
 
 console = Console()
 app = typer.Typer()
+
+
+def _parse_resource_id(resource_id: str) -> tuple[str, str, str]:
+    """Parse and validate a resource identifier.
+
+    Args:
+        resource_id: Resource identifier in provider/resource/name format.
+
+    Returns:
+        Tuple of (provider, resource, name).
+
+    Raises:
+        typer.Exit: If the format is invalid.
+    """
+    try:
+        return parse_resource_id(resource_id)
+    except ValueError:
+        console.print("[red]Error:[/red] Invalid resource ID. Expected 'provider/resource/name'.")
+        raise typer.Exit(1)
 
 
 def _format_api_error(error: httpx.HTTPStatusError) -> str:
@@ -365,27 +380,42 @@ def _print_resources_table(resources: list[dict]) -> None:
 @app.command()
 def get(
     resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
-    name: Annotated[str | None, typer.Argument(autocompletion=completion_resource_names)] = None,
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
 ):
-    """Get resources by provider/resource type, optionally filtered by name.
+    """Get resources by type or specific resource by full ID.
+
+    With two segments (provider/resource), lists all resources of that type.
+    With three segments (provider/resource/name), gets a specific resource.
 
     Examples:
         pragma resources get gcp/secret
-        pragma resources get gcp/secret my-secret
-        pragma resources get gcp/secret my-secret -o json
+        pragma resources get gcp/secret/my-secret
+        pragma resources get gcp/secret/my-secret -o json
+
+    Raises:
+        typer.Exit: If the resource ID format is invalid.
     """
     client = get_client()
-    provider, resource = parse_resource_id(resource_id)
-    if name:
-        res = client.get_resource(provider=provider, resource=resource, name=name)
-        output_data([res], output, table_renderer=_print_resources_table)
-    else:
+    parts = resource_id.split("/")
+
+    if len(parts) == 2:
+        provider, resource = parts
         resources = list(client.list_resources(provider=provider, resource=resource))
+
         if not resources:
             console.print("[dim]No resources found.[/dim]")
             return
+
         output_data(resources, output, table_renderer=_print_resources_table)
+    elif len(parts) == 3:
+        provider, resource, name = parts
+        res = client.get_resource(provider=provider, resource=resource, name=name)
+        output_data([res], output, table_renderer=_print_resources_table)
+    else:
+        console.print(
+            "[red]Error:[/red] Invalid resource ID. Expected 'provider/resource' or 'provider/resource/name'."
+        )
+        raise typer.Exit(1)
 
 
 def _format_state_color(state: str) -> str:
@@ -545,7 +575,6 @@ def _print_resource_details(res: dict) -> None:
 @app.command()
 def describe(
     resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
-    name: Annotated[str, typer.Argument(autocompletion=completion_resource_names)],
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
     reveal: Annotated[bool, typer.Option("--reveal", help="Show sensitive field values")] = False,
 ):
@@ -555,16 +584,16 @@ def describe(
     Sensitive fields are redacted by default. Use --reveal to show their values.
 
     Examples:
-        pragma resources describe gcp/secret my-test-secret
-        pragma resources describe postgres/database my-db
-        pragma resources describe gcp/secret my-secret -o json
-        pragma resources describe gcp/secret my-secret --reveal
+        pragma resources describe gcp/secret/my-test-secret
+        pragma resources describe postgres/database/my-db
+        pragma resources describe gcp/secret/my-secret -o json
+        pragma resources describe gcp/secret/my-secret --reveal
 
     Raises:
         typer.Exit: If the resource is not found or an error occurs.
     """
     client = get_client()
-    provider, resource = parse_resource_id(resource_id)
+    provider, resource, name = _parse_resource_id(resource_id)
 
     try:
         res = client.get_resource(provider=provider, resource=resource, name=name, reveal=reveal)
@@ -631,16 +660,15 @@ def delete(
     resource_id: Annotated[
         str | None, typer.Argument(autocompletion=completion_resource_ids, show_default=False)
     ] = None,
-    name: Annotated[str | None, typer.Argument(autocompletion=completion_resource_names, show_default=False)] = None,
     file: Annotated[
         list[typer.FileText] | None,
         typer.Option("--file", "-f", help="YAML file(s) defining resources to delete."),
     ] = None,
 ):
-    """Delete resources by type/name or from YAML files.
+    """Delete resources by ID or from YAML files.
 
     Usage:
-        pragma resources delete <provider/resource> <name>
+        pragma resources delete <provider/resource/name>
         pragma resources delete -f <file.yaml>
 
     Raises:
@@ -648,22 +676,22 @@ def delete(
     """
     if file:
         _delete_from_files(file)
-    elif resource_id and name:
-        _delete_single(resource_id, name)
+    elif resource_id:
+        _delete_single(resource_id)
     else:
-        console.print("[red]Provide either -f <file> or <provider/resource> <name>.[/red]")
+        console.print("[red]Provide either -f <file> or <provider/resource/name>.[/red]")
         raise typer.Exit(1)
 
 
-def _delete_single(resource_id: str, name: str) -> None:
+def _delete_single(resource_id: str) -> None:
     client = get_client()
-    provider, resource = parse_resource_id(resource_id)
+    provider, resource, name = _parse_resource_id(resource_id)
 
     try:
         client.delete_resource(provider=provider, resource=resource, name=name)
-        print(f"Deleted {resource_id}/{name}")
+        print(f"Deleted {resource_id}")
     except httpx.HTTPStatusError as e:
-        console.print(f"[red]Error deleting {resource_id}/{name}:[/red] {_format_api_error(e)}")
+        console.print(f"[red]Error deleting {resource_id}:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
 
@@ -700,16 +728,15 @@ def deactivate(
     resource_id: Annotated[
         str | None, typer.Argument(autocompletion=completion_resource_ids, show_default=False)
     ] = None,
-    name: Annotated[str | None, typer.Argument(autocompletion=completion_resource_names, show_default=False)] = None,
     file: Annotated[
         list[typer.FileText] | None,
         typer.Option("--file", "-f", help="YAML file(s) defining resources to deactivate."),
     ] = None,
 ):
-    """Deactivate resources by type/name or from YAML files.
+    """Deactivate resources by ID or from YAML files.
 
     Usage:
-        pragma resources deactivate <provider/resource> <name>
+        pragma resources deactivate <provider/resource/name>
         pragma resources deactivate -f <file.yaml>
 
     Raises:
@@ -717,23 +744,22 @@ def deactivate(
     """
     if file:
         _deactivate_from_files(file)
-    elif resource_id and name:
-        _deactivate_single(resource_id, name)
+    elif resource_id:
+        _deactivate_single(resource_id)
     else:
-        console.print("[red]Provide either -f <file> or <provider/resource> <name>.[/red]")
+        console.print("[red]Provide either -f <file> or <provider/resource/name>.[/red]")
         raise typer.Exit(1)
 
 
-def _deactivate_single(resource_id: str, name: str) -> None:
+def _deactivate_single(resource_id: str) -> None:
     client = get_client()
-    provider, resource = parse_resource_id(resource_id)
-    full_id = format_resource_id(provider, resource, name)
+    provider, resource, name = _parse_resource_id(resource_id)
 
     try:
-        client._request("POST", f"/resources/{full_id}/deactivate")
-        print(f"Deactivated {resource_id}/{name}")
+        client.deactivate_resource(provider=provider, resource=resource, name=name)
+        print(f"Deactivated {resource_id}")
     except httpx.HTTPStatusError as e:
-        console.print(f"[red]Error deactivating {resource_id}/{name}:[/red] {_format_api_error(e)}")
+        console.print(f"[red]Error deactivating {resource_id}:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
 
@@ -756,10 +782,9 @@ def _deactivate_from_files(files: list[typer.FileText]) -> None:
                 continue
 
             res_id = f"{provider}/{resource_type}/{name}"
-            full_id = format_resource_id(provider, resource_type, name)
 
             try:
-                client._request("POST", f"/resources/{full_id}/deactivate")
+                client.deactivate_resource(provider=provider, resource=resource_type, name=name)
                 print(f"Deactivated {res_id}")
             except httpx.HTTPStatusError as e:
                 console.print(f"[red]Error deactivating {res_id}:[/red] {_format_api_error(e)}")
@@ -770,20 +795,24 @@ tags_app = typer.Typer()
 app.add_typer(tags_app, name="tags", help="Manage resource tags.")
 
 
-def _fetch_resource(resource_id: str, name: str) -> tuple[str, str, dict]:
+def _fetch_resource(resource_id: str) -> tuple[str, str, str, dict]:
     """Fetch a resource for tag operations.
 
+    Args:
+        resource_id: Full resource identifier in provider/resource/name format.
+
     Returns:
-        Tuple of (provider, resource_type, resource_data).
+        Tuple of (provider, resource_type, name, resource_data).
 
     Raises:
         typer.Exit: If the resource is not found.
     """
     client = get_client()
-    provider, resource = parse_resource_id(resource_id)
+    provider, resource, name = _parse_resource_id(resource_id)
+
     try:
         data = client.get_resource(provider=provider, resource=resource, name=name)
-        return provider, resource, data
+        return provider, resource, name, data
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
@@ -814,14 +843,13 @@ def _apply_tags(provider: str, resource: str, name: str, config: dict, tags: lis
 @tags_app.command("list")
 def tags_list(
     resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
-    name: Annotated[str, typer.Argument(autocompletion=completion_resource_names)],
 ):
     """List tags for a resource.
 
     Examples:
-        pragma resources tags list gcp/secret my-secret
+        pragma resources tags list gcp/secret/my-secret
     """
-    _, _, res = _fetch_resource(resource_id, name)
+    _, _, _, res = _fetch_resource(resource_id)
     tags = res.get("tags") or []
 
     if not tags:
@@ -835,14 +863,13 @@ def tags_list(
 @tags_app.command("add")
 def tags_add(
     resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
-    name: Annotated[str, typer.Argument(autocompletion=completion_resource_names)],
     tags: Annotated[list[str], typer.Option("--tag", "-t", help="Tag to add (can be repeated)")],
 ):
     """Add tags to a resource.
 
     Examples:
-        pragma resources tags add gcp/secret my-secret --tag production
-        pragma resources tags add gcp/secret my-secret -t prod -t api
+        pragma resources tags add gcp/secret/my-secret --tag production
+        pragma resources tags add gcp/secret/my-secret -t prod -t api
 
     Raises:
         typer.Exit: If the resource is not found or the operation fails.
@@ -851,7 +878,7 @@ def tags_add(
         console.print("[red]Error:[/red] At least one --tag is required.")
         raise typer.Exit(1)
 
-    provider, resource, res = _fetch_resource(resource_id, name)
+    provider, resource, name, res = _fetch_resource(resource_id)
     current_tags = set(res.get("tags") or [])
     new_tags = set(tags)
     added = new_tags - current_tags
@@ -869,14 +896,13 @@ def tags_add(
 @tags_app.command("remove")
 def tags_remove(
     resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
-    name: Annotated[str, typer.Argument(autocompletion=completion_resource_names)],
     tags: Annotated[list[str], typer.Option("--tag", "-t", help="Tag to remove (can be repeated)")],
 ):
     """Remove tags from a resource.
 
     Examples:
-        pragma resources tags remove gcp/secret my-secret --tag staging
-        pragma resources tags remove gcp/secret my-secret -t old -t deprecated
+        pragma resources tags remove gcp/secret/my-secret --tag staging
+        pragma resources tags remove gcp/secret/my-secret -t old -t deprecated
 
     Raises:
         typer.Exit: If the resource is not found or the operation fails.
@@ -885,7 +911,7 @@ def tags_remove(
         console.print("[red]Error:[/red] At least one --tag is required.")
         raise typer.Exit(1)
 
-    provider, resource, res = _fetch_resource(resource_id, name)
+    provider, resource, name, res = _fetch_resource(resource_id)
     current_tags = set(res.get("tags") or [])
     to_remove = set(tags)
     removed = current_tags & to_remove

@@ -94,7 +94,7 @@ def test_list_resources_with_resource_filter(cli_runner, mock_cli_client):
 
 def test_get_single_resource(cli_runner, mock_cli_client):
     mock_cli_client.get_resource.return_value = mock_resource("postgres", "database", "test-db", "ready")
-    result = cli_runner.invoke(app, ["resources", "get", "postgres/database", "test-db"])
+    result = cli_runner.invoke(app, ["resources", "get", "postgres/database/test-db"])
     assert result.exit_code == 0
     # Table format: Provider, Resource, Name, State columns
     assert "postgres" in result.stdout
@@ -157,7 +157,7 @@ def test_apply_multiple_resources_from_file(cli_runner, mock_cli_client, multi_d
 
 
 def test_delete_resource(cli_runner, mock_cli_client):
-    result = cli_runner.invoke(app, ["resources", "delete", "postgres/database", "test-db"])
+    result = cli_runner.invoke(app, ["resources", "delete", "postgres/database/test-db"])
     assert result.exit_code == 0
     assert "Deleted postgres/database/test-db" in result.stdout
     mock_cli_client.delete_resource.assert_called_once_with(provider="postgres", resource="database", name="test-db")
@@ -165,7 +165,7 @@ def test_delete_resource(cli_runner, mock_cli_client):
 
 def test_get_nonexistent_resource(cli_runner, mock_cli_client):
     mock_cli_client.get_resource.side_effect = Exception("Resource not found")
-    result = cli_runner.invoke(app, ["resources", "get", "postgres/database", "nonexistent"])
+    result = cli_runner.invoke(app, ["resources", "get", "postgres/database/nonexistent"])
     assert result.exit_code != 0
 
 
@@ -182,7 +182,7 @@ def test_apply_invalid_yaml(cli_runner, mock_cli_client):
 
 
 def test_delete_with_invalid_resource_id(cli_runner, mock_cli_client):
-    result = cli_runner.invoke(app, ["resources", "delete", "invalid-resource-id", "test-db"])
+    result = cli_runner.invoke(app, ["resources", "delete", "invalid-resource-id"])
     assert result.exit_code != 0
     mock_cli_client.delete_resource.assert_not_called()
 
@@ -393,7 +393,7 @@ def test_describe_resource_ready(cli_runner, mock_cli_client):
         "error": None,
     }
     mock_cli_client.list_resource_schemas.return_value = []
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret/my-secret"])
     assert result.exit_code == 0
     assert "gcp/secret/my-secret" in result.stdout
     assert "ready" in result.stdout
@@ -422,7 +422,7 @@ def test_describe_resource_failed(cli_runner, mock_cli_client):
         "error": "Secret Manager API not enabled for project",
     }
     mock_cli_client.list_resource_schemas.return_value = []
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "failed-secret"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret/failed-secret"])
     assert result.exit_code == 0
     assert "failed" in result.stdout
     assert "Error" in result.stdout
@@ -447,7 +447,7 @@ def test_describe_resource_with_dependencies(cli_runner, mock_cli_client):
         "error": None,
     }
     mock_cli_client.list_resource_schemas.return_value = []
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "dep-secret"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret/dep-secret"])
     assert result.exit_code == 0
     assert "Dependencies" in result.stdout
     assert "pragma/secret/credentials" in result.stdout
@@ -477,7 +477,7 @@ def test_describe_resource_with_field_reference(cli_runner, mock_cli_client):
         "error": None,
     }
     mock_cli_client.list_resource_schemas.return_value = []
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "ref-secret"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret/ref-secret"])
     assert result.exit_code == 0
     # FieldReference should be formatted as provider/resource/name#field
     assert "pragma/secret/gcp-creds#config.data.service_account" in result.stdout
@@ -489,7 +489,7 @@ def test_describe_resource_not_found(cli_runner, mock_cli_client):
     mock_cli_client.get_resource.side_effect = httpx.HTTPStatusError(
         "404 Not Found", request=httpx.Request("GET", "http://test"), response=response
     )
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "nonexistent"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret/nonexistent"])
     assert result.exit_code == 1
     assert "Error" in result.stdout
     assert "Resource not found" in result.stdout
@@ -525,7 +525,7 @@ def test_get_resource_shows_error_for_failed(cli_runner, mock_cli_client):
         "lifecycle_state": "failed",
         "error": "Credentials invalid",
     }
-    result = cli_runner.invoke(app, ["resources", "get", "gcp/secret", "failed-resource"])
+    result = cli_runner.invoke(app, ["resources", "get", "gcp/secret/failed-resource"])
     assert result.exit_code == 0
     # Table format with error below
     assert "failed" in result.stdout
@@ -603,7 +603,7 @@ def test_delete_shows_error(cli_runner, mock_cli_client):
     mock_cli_client.delete_resource.side_effect = httpx.HTTPStatusError(
         "404 Not Found", request=httpx.Request("DELETE", "http://test"), response=response
     )
-    result = cli_runner.invoke(app, ["resources", "delete", "gcp/secret", "nonexistent"])
+    result = cli_runner.invoke(app, ["resources", "delete", "gcp/secret/nonexistent"])
     assert result.exit_code == 1
     assert "Error deleting" in result.stdout
     assert "Resource not found" in result.stdout
@@ -697,7 +697,7 @@ def test_list_resources_yaml_output(cli_runner, mock_cli_client):
 def test_get_resource_json_output(cli_runner, mock_cli_client):
     """Test get single resource with JSON output format."""
     mock_cli_client.get_resource.return_value = mock_resource("postgres", "database", "test-db", "ready")
-    result = cli_runner.invoke(app, ["resources", "get", "postgres/database", "test-db", "-o", "json"])
+    result = cli_runner.invoke(app, ["resources", "get", "postgres/database/test-db", "-o", "json"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     # get returns a list even for single resource
@@ -736,7 +736,7 @@ def test_describe_json_output(cli_runner, mock_cli_client):
         "error": None,
     }
     mock_cli_client.list_resource_schemas.return_value = []
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret", "-o", "json"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret/my-secret", "-o", "json"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     assert data["provider"] == "gcp"
@@ -761,7 +761,7 @@ def test_describe_yaml_output(cli_runner, mock_cli_client):
         "error": None,
     }
     mock_cli_client.list_resource_schemas.return_value = []
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret", "--output", "yaml"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret/my-secret", "--output", "yaml"])
     assert result.exit_code == 0
     data = yaml.safe_load(result.stdout)
     assert data["provider"] == "gcp"
@@ -976,7 +976,7 @@ def test_describe_shows_immutable_indicator(cli_runner, mock_cli_client):
         ),
     ]
 
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/bucket", "my-bucket"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/bucket/my-bucket"])
     assert result.exit_code == 0
     assert "[immutable]" in result.stdout
     assert "region" in result.stdout
@@ -1012,7 +1012,7 @@ def test_describe_immutable_only_on_marked_fields(cli_runner, mock_cli_client):
         ),
     ]
 
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/bucket", "my-bucket"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/bucket/my-bucket"])
     assert result.exit_code == 0
 
     for line in result.stdout.splitlines():
@@ -1043,7 +1043,7 @@ def test_describe_no_immutable_when_schema_unavailable(cli_runner, mock_cli_clie
         "API unavailable", request=None, response=response
     )
 
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret/my-secret"])
     assert result.exit_code == 0
     assert "project_id" in result.stdout
     assert "[immutable]" not in result.stdout
@@ -1073,7 +1073,7 @@ def test_describe_no_immutable_when_no_matching_type(cli_runner, mock_cli_client
         ),
     ]
 
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret/my-secret"])
     assert result.exit_code == 0
     assert "project_id" in result.stdout
     assert "[immutable]" not in result.stdout
@@ -1098,7 +1098,7 @@ def test_describe_passes_reveal_true(cli_runner, mock_cli_client):
         "error": None,
     }
     mock_cli_client.list_resource_schemas.return_value = []
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret", "--reveal"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret/my-secret", "--reveal"])
     assert result.exit_code == 0
     mock_cli_client.get_resource.assert_called_once_with(
         provider="gcp", resource="secret", name="my-secret", reveal=True
@@ -1137,7 +1137,7 @@ def test_describe_shows_sensitive_config_indicator(cli_runner, mock_cli_client):
         ),
     ]
 
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret/my-secret"])
     assert result.exit_code == 0
     assert "[sensitive]" in result.stdout
 
@@ -1178,7 +1178,7 @@ def test_describe_shows_sensitive_output_indicator(cli_runner, mock_cli_client):
         ),
     ]
 
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret", "my-secret"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/secret/my-secret"])
     assert result.exit_code == 0
 
     for line in result.stdout.splitlines():
@@ -1217,7 +1217,7 @@ def test_describe_shows_immutable_and_sensitive_labels(cli_runner, mock_cli_clie
         ),
     ]
 
-    result = cli_runner.invoke(app, ["resources", "describe", "gcp/bucket", "my-bucket"])
+    result = cli_runner.invoke(app, ["resources", "describe", "gcp/bucket/my-bucket"])
     assert result.exit_code == 0
 
     for line in result.stdout.splitlines():
