@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.25.1 (2026-03-16)
+
+### Fix
+
+- add PyPI availability polling to update-sdk workflow (#23)
+
 ## v0.25.0 (2026-03-16)
 
 ### Feat
