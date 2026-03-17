@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.27.0 (2026-03-17)
+
+### Feat
+
+- add organizations command group with list and cleanup (#28)
+
 ## v0.26.0 (2026-03-16)
 
 ### Feat
