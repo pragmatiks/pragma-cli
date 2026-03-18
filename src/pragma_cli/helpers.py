@@ -46,17 +46,21 @@ def parse_resource_id(resource_id: str) -> tuple[str, str, str]:
     """Parse resource identifier into provider, resource type, and name.
 
     Args:
-        resource_id: Resource identifier in format 'provider/resource/name'.
+        resource_id: Resource identifier in format 'org/provider/resource/name'.
 
     Returns:
-        Tuple of (provider, resource, name).
+        Tuple of (provider, resource, name) where provider is 'org/provider'.
 
     Raises:
-        ValueError: If resource_id format is invalid.
+        ValueError: If resource_id does not have exactly 4 segments.
     """
     parts = resource_id.split("/")
 
-    if len(parts) != 3:
-        raise ValueError(f"Invalid resource ID: {resource_id}. Expected 'provider/resource/name'.")
+    if len(parts) != 4:
+        raise ValueError(f"Invalid resource ID: {resource_id}. Expected 'org/provider/resource/name'.")
 
-    return parts[0], parts[1], parts[2]
+    provider = f"{parts[0]}/{parts[1]}"
+    resource = parts[2]
+    name = parts[3]
+
+    return provider, resource, name

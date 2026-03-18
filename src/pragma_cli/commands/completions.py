@@ -49,12 +49,13 @@ def completion_provider_ids(incomplete: str):
 
 
 def completion_resource_ids(incomplete: str):
-    """Progressively complete resource identifiers in provider/resource/name format.
+    """Progressively complete resource identifiers in org/provider/resource/name format.
 
-    Completion progresses through three levels based on slash count:
-    - No slash: complete provider names (appends trailing slash)
-    - One slash: complete resource types for the given provider (appends trailing slash)
-    - Two slashes: complete resource instance names
+    Completion progresses through four levels based on slash count:
+    - No slash: complete organization names (appends trailing slash)
+    - One slash: complete provider names within the org (appends trailing slash)
+    - Two slashes: complete resource types for org/provider (appends trailing slash)
+    - Three slashes: complete resource instance names
 
     Args:
         incomplete: Partial input to complete against available resources.
@@ -74,17 +75,36 @@ def completion_resource_ids(incomplete: str):
         except Exception:
             return
 
-        providers = sorted({r["provider"] for r in resources})
+        orgs = sorted({r["provider"].split("/")[0] for r in resources if "/" in r["provider"]})
 
-        for provider in providers:
-            if provider.lower().startswith(incomplete.lower()):
-                yield provider + "/"
+        for org in orgs:
+            if org.lower().startswith(incomplete.lower()):
+                yield org + "/"
 
     elif slash_count == 1:
-        provider, partial = incomplete.split("/", 1)
+        org, partial = incomplete.split("/", 1)
 
         try:
-            resources = client.list_resources(provider=provider)
+            resources = client.list_resources()
+        except Exception:
+            return
+
+        provider_names = sorted({
+            r["provider"].split("/")[1]
+            for r in resources
+            if "/" in r["provider"] and r["provider"].split("/")[0] == org
+        })
+
+        for provider_name in provider_names:
+            if provider_name.lower().startswith(partial.lower()):
+                yield f"{org}/{provider_name}/"
+
+    elif slash_count == 2:
+        org, provider_name, partial = incomplete.split("/", 2)
+        full_provider = f"{org}/{provider_name}"
+
+        try:
+            resources = client.list_resources(provider=full_provider)
         except Exception:
             return
 
@@ -92,16 +112,17 @@ def completion_resource_ids(incomplete: str):
 
         for resource_type in types:
             if resource_type.lower().startswith(partial.lower()):
-                yield f"{provider}/{resource_type}/"
+                yield f"{full_provider}/{resource_type}/"
 
-    elif slash_count >= 2:
-        provider, resource_type, partial_name = incomplete.split("/", 2)
+    elif slash_count >= 3:
+        org, provider_name, resource_type, partial_name = incomplete.split("/", 3)
+        full_provider = f"{org}/{provider_name}"
 
         try:
-            resources = client.list_resources(provider=provider, resource=resource_type)
+            resources = client.list_resources(provider=full_provider, resource=resource_type)
         except Exception:
             return
 
         for r in resources:
             if r["name"].lower().startswith(partial_name.lower()):
-                yield f"{provider}/{resource_type}/{r['name']}"
+                yield f"{full_provider}/{resource_type}/{r['name']}"

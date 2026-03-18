@@ -80,146 +80,195 @@ def test_completion_provider_ids_handles_api_error(mock_cli_client):
     assert results == []
 
 
-def test_completion_resource_ids_no_slash_lists_providers(mock_cli_client):
-    """No slash in input completes provider names with trailing slash."""
+def test_completion_resource_ids_no_slash_lists_orgs(mock_cli_client):
+    """No slash in input completes organization names with trailing slash."""
     mock_cli_client.list_resources.return_value = [
-        mock_resource("postgres", "database", "db1"),
-        mock_resource("postgres", "schema", "schema1"),
-        mock_resource("gcp", "secret", "my-secret"),
+        mock_resource("pragmatiks/postgres", "database", "db1"),
+        mock_resource("pragmatiks/gcp", "secret", "my-secret"),
+        mock_resource("acme/redis", "cache", "session"),
     ]
 
     results = list(completion_resource_ids(""))
 
-    assert "gcp/" in results
-    assert "postgres/" in results
+    assert "acme/" in results
+    assert "pragmatiks/" in results
 
 
 def test_completion_resource_ids_no_slash_partial_match(mock_cli_client):
-    """Partial provider name filters correctly."""
+    """Partial org name filters correctly."""
     mock_cli_client.list_resources.return_value = [
-        mock_resource("postgres", "database", "db1"),
-        mock_resource("gcp", "secret", "my-secret"),
+        mock_resource("pragmatiks/postgres", "database", "db1"),
+        mock_resource("acme/gcp", "secret", "my-secret"),
     ]
 
-    results = list(completion_resource_ids("post"))
+    results = list(completion_resource_ids("prag"))
 
-    assert results == ["postgres/"]
+    assert results == ["pragmatiks/"]
 
 
 def test_completion_resource_ids_no_slash_case_insensitive(mock_cli_client):
     mock_cli_client.list_resources.return_value = [
-        mock_resource("postgres", "database", "db1"),
+        mock_resource("pragmatiks/postgres", "database", "db1"),
     ]
 
-    results = list(completion_resource_ids("POST"))
+    results = list(completion_resource_ids("PRAG"))
 
-    assert "postgres/" in results
+    assert "pragmatiks/" in results
 
 
 def test_completion_resource_ids_no_slash_deduplicates(mock_cli_client):
-    """Multiple resources from same provider yield one provider entry."""
+    """Multiple resources from same org yield one org entry."""
     mock_cli_client.list_resources.return_value = [
-        mock_resource("postgres", "database", "db1"),
-        mock_resource("postgres", "database", "db2"),
-        mock_resource("postgres", "schema", "schema1"),
+        mock_resource("pragmatiks/postgres", "database", "db1"),
+        mock_resource("pragmatiks/postgres", "database", "db2"),
+        mock_resource("pragmatiks/gcp", "secret", "my-secret"),
     ]
 
     results = list(completion_resource_ids(""))
 
-    assert results == ["postgres/"]
+    assert results == ["pragmatiks/"]
 
 
-def test_completion_resource_ids_one_slash_lists_types(mock_cli_client):
-    """One slash completes resource types for the given provider."""
+def test_completion_resource_ids_one_slash_lists_providers(mock_cli_client):
+    """One slash completes provider names within the org."""
     mock_cli_client.list_resources.return_value = [
-        mock_resource("postgres", "database", "db1"),
-        mock_resource("postgres", "schema", "schema1"),
+        mock_resource("pragmatiks/postgres", "database", "db1"),
+        mock_resource("pragmatiks/gcp", "secret", "my-secret"),
+        mock_resource("acme/redis", "cache", "session"),
     ]
 
-    results = list(completion_resource_ids("postgres/"))
+    results = list(completion_resource_ids("pragmatiks/"))
 
-    assert "postgres/database/" in results
-    assert "postgres/schema/" in results
-    mock_cli_client.list_resources.assert_called_once_with(provider="postgres")
+    assert "pragmatiks/gcp/" in results
+    assert "pragmatiks/postgres/" in results
 
 
-def test_completion_resource_ids_one_slash_partial_type(mock_cli_client):
-    """Partial resource type filters correctly."""
+def test_completion_resource_ids_one_slash_partial_provider(mock_cli_client):
+    """Partial provider name within org filters correctly."""
     mock_cli_client.list_resources.return_value = [
-        mock_resource("postgres", "database", "db1"),
-        mock_resource("postgres", "schema", "schema1"),
+        mock_resource("pragmatiks/postgres", "database", "db1"),
+        mock_resource("pragmatiks/gcp", "secret", "my-secret"),
     ]
 
-    results = list(completion_resource_ids("postgres/dat"))
+    results = list(completion_resource_ids("pragmatiks/post"))
 
-    assert results == ["postgres/database/"]
+    assert results == ["pragmatiks/postgres/"]
 
 
 def test_completion_resource_ids_one_slash_case_insensitive(mock_cli_client):
     mock_cli_client.list_resources.return_value = [
-        mock_resource("postgres", "database", "db1"),
+        mock_resource("pragmatiks/postgres", "database", "db1"),
     ]
 
-    results = list(completion_resource_ids("postgres/DAT"))
+    results = list(completion_resource_ids("pragmatiks/POST"))
 
-    assert "postgres/database/" in results
+    assert "pragmatiks/postgres/" in results
 
 
 def test_completion_resource_ids_one_slash_deduplicates(mock_cli_client):
+    """Multiple resources from same provider yield one provider entry."""
+    mock_cli_client.list_resources.return_value = [
+        mock_resource("pragmatiks/postgres", "database", "db1"),
+        mock_resource("pragmatiks/postgres", "database", "db2"),
+        mock_resource("pragmatiks/postgres", "schema", "schema1"),
+    ]
+
+    results = list(completion_resource_ids("pragmatiks/"))
+
+    assert results == ["pragmatiks/postgres/"]
+
+
+def test_completion_resource_ids_two_slashes_lists_types(mock_cli_client):
+    """Two slashes completes resource types for the given org/provider."""
+    mock_cli_client.list_resources.return_value = [
+        mock_resource("pragmatiks/postgres", "database", "db1"),
+        mock_resource("pragmatiks/postgres", "schema", "schema1"),
+    ]
+
+    results = list(completion_resource_ids("pragmatiks/postgres/"))
+
+    assert "pragmatiks/postgres/database/" in results
+    assert "pragmatiks/postgres/schema/" in results
+    mock_cli_client.list_resources.assert_called_once_with(provider="pragmatiks/postgres")
+
+
+def test_completion_resource_ids_two_slashes_partial_type(mock_cli_client):
+    """Partial resource type filters correctly."""
+    mock_cli_client.list_resources.return_value = [
+        mock_resource("pragmatiks/postgres", "database", "db1"),
+        mock_resource("pragmatiks/postgres", "schema", "schema1"),
+    ]
+
+    results = list(completion_resource_ids("pragmatiks/postgres/dat"))
+
+    assert results == ["pragmatiks/postgres/database/"]
+
+
+def test_completion_resource_ids_two_slashes_case_insensitive(mock_cli_client):
+    mock_cli_client.list_resources.return_value = [
+        mock_resource("pragmatiks/postgres", "database", "db1"),
+    ]
+
+    results = list(completion_resource_ids("pragmatiks/postgres/DAT"))
+
+    assert "pragmatiks/postgres/database/" in results
+
+
+def test_completion_resource_ids_two_slashes_deduplicates(mock_cli_client):
     """Multiple resources of same type yield one type entry."""
     mock_cli_client.list_resources.return_value = [
-        mock_resource("postgres", "database", "db1"),
-        mock_resource("postgres", "database", "db2"),
-        mock_resource("postgres", "database", "db3"),
+        mock_resource("pragmatiks/postgres", "database", "db1"),
+        mock_resource("pragmatiks/postgres", "database", "db2"),
+        mock_resource("pragmatiks/postgres", "database", "db3"),
     ]
 
-    results = list(completion_resource_ids("postgres/"))
+    results = list(completion_resource_ids("pragmatiks/postgres/"))
 
-    assert results == ["postgres/database/"]
+    assert results == ["pragmatiks/postgres/database/"]
 
 
-def test_completion_resource_ids_two_slashes_lists_names(mock_cli_client):
-    """Two slashes completes resource instance names."""
+def test_completion_resource_ids_three_slashes_lists_names(mock_cli_client):
+    """Three slashes completes resource instance names."""
     mock_cli_client.list_resources.return_value = [
-        mock_resource("postgres", "database", "db1"),
-        mock_resource("postgres", "database", "db2"),
-        mock_resource("postgres", "database", "production-db"),
+        mock_resource("pragmatiks/postgres", "database", "db1"),
+        mock_resource("pragmatiks/postgres", "database", "db2"),
+        mock_resource("pragmatiks/postgres", "database", "production-db"),
     ]
 
-    results = list(completion_resource_ids("postgres/database/"))
+    results = list(completion_resource_ids("pragmatiks/postgres/database/"))
 
-    assert "postgres/database/db1" in results
-    assert "postgres/database/db2" in results
-    assert "postgres/database/production-db" in results
-    mock_cli_client.list_resources.assert_called_once_with(provider="postgres", resource="database")
+    assert "pragmatiks/postgres/database/db1" in results
+    assert "pragmatiks/postgres/database/db2" in results
+    assert "pragmatiks/postgres/database/production-db" in results
+    mock_cli_client.list_resources.assert_called_once_with(provider="pragmatiks/postgres", resource="database")
 
 
-def test_completion_resource_ids_two_slashes_partial_name(mock_cli_client):
+def test_completion_resource_ids_three_slashes_partial_name(mock_cli_client):
     """Partial resource name filters correctly."""
     mock_cli_client.list_resources.return_value = [
-        mock_resource("postgres", "database", "db1"),
-        mock_resource("postgres", "database", "db2"),
-        mock_resource("postgres", "database", "production-db"),
+        mock_resource("pragmatiks/postgres", "database", "db1"),
+        mock_resource("pragmatiks/postgres", "database", "db2"),
+        mock_resource("pragmatiks/postgres", "database", "production-db"),
     ]
 
-    results = list(completion_resource_ids("postgres/database/prod"))
+    results = list(completion_resource_ids("pragmatiks/postgres/database/prod"))
 
-    assert results == ["postgres/database/production-db"]
+    assert results == ["pragmatiks/postgres/database/production-db"]
 
 
-def test_completion_resource_ids_two_slashes_no_match(mock_cli_client):
+def test_completion_resource_ids_three_slashes_no_match(mock_cli_client):
     mock_cli_client.list_resources.return_value = [
-        mock_resource("postgres", "database", "db1"),
+        mock_resource("pragmatiks/postgres", "database", "db1"),
     ]
 
-    results = list(completion_resource_ids("postgres/database/xyz"))
+    results = list(completion_resource_ids("pragmatiks/postgres/database/xyz"))
 
     assert results == []
 
 
 def test_completion_resource_ids_no_slash_no_match(mock_cli_client):
     mock_cli_client.list_resources.return_value = [
-        mock_resource("postgres", "database", "db1"),
+        mock_resource("pragmatiks/postgres", "database", "db1"),
     ]
 
     results = list(completion_resource_ids("xyz"))
@@ -237,18 +286,27 @@ def test_completion_resource_ids_handles_api_error(mock_cli_client):
 
 
 def test_completion_resource_ids_handles_api_error_one_slash(mock_cli_client):
-    """Completion gracefully returns empty when API fails at type level."""
+    """Completion gracefully returns empty when API fails at provider level."""
     mock_cli_client.list_resources.side_effect = Exception("API connection failed")
 
-    results = list(completion_resource_ids("postgres/"))
+    results = list(completion_resource_ids("pragmatiks/"))
 
     assert results == []
 
 
 def test_completion_resource_ids_handles_api_error_two_slashes(mock_cli_client):
+    """Completion gracefully returns empty when API fails at type level."""
+    mock_cli_client.list_resources.side_effect = Exception("API connection failed")
+
+    results = list(completion_resource_ids("pragmatiks/postgres/"))
+
+    assert results == []
+
+
+def test_completion_resource_ids_handles_api_error_three_slashes(mock_cli_client):
     """Completion gracefully returns empty when API fails at name level."""
     mock_cli_client.list_resources.side_effect = Exception("API connection failed")
 
-    results = list(completion_resource_ids("postgres/database/"))
+    results = list(completion_resource_ids("pragmatiks/postgres/database/"))
 
     assert results == []
