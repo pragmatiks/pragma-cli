@@ -168,9 +168,14 @@ def test_delete_resource(cli_runner, mock_cli_client):
 
 
 def test_get_nonexistent_resource(cli_runner, mock_cli_client):
-    mock_cli_client.get_resource.side_effect = Exception("Resource not found")
+    response = httpx.Response(404, json={"detail": "Resource not found: postgres_database_nonexistent"})
+    mock_cli_client.get_resource.side_effect = httpx.HTTPStatusError(
+        "404 Not Found", request=httpx.Request("GET", "http://test"), response=response
+    )
     result = cli_runner.invoke(app, ["resources", "get", "pragmatiks/postgres/database/nonexistent"])
-    assert result.exit_code != 0
+    assert result.exit_code == 1
+    assert "Error" in result.stdout
+    assert "Resource not found" in result.stdout
 
 
 def test_apply_invalid_yaml(cli_runner, mock_cli_client):
@@ -1239,3 +1244,75 @@ def test_describe_shows_immutable_and_sensitive_labels(cli_runner, mock_cli_clie
         if "region" in line and ":" in line:
             assert "[immutable]" not in line
             assert "[sensitive]" not in line
+
+
+def test_tags_add_preserves_lifecycle_state(cli_runner, mock_cli_client):
+    """Test tags add preserves lifecycle_state when applying resource changes."""
+    mock_cli_client.get_resource.return_value = mock_resource(
+        "pragmatiks/postgres", "database", "test-db", lifecycle_state="ready", config={"name": "TEST_DB"}
+    )
+    mock_cli_client.get_resource.return_value["tags"] = ["existing-tag"]
+
+    result = cli_runner.invoke(
+        app, ["resources", "tags", "add", "pragmatiks/postgres/database/test-db", "--tag", "newtag"]
+    )
+    assert result.exit_code == 0
+
+    mock_cli_client.apply_resource.assert_called_once_with(
+        resource={
+            "provider": "pragmatiks/postgres",
+            "resource": "database",
+            "name": "test-db",
+            "config": {"name": "TEST_DB"},
+            "lifecycle_state": "ready",
+            "tags": ["existing-tag", "newtag"],
+        }
+    )
+
+
+def test_tags_remove_preserves_lifecycle_state(cli_runner, mock_cli_client):
+    """Test tags remove preserves lifecycle_state when applying resource changes."""
+    mock_cli_client.get_resource.return_value = mock_resource(
+        "pragmatiks/postgres", "database", "test-db", lifecycle_state="ready", config={"name": "TEST_DB"}
+    )
+    mock_cli_client.get_resource.return_value["tags"] = ["tag1", "tag2"]
+
+    result = cli_runner.invoke(
+        app, ["resources", "tags", "remove", "pragmatiks/postgres/database/test-db", "--tag", "tag1"]
+    )
+    assert result.exit_code == 0
+
+    mock_cli_client.apply_resource.assert_called_once_with(
+        resource={
+            "provider": "pragmatiks/postgres",
+            "resource": "database",
+            "name": "test-db",
+            "config": {"name": "TEST_DB"},
+            "lifecycle_state": "ready",
+            "tags": ["tag2"],
+        }
+    )
+
+
+def test_tags_add_defaults_lifecycle_state_to_draft(cli_runner, mock_cli_client):
+    """Test tags add defaults lifecycle_state to draft when not present in resource."""
+    resource_dict = mock_resource("pragmatiks/postgres", "database", "test-db", config={"name": "TEST_DB"})
+    del resource_dict["lifecycle_state"]  # Remove lifecycle_state key
+    resource_dict["tags"] = []
+    mock_cli_client.get_resource.return_value = resource_dict
+
+    result = cli_runner.invoke(
+        app, ["resources", "tags", "add", "pragmatiks/postgres/database/test-db", "--tag", "newtag"]
+    )
+    assert result.exit_code == 0
+
+    mock_cli_client.apply_resource.assert_called_once_with(
+        resource={
+            "provider": "pragmatiks/postgres",
+            "resource": "database",
+            "name": "test-db",
+            "config": {"name": "TEST_DB"},
+            "lifecycle_state": "draft",
+            "tags": ["newtag"],
+        }
+    )

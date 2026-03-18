@@ -412,7 +412,13 @@ def get(
         provider = f"{parts[0]}/{parts[1]}"
         resource = parts[2]
         name = parts[3]
-        res = client.get_resource(provider=provider, resource=resource, name=name)
+
+        try:
+            res = client.get_resource(provider=provider, resource=resource, name=name)
+        except httpx.HTTPStatusError as e:
+            console.print(f"[red]Error:[/red] {_format_api_error(e)}")
+            raise typer.Exit(1) from e
+
         output_data([res], output, table_renderer=_print_resources_table)
     else:
         console.print(
@@ -821,7 +827,9 @@ def _fetch_resource(resource_id: str) -> tuple[str, str, str, dict]:
         raise typer.Exit(1) from e
 
 
-def _apply_tags(provider: str, resource: str, name: str, config: dict, tags: list[str] | None) -> None:
+def _apply_tags(
+    provider: str, resource: str, name: str, config: dict, lifecycle_state: str, tags: list[str] | None
+) -> None:
     """Apply updated tags to a resource.
 
     Raises:
@@ -835,6 +843,7 @@ def _apply_tags(provider: str, resource: str, name: str, config: dict, tags: lis
                 "resource": resource,
                 "name": name,
                 "config": config,
+                "lifecycle_state": lifecycle_state,
                 "tags": tags,
             }
         )
@@ -890,7 +899,14 @@ def tags_add(
         console.print("[dim]Tags already present, nothing to add.[/dim]")
         return
 
-    _apply_tags(provider, resource, name, res.get("config", {}), sorted(current_tags | new_tags))
+    _apply_tags(
+        provider,
+        resource,
+        name,
+        res.get("config", {}),
+        res.get("lifecycle_state", "draft"),
+        sorted(current_tags | new_tags),
+    )
 
     for tag in sorted(added):
         console.print(f"[green]+[/green] {tag}")
@@ -924,7 +940,14 @@ def tags_remove(
         return
 
     updated = sorted(current_tags - to_remove)
-    _apply_tags(provider, resource, name, res.get("config", {}), updated or None)
+    _apply_tags(
+        provider,
+        resource,
+        name,
+        res.get("config", {}),
+        res.get("lifecycle_state", "draft"),
+        updated or None,
+    )
 
     for tag in sorted(removed):
         console.print(f"[red]-[/red] {tag}")
