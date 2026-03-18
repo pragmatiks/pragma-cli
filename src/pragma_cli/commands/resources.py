@@ -27,10 +27,10 @@ def _parse_resource_id(resource_id: str) -> tuple[str, str, str]:
     """Parse and validate a resource identifier.
 
     Args:
-        resource_id: Resource identifier in provider/resource/name format.
+        resource_id: Resource identifier in org/provider/resource/name format.
 
     Returns:
-        Tuple of (provider, resource, name).
+        Tuple of (provider, resource, name) where provider is 'org/provider'.
 
     Raises:
         typer.Exit: If the format is invalid.
@@ -38,7 +38,7 @@ def _parse_resource_id(resource_id: str) -> tuple[str, str, str]:
     try:
         return parse_resource_id(resource_id)
     except ValueError:
-        console.print("[red]Error:[/red] Invalid resource ID. Expected 'provider/resource/name'.")
+        console.print("[red]Error:[/red] Invalid resource ID. Expected 'org/provider/resource/name'.")
         raise typer.Exit(1)
 
 
@@ -384,13 +384,13 @@ def get(
 ):
     """Get resources by type or specific resource by full ID.
 
-    With two segments (provider/resource), lists all resources of that type.
-    With three segments (provider/resource/name), gets a specific resource.
+    With three segments (org/provider/resource), lists all resources of that type.
+    With four segments (org/provider/resource/name), gets a specific resource.
 
     Examples:
-        pragma resources get gcp/secret
-        pragma resources get gcp/secret/my-secret
-        pragma resources get gcp/secret/my-secret -o json
+        pragma resources get pragmatiks/pragma/secret
+        pragma resources get pragmatiks/pragma/secret/my-secret
+        pragma resources get pragmatiks/pragma/secret/my-secret -o json
 
     Raises:
         typer.Exit: If the resource ID format is invalid.
@@ -398,8 +398,9 @@ def get(
     client = get_client()
     parts = resource_id.split("/")
 
-    if len(parts) == 2:
-        provider, resource = parts
+    if len(parts) == 3:
+        provider = f"{parts[0]}/{parts[1]}"
+        resource = parts[2]
         resources = list(client.list_resources(provider=provider, resource=resource))
 
         if not resources:
@@ -407,13 +408,15 @@ def get(
             return
 
         output_data(resources, output, table_renderer=_print_resources_table)
-    elif len(parts) == 3:
-        provider, resource, name = parts
+    elif len(parts) == 4:
+        provider = f"{parts[0]}/{parts[1]}"
+        resource = parts[2]
+        name = parts[3]
         res = client.get_resource(provider=provider, resource=resource, name=name)
         output_data([res], output, table_renderer=_print_resources_table)
     else:
         console.print(
-            "[red]Error:[/red] Invalid resource ID. Expected 'provider/resource' or 'provider/resource/name'."
+            "[red]Error:[/red] Invalid resource ID. Expected 'org/provider/resource' or 'org/provider/resource/name'."
         )
         raise typer.Exit(1)
 
@@ -584,10 +587,10 @@ def describe(
     Sensitive fields are redacted by default. Use --reveal to show their values.
 
     Examples:
-        pragma resources describe gcp/secret/my-test-secret
-        pragma resources describe postgres/database/my-db
-        pragma resources describe gcp/secret/my-secret -o json
-        pragma resources describe gcp/secret/my-secret --reveal
+        pragma resources describe pragmatiks/gcp/secret/my-test-secret
+        pragma resources describe pragmatiks/postgres/database/my-db
+        pragma resources describe pragmatiks/gcp/secret/my-secret -o json
+        pragma resources describe pragmatiks/gcp/secret/my-secret --reveal
 
     Raises:
         typer.Exit: If the resource is not found or an error occurs.
@@ -668,7 +671,7 @@ def delete(
     """Delete resources by ID or from YAML files.
 
     Usage:
-        pragma resources delete <provider/resource/name>
+        pragma resources delete <org/provider/resource/name>
         pragma resources delete -f <file.yaml>
 
     Raises:
@@ -679,7 +682,7 @@ def delete(
     elif resource_id:
         _delete_single(resource_id)
     else:
-        console.print("[red]Provide either -f <file> or <provider/resource/name>.[/red]")
+        console.print("[red]Provide either -f <file> or <org/provider/resource/name>.[/red]")
         raise typer.Exit(1)
 
 
@@ -736,7 +739,7 @@ def deactivate(
     """Deactivate resources by ID or from YAML files.
 
     Usage:
-        pragma resources deactivate <provider/resource/name>
+        pragma resources deactivate <org/provider/resource/name>
         pragma resources deactivate -f <file.yaml>
 
     Raises:
@@ -747,7 +750,7 @@ def deactivate(
     elif resource_id:
         _deactivate_single(resource_id)
     else:
-        console.print("[red]Provide either -f <file> or <provider/resource/name>.[/red]")
+        console.print("[red]Provide either -f <file> or <org/provider/resource/name>.[/red]")
         raise typer.Exit(1)
 
 
@@ -799,7 +802,7 @@ def _fetch_resource(resource_id: str) -> tuple[str, str, str, dict]:
     """Fetch a resource for tag operations.
 
     Args:
-        resource_id: Full resource identifier in provider/resource/name format.
+        resource_id: Full resource identifier in org/provider/resource/name format.
 
     Returns:
         Tuple of (provider, resource_type, name, resource_data).
@@ -847,7 +850,7 @@ def tags_list(
     """List tags for a resource.
 
     Examples:
-        pragma resources tags list gcp/secret/my-secret
+        pragma resources tags list pragmatiks/gcp/secret/my-secret
     """
     _, _, _, res = _fetch_resource(resource_id)
     tags = res.get("tags") or []
@@ -868,8 +871,8 @@ def tags_add(
     """Add tags to a resource.
 
     Examples:
-        pragma resources tags add gcp/secret/my-secret --tag production
-        pragma resources tags add gcp/secret/my-secret -t prod -t api
+        pragma resources tags add pragmatiks/gcp/secret/my-secret --tag production
+        pragma resources tags add pragmatiks/gcp/secret/my-secret -t prod -t api
 
     Raises:
         typer.Exit: If the resource is not found or the operation fails.
@@ -901,8 +904,8 @@ def tags_remove(
     """Remove tags from a resource.
 
     Examples:
-        pragma resources tags remove gcp/secret/my-secret --tag staging
-        pragma resources tags remove gcp/secret/my-secret -t old -t deprecated
+        pragma resources tags remove pragmatiks/gcp/secret/my-secret --tag staging
+        pragma resources tags remove pragmatiks/gcp/secret/my-secret -t old -t deprecated
 
     Raises:
         typer.Exit: If the resource is not found or the operation fails.
