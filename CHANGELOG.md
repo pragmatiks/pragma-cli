@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.27.2 (2026-03-18)
+
+### Fix
+
+- add error handling for get 404 and preserve lifecycle state in tags (#32)
+
 ## v0.27.1 (2026-03-18)
 
 ### Fix
