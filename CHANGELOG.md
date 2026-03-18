@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.27.1 (2026-03-18)
+
+### Fix
+
+- require org/provider/resource/name format for resource IDs (#30)
+
 ## v0.27.0 (2026-03-17)
 
 ### Feat
