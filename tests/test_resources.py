@@ -295,14 +295,16 @@ config:
     mock_cli_client.apply_resource.assert_not_called()
 
 
-def test_apply_non_secret_resource_unchanged(cli_runner, mock_cli_client, tmp_path):
-    """Test that non-secret resources with @ values are not modified."""
+def test_apply_resolves_at_references_for_any_provider(cli_runner, mock_cli_client, tmp_path):
+    """Test that @ file references are resolved for any provider."""
+    (tmp_path / "connection.txt").write_text("host=db.example.com")
+
     yaml_content = """provider: postgres
 resource: database
 name: test-db
 config:
-  data:
-    email: "@user.example.com"
+  connection_string: "@./connection.txt"
+  plain_value: "no-at-prefix"
 """
     yaml_file = tmp_path / "db.yaml"
     yaml_file.write_text(yaml_content)
@@ -313,7 +315,8 @@ config:
     assert result.exit_code == 0
 
     call_kwargs = mock_cli_client.apply_resource.call_args[1]
-    assert call_kwargs["resource"]["config"]["data"]["email"] == "@user.example.com"
+    assert call_kwargs["resource"]["config"]["connection_string"] == "host=db.example.com"
+    assert call_kwargs["resource"]["config"]["plain_value"] == "no-at-prefix"
 
 
 def test_apply_secret_with_absolute_path(cli_runner, mock_cli_client, tmp_path):
@@ -1316,3 +1319,146 @@ def test_tags_add_defaults_lifecycle_state_to_draft(cli_runner, mock_cli_client)
             "tags": ["newtag"],
         }
     )
+
+
+# --- Tests for recursive @ file resolution ---
+
+
+def test_resolve_at_references_nested_dict(cli_runner, mock_cli_client, tmp_path):
+    """Test that @ references in nested dicts are resolved."""
+    (tmp_path / "cert.pem").write_text("-----BEGIN CERTIFICATE-----")
+
+    yaml_content = """provider: gcp
+resource: instance
+name: my-vm
+config:
+  ssl:
+    certificate: "@./cert.pem"
+    enabled: true
+"""
+    yaml_file = tmp_path / "vm.yaml"
+    yaml_file.write_text(yaml_content)
+
+    mock_cli_client.apply_resource.return_value = mock_resource("gcp", "instance", "my-vm", "draft")
+
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
+    assert result.exit_code == 0
+
+    call_kwargs = mock_cli_client.apply_resource.call_args[1]
+    assert call_kwargs["resource"]["config"]["ssl"]["certificate"] == "-----BEGIN CERTIFICATE-----"
+    assert call_kwargs["resource"]["config"]["ssl"]["enabled"] is True
+
+
+def test_resolve_at_references_in_list(cli_runner, mock_cli_client, tmp_path):
+    """Test that @ references inside lists are resolved."""
+    (tmp_path / "script1.sh").write_text("#!/bin/bash\necho hello")
+    (tmp_path / "script2.sh").write_text("#!/bin/bash\necho world")
+
+    yaml_content = """provider: gcp
+resource: instance
+name: my-vm
+config:
+  startup_scripts:
+    - "@./script1.sh"
+    - "@./script2.sh"
+    - "inline command"
+"""
+    yaml_file = tmp_path / "vm.yaml"
+    yaml_file.write_text(yaml_content)
+
+    mock_cli_client.apply_resource.return_value = mock_resource("gcp", "instance", "my-vm", "draft")
+
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
+    assert result.exit_code == 0
+
+    call_kwargs = mock_cli_client.apply_resource.call_args[1]
+    scripts = call_kwargs["resource"]["config"]["startup_scripts"]
+    assert scripts[0] == "#!/bin/bash\necho hello"
+    assert scripts[1] == "#!/bin/bash\necho world"
+    assert scripts[2] == "inline command"
+
+
+def test_resolve_at_references_file_not_found(cli_runner, mock_cli_client, tmp_path):
+    """Test that missing @ file references produce a clear error."""
+    yaml_content = """provider: gcp
+resource: instance
+name: my-vm
+config:
+  certificate: "@./missing.pem"
+"""
+    yaml_file = tmp_path / "vm.yaml"
+    yaml_file.write_text(yaml_content)
+
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
+    assert result.exit_code == 1
+    assert "Error" in result.stdout
+    assert "File not found" in result.stdout
+    mock_cli_client.apply_resource.assert_not_called()
+
+
+def test_resolve_at_references_pragma_file_unchanged(cli_runner, mock_cli_client, tmp_path):
+    """Test that pragma/file resources still use the binary upload path."""
+    test_file = tmp_path / "document.pdf"
+    test_file.write_bytes(b"%PDF-1.4 binary content")
+
+    yaml_content = """provider: pragma
+resource: file
+name: my-doc
+config:
+  content: "@./document.pdf"
+  content_type: application/pdf
+"""
+    yaml_file = tmp_path / "file.yaml"
+    yaml_file.write_text(yaml_content)
+
+    mock_cli_client.upload_file.return_value = {"url": "gs://bucket/file"}
+    mock_cli_client.apply_resource.return_value = mock_resource(
+        "pragma", "file", "my-doc", "draft", {"content_type": "application/pdf"}
+    )
+
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
+    assert result.exit_code == 0
+
+    mock_cli_client.upload_file.assert_called_once_with("my-doc", b"%PDF-1.4 binary content", "application/pdf")
+
+    call_kwargs = mock_cli_client.apply_resource.call_args[1]
+    assert "content" not in call_kwargs["resource"]["config"]
+
+
+# --- Tests for invalid YAML error handling ---
+
+
+def test_apply_invalid_yaml_shows_clean_error(cli_runner, mock_cli_client, tmp_path):
+    """Test that invalid YAML produces a clean error message on apply."""
+    yaml_file = tmp_path / "bad.yaml"
+    yaml_file.write_text("invalid: yaml: content: [")
+
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
+    assert result.exit_code == 1
+    assert "Error" in result.stdout
+    assert "Invalid YAML" in result.stdout
+    mock_cli_client.apply_resource.assert_not_called()
+
+
+def test_delete_invalid_yaml_shows_clean_error(cli_runner, mock_cli_client, tmp_path):
+    """Test that invalid YAML produces a clean error message on delete."""
+    yaml_file = tmp_path / "bad.yaml"
+    yaml_file.write_text("invalid: yaml: content: [")
+
+    result = cli_runner.invoke(app, ["resources", "delete", "-f", str(yaml_file)])
+    assert result.exit_code == 1
+    assert "Error" in result.stdout
+    assert "Invalid YAML" in result.stdout
+    mock_cli_client.delete_resource.assert_not_called()
+
+
+def test_deactivate_invalid_yaml_shows_clean_error(cli_runner, mock_cli_client, tmp_path):
+    """Test that invalid YAML produces a clean error message on deactivate."""
+    yaml_file = tmp_path / "bad.yaml"
+    yaml_file.write_text("invalid: yaml: content: [")
+
+    result = cli_runner.invoke(app, ["resources", "deactivate", "-f", str(yaml_file)])
+    assert result.exit_code == 1
+    assert "Error" in result.stdout
+    assert "Invalid YAML" in result.stdout
+    mock_cli_client.deactivate_resource.assert_not_called()

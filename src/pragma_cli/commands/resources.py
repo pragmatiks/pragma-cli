@@ -110,50 +110,43 @@ def _resolve_path(path_str: str, base_dir: Path) -> Path:
     return file_path
 
 
-def _resolve_secret_references(resource: dict, base_dir: Path) -> dict:
-    """Resolve file references in secret resource config.
+def _resolve_at_references(value: object, base_dir: Path) -> object:
+    """Recursively resolve @ file references in any dict/list structure.
 
-    For pragma/secret resources, scans config.data values for '@' prefix
-    and replaces them with the file contents (as text).
+    String values starting with '@' are replaced with the contents of the
+    referenced file (read as text). The '@' prefix is stripped to get the
+    file path. Relative paths are resolved against base_dir.
 
     Args:
-        resource: Resource dictionary from YAML.
-        base_dir: Base directory for resolving relative paths.
+        value: Any value from a config structure (dict, list, str, etc.).
+        base_dir: Base directory for resolving relative file paths.
 
     Returns:
-        Resource dictionary with file references resolved.
+        The value with all @ references resolved to file contents.
 
     Raises:
         typer.Exit: If a referenced file is not found or cannot be read.
     """
-    config = resource.get("config")
-    if not config or not isinstance(config, dict):
-        return resource
+    if isinstance(value, dict):
+        return {k: _resolve_at_references(v, base_dir) for k, v in value.items()}
 
-    data = config.get("data")
-    if not data or not isinstance(data, dict):
-        return resource
+    if isinstance(value, list):
+        return [_resolve_at_references(item, base_dir) for item in value]
 
-    resolved_data = {}
-    for key, value in data.items():
-        if isinstance(value, str) and value.startswith("@"):
-            file_path = _resolve_path(value[1:], base_dir)
+    if isinstance(value, str) and value.startswith("@"):
+        file_path = _resolve_path(value[1:], base_dir)
 
-            if not file_path.exists():
-                console.print(f"[red]Error:[/red] File not found: {file_path}")
-                raise typer.Exit(1)
+        if not file_path.exists():
+            console.print(f"[red]Error:[/red] File not found: {file_path}")
+            raise typer.Exit(1)
 
-            try:
-                resolved_data[key] = file_path.read_text()
-            except OSError as e:
-                console.print(f"[red]Error:[/red] Cannot read file {file_path}: {e}")
-                raise typer.Exit(1) from e
-        else:
-            resolved_data[key] = value
+        try:
+            return file_path.read_text()
+        except OSError as e:
+            console.print(f"[red]Error:[/red] Cannot read file {file_path}: {e}")
+            raise typer.Exit(1) from e
 
-    resolved_resource = resource.copy()
-    resolved_resource["config"] = {**config, "data": resolved_data}
-    return resolved_resource
+    return value
 
 
 def _resolve_file_references(resource: dict, base_dir: Path) -> dict:
@@ -219,11 +212,9 @@ def _resolve_file_references(resource: dict, base_dir: Path) -> dict:
 def resolve_file_references(resource: dict, base_dir: Path) -> dict:
     """Resolve file references in resource config.
 
-    Handles two resource types:
-    - pragma/secret: Scans config.data values for '@' prefix and replaces
-      with file contents (as text).
-    - pragma/file: If config.content starts with '@', uploads the file
-      and removes content from config.
+    For pragmatiks/pragma provider with file resource type, handles binary
+    upload via _resolve_file_references. For all other resources,
+    recursively resolves '@path' strings in the config to file contents.
 
     Args:
         resource: Resource dictionary from YAML.
@@ -235,14 +226,15 @@ def resolve_file_references(resource: dict, base_dir: Path) -> dict:
     provider = resource.get("provider")
     resource_type = resource.get("resource")
 
-    if provider != "pragma":
-        return resource
-
-    if resource_type == "secret":
-        return _resolve_secret_references(resource, base_dir)
-
-    if resource_type == "file":
+    if provider == "pragma" and resource_type == "file":
         return _resolve_file_references(resource, base_dir)
+
+    config = resource.get("config")
+
+    if config and isinstance(config, dict):
+        resolved_resource = resource.copy()
+        resolved_resource["config"] = _resolve_at_references(config, base_dir)
+        return resolved_resource
 
     return resource
 
@@ -648,7 +640,12 @@ def apply(
     client = get_client()
     for f in files:
         base_dir = Path(f.name).parent
-        resources = yaml.safe_load_all(f.read())
+
+        try:
+            resources = list(yaml.safe_load_all(f.read()))
+        except yaml.YAMLError as e:
+            console.print(f"[red]Error:[/red] Invalid YAML in {f.name}: {e}")
+            raise typer.Exit(1) from e
 
         for resource in resources:
             resource = resolve_file_references(resource, base_dir)
@@ -708,7 +705,11 @@ def _delete_from_files(files: list[typer.FileText]) -> None:
     client = get_client()
 
     for f in files:
-        resources = yaml.safe_load_all(f.read())
+        try:
+            resources = list(yaml.safe_load_all(f.read()))
+        except yaml.YAMLError as e:
+            console.print(f"[red]Error:[/red] Invalid YAML in {f.name}: {e}")
+            raise typer.Exit(1) from e
 
         for resource in resources:
             if not isinstance(resource, dict):
@@ -776,7 +777,11 @@ def _deactivate_from_files(files: list[typer.FileText]) -> None:
     client = get_client()
 
     for f in files:
-        resources = yaml.safe_load_all(f.read())
+        try:
+            resources = list(yaml.safe_load_all(f.read()))
+        except yaml.YAMLError as e:
+            console.print(f"[red]Error:[/red] Invalid YAML in {f.name}: {e}")
+            raise typer.Exit(1) from e
 
         for resource in resources:
             if not isinstance(resource, dict):
