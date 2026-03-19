@@ -648,6 +648,9 @@ def apply(
             raise typer.Exit(1) from e
 
         for resource in resources:
+            if not isinstance(resource, dict):
+                continue
+
             resource = resolve_file_references(resource, base_dir)
             if not draft:
                 resource["lifecycle_state"] = "pending"

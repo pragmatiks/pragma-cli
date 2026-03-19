@@ -158,6 +158,27 @@ def test_apply_multiple_resources_from_file(cli_runner, mock_cli_client, multi_d
         Path(temp_path).unlink()
 
 
+def test_apply_skips_none_documents_from_trailing_separator(cli_runner, mock_cli_client, tmp_path):
+    """Test that trailing --- in YAML files does not cause an error."""
+    yaml_content = """---
+provider: postgres
+resource: database
+name: db1
+config:
+  name: DB1
+---
+"""
+    yaml_file = tmp_path / "trailing.yaml"
+    yaml_file.write_text(yaml_content)
+
+    mock_cli_client.apply_resource.return_value = mock_resource("postgres", "database", "db1", "draft")
+
+    result = cli_runner.invoke(app, ["resources", "apply", str(yaml_file)])
+    assert result.exit_code == 0
+    assert mock_cli_client.apply_resource.call_count == 1
+    assert "Applied postgres/database/db1" in result.stdout
+
+
 def test_delete_resource(cli_runner, mock_cli_client):
     result = cli_runner.invoke(app, ["resources", "delete", "pragmatiks/postgres/database/test-db"])
     assert result.exit_code == 0
