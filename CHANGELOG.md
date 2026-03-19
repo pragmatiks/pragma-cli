@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.27.4 (2026-03-19)
+
+### Fix
+
+- resolve E2E testing bugs (PRA-262, PRA-263, PRA-264) (#35)
+
 ## v0.27.3 (2026-03-19)
 
 ### Refactor
