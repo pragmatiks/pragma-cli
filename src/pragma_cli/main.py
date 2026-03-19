@@ -1,17 +1,97 @@
 """CLI entry point with Typer application setup and command routing."""
 
-from importlib.metadata import version as get_version
-from typing import Annotated
+from __future__ import annotations
 
+from importlib.metadata import version as get_version
+from typing import Annotated, Any
+
+import click
+import httpx
 import typer
 from pragma_sdk import PragmaClient
+from rich.console import Console
+from typer.core import TyperGroup
 
 from pragma_cli import set_client
 from pragma_cli.commands import auth, config, ops, organizations, providers, resources
 from pragma_cli.config import get_current_context
 
 
-app = typer.Typer(pretty_exceptions_enable=False)
+console = Console(stderr=True)
+
+
+def _extract_base_url(error: httpx.RequestError) -> str:
+    """Extract the base URL from an httpx request error.
+
+    Args:
+        error: The httpx request error.
+
+    Returns:
+        The base URL string, or "unknown" if not available.
+    """
+    try:
+        url = error.request.url
+        return f"{url.scheme}://{url.host}:{url.port}" if url.port else f"{url.scheme}://{url.host}"
+    except Exception:
+        return "unknown"
+
+
+def _handle_httpx_error(error: httpx.ConnectError | httpx.TimeoutException | httpx.HTTPStatusError) -> None:
+    """Print a friendly message for an httpx error and exit.
+
+    Args:
+        error: The httpx error to handle.
+
+    Raises:
+        typer.Exit: Always exits with code 1 after printing the message.
+    """
+    if isinstance(error, httpx.ConnectError):
+        base_url = _extract_base_url(error)
+        console.print(f"[red]Error:[/red] Could not connect to API at {base_url}")
+        console.print("Check that the API URL is correct and the server is running.")
+        raise typer.Exit(1) from error
+
+    if isinstance(error, httpx.TimeoutException):
+        base_url = _extract_base_url(error)
+        console.print(f"[red]Error:[/red] Request timed out connecting to {base_url}")
+        raise typer.Exit(1) from error
+
+    if isinstance(error, httpx.HTTPStatusError):
+        if error.response.status_code == 401:
+            console.print("[red]Error:[/red] Not authenticated. Run 'pragma auth login' to authenticate.")
+            raise typer.Exit(1) from error
+
+        url = str(error.request.url)
+        status = error.response.status_code
+        reason = error.response.reason_phrase
+        console.print(f"[red]Error:[/red] {status} {reason} for {url}")
+        raise typer.Exit(1) from error
+
+
+class ErrorHandlingGroup(TyperGroup):
+    """Click Group subclass that catches unhandled httpx exceptions.
+
+    Wraps command invocation to translate connection errors, timeouts,
+    and HTTP status errors into friendly CLI messages instead of
+    raw Python tracebacks.
+    """
+
+    def invoke(self, ctx: click.Context) -> Any:
+        """Invoke the command group with httpx exception handling.
+
+        Args:
+            ctx: Click context.
+
+        Returns:
+            Command result.
+        """
+        try:
+            return super().invoke(ctx)
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
+            _handle_httpx_error(e)
+
+
+app = typer.Typer(cls=ErrorHandlingGroup, pretty_exceptions_enable=False)
 
 
 def _version_callback(value: bool) -> None:

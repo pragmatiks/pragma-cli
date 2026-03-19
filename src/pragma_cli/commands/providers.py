@@ -498,10 +498,6 @@ def publish(
         str | None,
         typer.Option("--changelog", help="Changelog text for this version"),
     ] = None,
-    force: Annotated[
-        bool,
-        typer.Option("--force", help="Force publish even if source hash already exists"),
-    ] = False,
     directory: Annotated[
         Path,
         typer.Option("--directory", "-d", help="Provider source directory"),
@@ -527,7 +523,6 @@ def publish(
         pragma providers publish
         pragma providers publish --version 1.0.0 --org myorg
         pragma providers publish --version 1.1.0 --changelog "Added new resources"
-        pragma providers publish --force
         pragma providers publish --no-wait
 
     Raises:
@@ -591,7 +586,6 @@ def publish(
                 tarball,
                 version,
                 changelog=changelog,
-                force=force,
                 **metadata,
             ),
         )
@@ -608,8 +602,7 @@ def publish(
 
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 409:
-            console.print("[yellow]Warning:[/yellow] A version with this source hash already exists.")
-            console.print("[dim]Use --force to publish anyway.[/dim]")
+            console.print(f"[red]Error:[/red] {_format_api_error(e)}")
             raise typer.Exit(1) from e
 
         if e.response.status_code == 413:
