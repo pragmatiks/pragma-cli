@@ -359,28 +359,10 @@ def test_publish_success(cli_runner, provider_project, mock_pragma_client):
     assert isinstance(call_args[0][1], bytes)
     assert call_args[0][2] == "1.0.0"
     assert call_args[1]["changelog"] is None
-    assert call_args[1]["force"] is False
-
-
-def test_publish_force(cli_runner, provider_project, mock_pragma_client):
-    """Publish with --force passes force flag to SDK."""
-    publish_result = mock_pragma_client.publish_provider.return_value
-    publish_result.provider_name = "myorg/test"
-    publish_result.version = "1.0.0"
-    publish_result.status = "building"
-
-    build_status = mock_pragma_client.get_publish_status.return_value
-    build_status.status = "published"
-
-    result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0", "--org", "myorg", "--force"])
-
-    assert result.exit_code == 0
-    call_args = mock_pragma_client.publish_provider.call_args
-    assert call_args[1]["force"] is True
 
 
 def test_publish_duplicate_hash(cli_runner, provider_project, mock_pragma_client):
-    """Publish handles 409 (duplicate source hash) with helpful message."""
+    """Publish handles 409 (duplicate source hash) with error message."""
     mock_response = httpx.Response(409, json={"detail": "Duplicate source hash"})
     mock_pragma_client.publish_provider.side_effect = httpx.HTTPStatusError(
         "Conflict", request=httpx.Request("POST", "http://test"), response=mock_response
@@ -389,8 +371,7 @@ def test_publish_duplicate_hash(cli_runner, provider_project, mock_pragma_client
     result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0", "--org", "myorg"])
 
     assert result.exit_code == 1
-    assert "source hash already exists" in result.output
-    assert "--force" in result.output
+    assert "Duplicate source hash" in result.output
 
 
 def test_publish_no_wait(cli_runner, provider_project, mock_pragma_client):

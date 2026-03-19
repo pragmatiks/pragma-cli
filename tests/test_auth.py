@@ -1,6 +1,10 @@
+import base64
+import json
+import time
+
 import pytest
 
-from pragma_cli.commands.auth import CallbackHandler, clear_credentials, save_credentials
+from pragma_cli.commands.auth import CallbackHandler, _is_token_expired, clear_credentials, save_credentials
 from pragma_cli.main import app
 
 
@@ -201,8 +205,85 @@ contexts:
     assert "default" in result.stdout
 
 
+def _make_jwt(payload: dict, exp: float | None = None) -> str:
+    """Build a fake JWT with a given payload for testing."""
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256"}).encode()).rstrip(b"=").decode()
+
+    if exp is not None:
+        payload["exp"] = exp
+
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+    signature = base64.urlsafe_b64encode(b"fakesig").rstrip(b"=").decode()
+    return f"{header}.{body}.{signature}"
+
+
+def test_is_token_expired_with_valid_token():
+    token = _make_jwt({"sub": "user_123"}, exp=time.time() + 3600)
+    assert _is_token_expired(token) is False
+
+
+def test_is_token_expired_with_expired_token():
+    token = _make_jwt({"sub": "user_123"}, exp=time.time() - 3600)
+    assert _is_token_expired(token) is True
+
+
+def test_is_token_expired_with_no_exp_claim():
+    token = _make_jwt({"sub": "user_123"})
+    assert _is_token_expired(token) is False
+
+
+def test_is_token_expired_with_garbage():
+    assert _is_token_expired("not-a-jwt") is True
+
+
 def test_whoami_command_with_credentials(cli_runner, tmp_path, monkeypatch, mocker):
     """Test whoami command with stored credentials and API response."""
+    config_file = tmp_path / "config"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        """
+current_context: default
+contexts:
+  default:
+    api_url: http://localhost:8000
+"""
+    )
+    monkeypatch.setattr("pragma_cli.config.CONFIG_PATH", config_file)
+
+    valid_token = _make_jwt({"sub": "user_123"}, exp=time.time() + 3600)
+
+    credentials_file = tmp_path / "credentials"
+    monkeypatch.setattr("pragma_cli.commands.auth.CREDENTIALS_FILE", credentials_file)
+    monkeypatch.setattr("pragma_cli.config.CREDENTIALS_FILE", credentials_file)
+    monkeypatch.setattr("pragma_sdk.config.get_credentials_file_path", lambda: credentials_file)
+
+    save_credentials(valid_token, "default")
+
+    mock_user_info = mocker.MagicMock()
+    mock_user_info.user_id = "user_123"
+    mock_user_info.email = "test@example.com"
+    mock_user_info.organization_id = "org_456"
+    mock_user_info.organization_name = "Test Org"
+
+    mock_client_class = mocker.patch("pragma_cli.main.PragmaClient")
+    mock_client_instance = mock_client_class.return_value
+    mock_client_instance.get_me.return_value = mock_user_info
+    mock_client_instance._auth = mocker.MagicMock()
+    mock_client_instance._auth.token = valid_token
+
+    result = cli_runner.invoke(app, ["auth", "whoami"])
+
+    assert result.exit_code == 0
+    assert "Authentication Status" in result.stdout
+    assert "default" in result.stdout
+    assert "Authenticated" in result.stdout
+    assert "User Information" in result.stdout
+    assert "test@example.com" in result.stdout
+    assert "Test Org" in result.stdout
+
+
+def test_whoami_command_no_credentials(cli_runner, tmp_path, monkeypatch, mocker):
+    """Test whoami command with no stored credentials."""
     config_file = tmp_path / "config"
     config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text(
@@ -218,37 +299,23 @@ contexts:
     credentials_file = tmp_path / "credentials"
     monkeypatch.setattr("pragma_cli.commands.auth.CREDENTIALS_FILE", credentials_file)
     monkeypatch.setattr("pragma_cli.config.CREDENTIALS_FILE", credentials_file)
+    monkeypatch.setattr("pragma_sdk.config.get_credentials_file_path", lambda: credentials_file)
 
-    save_credentials("default_token", "default")
-
-    # Create mock user info object with expected attributes
-    mock_user_info = mocker.MagicMock()
-    mock_user_info.user_id = "user_123"
-    mock_user_info.email = "test@example.com"
-    mock_user_info.organization_id = "org_456"
-    mock_user_info.organization_name = "Test Org"
-
-    mock_client = mocker.MagicMock()
-    mock_client.get_me.return_value = mock_user_info
-    mocker.patch("pragma_cli.commands.auth.PragmaClient", return_value=mock_client)
+    mock_client_class = mocker.patch("pragma_cli.main.PragmaClient")
+    mock_client_instance = mock_client_class.return_value
+    mock_client_instance._auth = None
 
     result = cli_runner.invoke(app, ["auth", "whoami"])
 
     assert result.exit_code == 0
-    assert "Authentication Status" in result.stdout
-    assert "default" in result.stdout
-    assert "Authenticated" in result.stdout
-    assert "User Information" in result.stdout
-    assert "test@example.com" in result.stdout
-    assert "Test Org" in result.stdout
+    assert "Not authenticated" in result.stdout
+    assert "pragma auth login" in result.stdout
 
 
-def test_whoami_command_no_credentials(cli_runner, tmp_path, monkeypatch):
-    """Test whoami command with no stored credentials."""
-    pragma_dir = tmp_path / "pragma"
-    pragma_dir.mkdir(parents=True, exist_ok=True)
-
-    config_file = pragma_dir / "config.yaml"
+def test_whoami_command_with_expired_token(cli_runner, tmp_path, monkeypatch, mocker):
+    """Test whoami command with an expired stored token shows 'Token expired'."""
+    config_file = tmp_path / "config"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text(
         """
 current_context: default
@@ -259,14 +326,96 @@ contexts:
     )
     monkeypatch.setattr("pragma_cli.config.CONFIG_PATH", config_file)
 
-    credentials_file = pragma_dir / "credentials"
+    expired_token = _make_jwt({"sub": "user_123"}, exp=time.time() - 3600)
+
+    credentials_file = tmp_path / "credentials"
     monkeypatch.setattr("pragma_cli.commands.auth.CREDENTIALS_FILE", credentials_file)
     monkeypatch.setattr("pragma_cli.config.CREDENTIALS_FILE", credentials_file)
+    monkeypatch.setattr("pragma_sdk.config.get_credentials_file_path", lambda: credentials_file)
 
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    save_credentials(expired_token, "default")
+
+    mock_client_class = mocker.patch("pragma_cli.main.PragmaClient")
+    mock_client_instance = mock_client_class.return_value
+    mock_client_instance._auth = mocker.MagicMock()
+    mock_client_instance._auth.token = expired_token
 
     result = cli_runner.invoke(app, ["auth", "whoami"])
 
     assert result.exit_code == 0
-    assert "Not authenticated" in result.stdout
+    assert "Token expired" in result.stdout
     assert "pragma auth login" in result.stdout
+    mock_client_instance.get_me.assert_not_called()
+
+
+def test_whoami_command_with_token_flag(cli_runner, tmp_path, monkeypatch, mocker):
+    """Test that --token flag overrides stored credentials."""
+    config_file = tmp_path / "config"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        """
+current_context: default
+contexts:
+  default:
+    api_url: http://localhost:8000
+"""
+    )
+    monkeypatch.setattr("pragma_cli.config.CONFIG_PATH", config_file)
+
+    override_token = _make_jwt({"sub": "override_user"}, exp=time.time() + 3600)
+
+    mock_user_info = mocker.MagicMock()
+    mock_user_info.user_id = "override_user"
+    mock_user_info.email = "override@example.com"
+    mock_user_info.organization_id = "org_override"
+    mock_user_info.organization_name = "Override Org"
+
+    mock_client_class = mocker.patch("pragma_cli.main.PragmaClient")
+    mock_client_instance = mock_client_class.return_value
+    mock_client_instance.get_me.return_value = mock_user_info
+    mock_client_instance._auth = mocker.MagicMock()
+    mock_client_instance._auth.token = override_token
+
+    result = cli_runner.invoke(app, ["--token", override_token, "auth", "whoami"])
+
+    assert result.exit_code == 0
+    assert "Authenticated" in result.stdout
+    assert "override@example.com" in result.stdout
+
+    mock_client_class.assert_called_once_with(base_url="http://localhost:8000", auth_token=override_token)
+
+
+def test_whoami_command_with_env_var_token(cli_runner, tmp_path, monkeypatch, mocker):
+    """Test that PRAGMA_AUTH_TOKEN env var is used for whoami."""
+    config_file = tmp_path / "config"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        """
+current_context: default
+contexts:
+  default:
+    api_url: http://localhost:8000
+"""
+    )
+    monkeypatch.setattr("pragma_cli.config.CONFIG_PATH", config_file)
+
+    env_token = _make_jwt({"sub": "env_user"}, exp=time.time() + 3600)
+    monkeypatch.setenv("PRAGMA_AUTH_TOKEN", env_token)
+
+    mock_user_info = mocker.MagicMock()
+    mock_user_info.user_id = "env_user"
+    mock_user_info.email = "env@example.com"
+    mock_user_info.organization_id = "org_env"
+    mock_user_info.organization_name = "Env Org"
+
+    mock_client_class = mocker.patch("pragma_cli.main.PragmaClient")
+    mock_client_instance = mock_client_class.return_value
+    mock_client_instance.get_me.return_value = mock_user_info
+    mock_client_instance._auth = mocker.MagicMock()
+    mock_client_instance._auth.token = env_token
+
+    result = cli_runner.invoke(app, ["auth", "whoami"])
+
+    assert result.exit_code == 0
+    assert "Authenticated" in result.stdout
+    assert "env@example.com" in result.stdout

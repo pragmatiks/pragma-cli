@@ -1,17 +1,19 @@
 """Authentication commands for browser-based Clerk login."""
 
+import base64
+import json
 import os
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import typer
-from pragma_sdk import PragmaClient
-from pragma_sdk.config import load_credentials
 from rich import print
 from rich.console import Console
 
+from pragma_cli import get_client
 from pragma_cli.config import CREDENTIALS_FILE, ContextConfig, get_current_context, load_config
 
 
@@ -22,6 +24,43 @@ app = typer.Typer()
 
 CALLBACK_PORT = int(os.getenv("PRAGMA_AUTH_CALLBACK_PORT", "8765"))
 CALLBACK_PATH = os.getenv("PRAGMA_AUTH_CALLBACK_PATH", "/auth/callback")
+
+
+def _is_token_expired(token: str) -> bool:
+    """Check if a JWT token is expired by decoding the payload.
+
+    Decodes the base64 payload without verifying the signature.
+    Returns True if the token is expired or cannot be decoded.
+
+    Args:
+        token: JWT token string.
+
+    Returns:
+        True if the token is expired or unparseable, False otherwise.
+    """
+    try:
+        parts = token.split(".")
+
+        if len(parts) != 3:
+            return True
+
+        payload_b64 = parts[1]
+        padding = 4 - len(payload_b64) % 4
+
+        if padding != 4:
+            payload_b64 += "=" * padding
+
+        payload_bytes = base64.urlsafe_b64decode(payload_b64)
+        payload = json.loads(payload_bytes)
+
+        exp = payload.get("exp")
+
+        if exp is None:
+            return False
+
+        return time.time() > exp
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return True
 
 
 def _get_callback_url() -> str:
@@ -262,11 +301,16 @@ def logout(
 def whoami():
     """Show current authentication status and user information.
 
+    Uses the same token resolution as all other commands:
+    --token flag > PRAGMA_AUTH_TOKEN env var > stored credentials.
+
     Displays the current context, authentication state, and user details
     including email and organization name from the API.
     """
-    current_context_name, current_context_config = get_current_context()
-    token = load_credentials(current_context_name)
+    current_context_name, _ = get_current_context()
+    client = get_client()
+
+    token = client._auth.token if client._auth else None
 
     console.print()
     console.print("[bold]Authentication Status[/bold]")
@@ -279,27 +323,35 @@ def whoami():
         console.print("[dim]Run 'pragma auth login' to authenticate[/dim]")
         return
 
+    if _is_token_expired(token):
+        console.print(f"  Context: [cyan]{current_context_name}[/cyan]")
+        console.print("  Status:  [yellow]Token expired[/yellow]")
+        console.print()
+        console.print("[dim]Run 'pragma auth login' to re-authenticate.[/dim]")
+        return
+
     console.print(f"  Context: [cyan]{current_context_name}[/cyan]")
     console.print("  Status:  [green]\u2713 Authenticated[/green]")
 
     try:
-        client = PragmaClient(base_url=current_context_config.api_url, auth_token=token)
         user_info = client.get_me()
 
         console.print()
         console.print("[bold]User Information[/bold]")
         console.print()
         console.print(f"  User ID:      [cyan]{user_info.user_id}[/cyan]")
+
         if user_info.email:
             console.print(f"  Email:        [cyan]{user_info.email}[/cyan]")
         else:
             console.print("  Email:        [dim]Not set[/dim]")
+
         console.print(f"  Organization: [cyan]{user_info.organization_name or user_info.organization_id}[/cyan]")
 
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 401:
             console.print()
-            console.print("[yellow]Token expired or invalid. Run 'pragma auth login' to re-authenticate.[/yellow]")
+            console.print("[yellow]Token invalid. Run 'pragma auth login' to re-authenticate.[/yellow]")
         else:
             console.print()
             console.print(f"[red]Error fetching user info:[/red] {e.response.text}")
