@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.27.3 (2026-03-19)
+
+### Refactor
+
+- simplify _apply_tags to use API PATCH semantics (#34)
+
 ## v0.27.2 (2026-03-18)
 
 ### Fix
