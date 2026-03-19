@@ -835,23 +835,29 @@ def _fetch_resource(resource_id: str) -> tuple[str, str, str, dict]:
         raise typer.Exit(1) from e
 
 
-def _apply_tags(
-    provider: str, resource: str, name: str, config: dict, lifecycle_state: str, tags: list[str] | None
-) -> None:
+def _apply_tags(provider: str, resource: str, name: str, tags: list[str] | None) -> None:
     """Apply updated tags to a resource.
+
+    Uses PATCH semantics: only identity fields and tags are sent,
+    all other fields are preserved by the API.
+
+    Args:
+        provider: Provider identifier (e.g., "pragmatiks/postgres").
+        resource: Resource type (e.g., "database").
+        name: Resource name.
+        tags: Updated list of tags, or None to clear all tags.
 
     Raises:
         typer.Exit: If the operation fails.
     """
     client = get_client()
+
     try:
         client.apply_resource(
             resource={
                 "provider": provider,
                 "resource": resource,
                 "name": name,
-                "config": config,
-                "lifecycle_state": lifecycle_state,
                 "tags": tags,
             }
         )
@@ -907,14 +913,7 @@ def tags_add(
         console.print("[dim]Tags already present, nothing to add.[/dim]")
         return
 
-    _apply_tags(
-        provider,
-        resource,
-        name,
-        res.get("config", {}),
-        res.get("lifecycle_state", "draft"),
-        sorted(current_tags | new_tags),
-    )
+    _apply_tags(provider, resource, name, sorted(current_tags | new_tags))
 
     for tag in sorted(added):
         console.print(f"[green]+[/green] {tag}")
@@ -948,14 +947,7 @@ def tags_remove(
         return
 
     updated = sorted(current_tags - to_remove)
-    _apply_tags(
-        provider,
-        resource,
-        name,
-        res.get("config", {}),
-        res.get("lifecycle_state", "draft"),
-        updated or None,
-    )
+    _apply_tags(provider, resource, name, updated or None)
 
     for tag in sorted(removed):
         console.print(f"[red]-[/red] {tag}")
