@@ -1270,8 +1270,8 @@ def test_describe_shows_immutable_and_sensitive_labels(cli_runner, mock_cli_clie
             assert "[sensitive]" not in line
 
 
-def test_tags_add_preserves_lifecycle_state(cli_runner, mock_cli_client):
-    """Test tags add preserves lifecycle_state when applying resource changes."""
+def test_tags_add_sends_only_identity_and_tags(cli_runner, mock_cli_client):
+    """Test tags add sends only identity fields and tags via PATCH semantics."""
     mock_cli_client.get_resource.return_value = mock_resource(
         "pragmatiks/postgres", "database", "test-db", lifecycle_state="ready", config={"name": "TEST_DB"}
     )
@@ -1287,15 +1287,13 @@ def test_tags_add_preserves_lifecycle_state(cli_runner, mock_cli_client):
             "provider": "pragmatiks/postgres",
             "resource": "database",
             "name": "test-db",
-            "config": {"name": "TEST_DB"},
-            "lifecycle_state": "ready",
             "tags": ["existing-tag", "newtag"],
         }
     )
 
 
-def test_tags_remove_preserves_lifecycle_state(cli_runner, mock_cli_client):
-    """Test tags remove preserves lifecycle_state when applying resource changes."""
+def test_tags_remove_sends_only_identity_and_tags(cli_runner, mock_cli_client):
+    """Test tags remove sends only identity fields and tags via PATCH semantics."""
     mock_cli_client.get_resource.return_value = mock_resource(
         "pragmatiks/postgres", "database", "test-db", lifecycle_state="ready", config={"name": "TEST_DB"}
     )
@@ -1311,17 +1309,15 @@ def test_tags_remove_preserves_lifecycle_state(cli_runner, mock_cli_client):
             "provider": "pragmatiks/postgres",
             "resource": "database",
             "name": "test-db",
-            "config": {"name": "TEST_DB"},
-            "lifecycle_state": "ready",
             "tags": ["tag2"],
         }
     )
 
 
-def test_tags_add_defaults_lifecycle_state_to_draft(cli_runner, mock_cli_client):
-    """Test tags add defaults lifecycle_state to draft when not present in resource."""
+def test_tags_add_without_lifecycle_state(cli_runner, mock_cli_client):
+    """Test tags add works when resource has no lifecycle_state."""
     resource_dict = mock_resource("pragmatiks/postgres", "database", "test-db", config={"name": "TEST_DB"})
-    del resource_dict["lifecycle_state"]  # Remove lifecycle_state key
+    del resource_dict["lifecycle_state"]
     resource_dict["tags"] = []
     mock_cli_client.get_resource.return_value = resource_dict
 
@@ -1335,8 +1331,6 @@ def test_tags_add_defaults_lifecycle_state_to_draft(cli_runner, mock_cli_client)
             "provider": "pragmatiks/postgres",
             "resource": "database",
             "name": "test-db",
-            "config": {"name": "TEST_DB"},
-            "lifecycle_state": "draft",
             "tags": ["newtag"],
         }
     )
