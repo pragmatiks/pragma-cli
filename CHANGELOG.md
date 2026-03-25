@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.27.5 (2026-03-25)
+
+### Fix
+
+- **ci**: pull --rebase before push and fix update-sdk auto-merge
+
 ## v0.27.4 (2026-03-19)
 
 ### Fix
