@@ -57,7 +57,9 @@ jobs:
 
       - name: Push changes
         if: steps.bump.outputs.bumped == 'true'
-        run: git push origin main --tags
+        run: |
+          git pull --rebase origin main
+          git push origin main --tags
 
       - name: Build package
         if: steps.bump.outputs.bumped == 'true'

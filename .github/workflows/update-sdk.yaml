@@ -87,4 +87,4 @@ jobs:
             --title "chore(deps): update pragmatiks-sdk to v${SDK_VERSION}" \
             --body "Automated SDK dependency update to v${SDK_VERSION}."
 
-          gh pr merge --squash --auto
+          gh pr merge --squash
