@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.28.0 (2026-04-03)
+
+### Feat
+
+- pass icon_url from pyproject.toml to publish
+
 ## v0.27.6 (2026-04-03)
 
 ### Fix
