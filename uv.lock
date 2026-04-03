@@ -500,7 +500,7 @@ wheels = [
 
 [[package]]
 name = "pragmatiks-cli"
-version = "0.27.5"
+version = "0.28.0"
 source = { editable = "." }
 dependencies = [
     { name = "copier" },
@@ -528,7 +528,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "copier", specifier = ">=9.0.0" },
-    { name = "pragmatiks-sdk", specifier = ">=0.33.1" },
+    { name = "pragmatiks-sdk", specifier = ">=0.34.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=13.9.0" },
     { name = "typer", specifier = ">=0.15.3" },
@@ -551,7 +551,7 @@ test = [
 
 [[package]]
 name = "pragmatiks-sdk"
-version = "0.33.1"
+version = "0.34.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -559,9 +559,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "structlog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/9c/0141a505b374a6455ecf25a4c1b1361ff6b26e50582cb6c66fd5831f0791/pragmatiks_sdk-0.33.1.tar.gz", hash = "sha256:e6cc42cc121cbe3760e4c5254e8648003bb1ee708c5daad4a8ac02c593e47648", size = 33571 }
+sdist = { url = "https://files.pythonhosted.org/packages/58/2c/a9752bc12408f750dd326c4eef2cafa499ae8cdc6137ff4bef85a1b77656/pragmatiks_sdk-0.34.0.tar.gz", hash = "sha256:8ec692eca09b0f2c2df56c5b6418047958da66f75c264bddf71f5744981cf224", size = 33607 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/04/dd/455c3dfc5a0584aa3a4dc4daef9b4c5a8c2683c65df6ecf3d671ada74386/pragmatiks_sdk-0.33.1-py3-none-any.whl", hash = "sha256:a0837d6b8f52725a5a45f37f848550dcca1ebd2f448d638a40fb93555ae4bb53", size = 41447 },
+    { url = "https://files.pythonhosted.org/packages/7a/82/8c09c86e8c7c10f868c22ab333456ad61a52a29b0a8933a7bf3af6481999/pragmatiks_sdk-0.34.0-py3-none-any.whl", hash = "sha256:e80efcd47bd7fcce5df6127da0a73a667462ac3e00f7f28343313d49e2db946f", size = 41486 },
 ]
 
 [[package]]
