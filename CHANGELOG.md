@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.27.6 (2026-04-03)
+
+### Fix
+
+- use org_slug from JWT instead of org name for provider namespace
+
 ## v0.27.5 (2026-03-25)
 
 ### Fix
