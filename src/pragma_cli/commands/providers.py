@@ -137,6 +137,7 @@ class PragmaProviderConfig(BaseModel):
     package: str | None = None
     display_name: str | None = None
     description: str | None = None
+    icon_url: str | None = None
     tags: list[str] = []
 
     @field_validator("provider")
@@ -601,6 +602,9 @@ def publish(
 
     if config.description is not None:
         metadata["description"] = config.description
+
+    if config.icon_url is not None:
+        metadata["icon_url"] = config.icon_url
 
     if config.tags:
         metadata["tags"] = config.tags
