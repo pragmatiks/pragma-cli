@@ -6,7 +6,9 @@ Pragmatiks providers.
 
 from __future__ import annotations
 
+import base64
 import io
+import json
 import os
 import tarfile
 import time
@@ -216,6 +218,43 @@ def _require_auth(client: PragmaClient) -> None:
     if client._auth is None:
         console.print("[red]Error:[/red] Authentication required. Run 'pragma auth login' first.")
         raise typer.Exit(1)
+
+
+def _extract_org_slug(client: PragmaClient) -> str | None:
+    """Extract the organization slug from the client's JWT token payload.
+
+    Decodes the JWT payload without signature verification to read the
+    org_slug claim set by Clerk on session tokens.
+
+    Args:
+        client: Authenticated SDK client instance.
+
+    Returns:
+        Organization slug string, or None if not available.
+    """
+    token = client._auth.token if client._auth else None
+
+    if not token:
+        return None
+
+    try:
+        parts = token.split(".")
+
+        if len(parts) != 3:
+            return None
+
+        payload_b64 = parts[1]
+        padding = 4 - len(payload_b64) % 4
+
+        if padding != 4:
+            payload_b64 += "=" * padding
+
+        payload_bytes = base64.urlsafe_b64decode(payload_b64)
+        payload = json.loads(payload_bytes)
+
+        return payload.get("org_slug")
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
 
 
 def _fetch_with_spinner(description: str, fetch_fn) -> Any:
@@ -547,11 +586,7 @@ def publish(
             raise typer.Exit(1)
 
     if org is None:
-        try:
-            user_info = client.get_me()
-            org = user_info.organization_name
-        except Exception:
-            org = None
+        org = _extract_org_slug(client)
 
         if org is None:
             console.print("[red]Error:[/red] Could not detect organization. Pass --org explicitly.")

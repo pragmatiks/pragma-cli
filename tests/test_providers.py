@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import tarfile
 from datetime import UTC, datetime
@@ -466,10 +467,11 @@ def test_publish_auto_detects_version_from_pyproject(cli_runner, provider_projec
     assert call_args[0][2] == "2.3.0"
 
 
-def test_publish_auto_detects_org_from_get_me(cli_runner, provider_project, mock_pragma_client):
-    """Publish reads org from client.get_me() when --org is not provided."""
-    user_info = mock_pragma_client.get_me.return_value
-    user_info.organization_name = "autoorg"
+def test_publish_auto_detects_org_from_jwt(cli_runner, provider_project, mock_pragma_client):
+    """Publish reads org_slug from the JWT token when --org is not provided."""
+    payload = json.dumps({"org_slug": "autoorg", "exp": 9999999999}).encode()
+    fake_token = "header." + base64.urlsafe_b64encode(payload).decode().rstrip("=") + ".signature"
+    mock_pragma_client._auth.token = fake_token
 
     publish_result = mock_pragma_client.publish_provider.return_value
     publish_result.provider_name = "autoorg/test"
@@ -496,9 +498,10 @@ def test_publish_error_when_version_cannot_be_determined(cli_runner, provider_pr
 
 
 def test_publish_error_when_org_cannot_be_determined(cli_runner, provider_project, mock_pragma_client):
-    """Publish exits with error when org is missing and get_me returns None."""
-    user_info = mock_pragma_client.get_me.return_value
-    user_info.organization_name = None
+    """Publish exits with error when JWT has no org_slug claim."""
+    payload = json.dumps({"exp": 9999999999}).encode()
+    fake_token = "header." + base64.urlsafe_b64encode(payload).decode().rstrip("=") + ".signature"
+    mock_pragma_client._auth.token = fake_token
 
     result = cli_runner.invoke(app, ["providers", "publish", "--version", "1.0.0"])
 
