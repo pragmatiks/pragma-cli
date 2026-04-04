@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.29.0 (2026-04-04)
+
+### Feat
+
+- cascade to providers after CLI publish
+
 ## v0.28.0 (2026-04-03)
 
 ### Feat
