@@ -79,3 +79,21 @@ jobs:
       - name: Publish to PyPI
         if: steps.bump.outputs.bumped == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Generate GitHub App token
+        if: steps.bump.outputs.bumped == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: pragmatiks
+          repositories: pragma-providers
+
+      - name: Trigger providers re-publish
+        if: steps.bump.outputs.bumped == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh workflow run publish.yaml \
+            --repo pragmatiks/pragma-providers
