@@ -50,24 +50,48 @@ CREDENTIALS_FILE = CONFIG_DIR / "credentials"
 
 
 def _assert_config_dir_not_symlink() -> None:
-    """Reject a symlinked ``~/.config/pragma`` directory.
+    """Reject a symlink anywhere in the config directory chain.
 
     Defense-in-depth against an attacker who pre-creates the config
-    dir as a symlink to attacker-controlled storage, redirecting the
-    CLI into their namespace. An ``lstat`` on the final path segment
-    catches the case — subsequent opens under ``CONFIG_DIR`` rely on
-    ``O_NOFOLLOW`` to block tampering inside the real directory.
+    dir — or any parent of it — as a symlink to attacker-controlled
+    storage, redirecting the CLI into their namespace. ``lstat`` on
+    the final segment alone misses parent-chain attacks: if
+    ``XDG_CONFIG_HOME`` is set to ``/home/user/.config`` and
+    ``.config`` is a symlink to ``/attacker-root``, the CLI would
+    silently load ``/attacker-root/pragma/config``.
+
+    The full-chain check uses ``os.path.realpath`` to canonicalize
+    every component and compares against the textual normalization.
+    Any divergence indicates a symlink somewhere in the chain. The
+    leaf ``lstat`` is kept as a belt-and-braces check in case an
+    edge platform handles ``realpath`` differently. Subsequent opens
+    under ``CONFIG_DIR`` rely on ``O_NOFOLLOW`` to block tampering
+    inside the resolved directory itself.
 
     Opt-out: set ``PRAGMA_ALLOW_CONFIG_DIR_SYMLINK=1`` if your real
-    config dir is itself a symlink (dotfile managers, home directory
-    relocation, etc.). Raising is the safer default.
+    config dir or any parent is itself a symlink (dotfile managers
+    such as chezmoi or stow, home directory relocation, etc.).
+    Raising is the safer default.
 
     Raises:
-        ConfigDirSymlinkError: If ``CONFIG_DIR`` exists and is a
-            symlink and the opt-out env var is not set.
+        ConfigDirSymlinkError: If ``CONFIG_DIR`` or any parent of it
+            is a symlink and the opt-out env var is not set.
     """
     if os.getenv(_ALLOW_SYMLINK_ENV_VAR):
         return
+
+    expected = os.path.normpath(str(CONFIG_DIR))
+    try:
+        resolved = os.path.realpath(CONFIG_DIR)
+    except OSError:
+        resolved = expected
+
+    if resolved != expected:
+        raise ConfigDirSymlinkError(
+            f"Refusing to use {CONFIG_DIR}: the path resolves through a symlink "
+            f"to {resolved}. Set {_ALLOW_SYMLINK_ENV_VAR}=1 to opt in if this is "
+            f"intentional (dotfile managers, home directory relocation, etc.)."
+        )
 
     try:
         st = os.lstat(CONFIG_DIR)
