@@ -7,7 +7,7 @@ import os
 import click
 import typer
 
-from pragma_cli.config import MalformedConfigError, get_current_context
+from pragma_cli.config import ConfigDirSymlinkError, MalformedConfigError, get_current_context
 
 
 _MISSING_PROJECT_MESSAGE = (
@@ -59,7 +59,7 @@ def _resolve_project_slug(typer_ctx: typer.Context | click.Context | None) -> st
 
     try:
         _, context_config = get_current_context(context_name)
-    except (ValueError, OSError, MalformedConfigError, typer.Exit):
+    except (ValueError, OSError, MalformedConfigError, ConfigDirSymlinkError, typer.Exit):
         return None
 
     return context_config.project or None
