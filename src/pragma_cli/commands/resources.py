@@ -610,7 +610,7 @@ def get(
     if len(parts) == 3:
         provider = f"{parts[0]}/{parts[1]}"
         resource = parts[2]
-        resources = list(project.list_resources(provider=provider, resource=resource))
+        resources = project.list_resources(provider=provider, resource=resource)
 
         if not resources:
             console.print("[dim]No resources found.[/dim]")
@@ -1338,6 +1338,9 @@ def tags_list(
 ):
     """List tags for a resource.
 
+    Resolves the active project from ``--project``, ``PRAGMA_PROJECT``,
+    or the persistent default set via ``pragma projects use <slug>``.
+
     Examples:
         pragma resources tags list pragmatiks/gcp/secret/my-secret
     """
@@ -1359,6 +1362,9 @@ def tags_add(
     tags: Annotated[list[str], typer.Option("--tag", "-t", help="Tag to add (can be repeated)")],
 ):
     """Add tags to a resource.
+
+    Resolves the active project from ``--project``, ``PRAGMA_PROJECT``,
+    or the persistent default set via ``pragma projects use <slug>``.
 
     Examples:
         pragma resources tags add pragmatiks/gcp/secret/my-secret --tag production
@@ -1393,6 +1399,9 @@ def tags_remove(
     tags: Annotated[list[str], typer.Option("--tag", "-t", help="Tag to remove (can be repeated)")],
 ):
     """Remove tags from a resource.
+
+    Resolves the active project from ``--project``, ``PRAGMA_PROJECT``,
+    or the persistent default set via ``pragma projects use <slug>``.
 
     Examples:
         pragma resources tags remove pragmatiks/gcp/secret/my-secret --tag staging
