@@ -231,8 +231,12 @@ def _config_lock(exclusive: bool) -> Iterator[None]:
 def _atomic_write(text: str) -> None:
     """Atomically replace the config file with ``text``.
 
-    Writes to a sibling tempfile and calls ``os.replace`` so readers
-    never observe a truncated or partially-written file.
+    Writes to a sibling tempfile, fsyncs the tempfile, atomically
+    renames it over the destination, and fsyncs the parent directory
+    so the rename itself is durable across a power loss. Without the
+    directory fsync the rename can be reordered on some filesystems
+    and a crash leaves the config file missing entirely — even though
+    the tempfile's bytes made it to disk.
 
     Args:
         text: Serialized config contents.
@@ -257,6 +261,32 @@ def _atomic_write(text: str) -> None:
         except OSError:
             pass
         raise
+
+    _fsync_directory(CONFIG_DIR)
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Flush a directory's metadata so a rename is durable on crash.
+
+    Opens the directory with ``O_RDONLY | O_DIRECTORY`` and calls
+    ``os.fsync`` on the fd. Silently ignores platforms where the
+    syscall is not supported (Windows) — the call is defensive
+    hardening, not a correctness requirement on every OS.
+
+    Args:
+        directory: Directory whose metadata should be flushed.
+    """
+    try:
+        dir_fd = os.open(str(directory), os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return
+
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
 
 
 def load_config() -> PragmaConfig:
