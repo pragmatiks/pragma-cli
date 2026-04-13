@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, cast
@@ -27,6 +28,9 @@ from pragma_cli.project_context import resolve_project
 
 console = Console()
 app = typer.Typer()
+
+
+_MAX_FILE_REFERENCE_SIZE = 10 * 1024 * 1024
 
 
 class _ScopedResourcePayload(BaseModel):
@@ -335,13 +339,17 @@ def _resolve_path(path_str: str, base_dir: Path) -> Path:
     local secrets (``~/.ssh/id_rsa``, ``~/.aws/credentials``, etc.) by
     pointing ``@path`` at them — the CLI would read the bytes during
     planning and upload them during apply. To block that class of
-    attack, this resolver enforces four rules:
+    attack, this resolver enforces six rules:
 
     1. Absolute paths are rejected.
     2. Raw ``..`` segments in the path string are rejected.
     3. The resolved path must land inside ``base_dir``.
     4. Symlinks are followed before the containment check so symlink
        escapes (``base_dir/link`` -> ``/etc/passwd``) are rejected too.
+    5. Only regular files are accepted — FIFOs, sockets, devices, and
+       directories would hang or mis-upload the planner.
+    6. Files larger than ``_MAX_FILE_REFERENCE_SIZE`` are rejected so
+       a manifest cannot OOM the planner by pointing at a huge blob.
 
     ``~`` expansion is intentionally NOT performed: a tilde should not
     map to a real path during manifest loading.
@@ -355,8 +363,9 @@ def _resolve_path(path_str: str, base_dir: Path) -> Path:
         Absolute, realpath-resolved path inside ``base_dir``.
 
     Raises:
-        ValueError: If the path is absolute, contains ``..``, or
-            resolves outside ``base_dir`` (directly or via symlink).
+        ValueError: If the path is absolute, contains ``..``, resolves
+            outside ``base_dir`` (directly or via symlink), is not a
+            regular file, or exceeds the size limit.
     """
     raw_path = Path(path_str)
 
@@ -385,6 +394,21 @@ def _resolve_path(path_str: str, base_dir: Path) -> Path:
             f"@path reference {path_str!r} resolves outside the manifest directory ({base_real}); "
             "refusing to read for security reasons."
         ) from e
+
+    try:
+        stat_result = resolved.stat()
+    except OSError as e:
+        raise ValueError(f"Cannot stat @path reference {path_str!r}: {e}") from e
+
+    if not stat.S_ISREG(stat_result.st_mode):
+        raise ValueError(
+            f"@path reference {path_str!r} is not a regular file; FIFOs, sockets, devices, and directories are refused."
+        )
+
+    if stat_result.st_size > _MAX_FILE_REFERENCE_SIZE:
+        limit_mib = _MAX_FILE_REFERENCE_SIZE // (1024 * 1024)
+        size_mib = stat_result.st_size / (1024 * 1024)
+        raise ValueError(f"@path reference {path_str!r} is {size_mib:.1f} MiB, exceeding the {limit_mib} MiB limit.")
 
     return resolved
 
