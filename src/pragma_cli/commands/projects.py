@@ -19,22 +19,6 @@ app = typer.Typer(help="Project management commands")
 console = Console()
 
 
-def _reject_description(description: str | None) -> None:
-    """Reject unsupported description fields on the current SDK surface.
-
-    Args:
-        description: User-supplied project description.
-
-    Raises:
-        typer.Exit: If a description was provided.
-    """
-    if description is None:
-        return
-
-    console.print("[red]Error:[/red] Project descriptions are not supported by the current SDK surface.")
-    raise typer.Exit(2)
-
-
 def _print_projects_table(projects: list[dict]) -> None:
     """Render projects in a table.
 
@@ -135,11 +119,8 @@ def get_project(
 def create_project(
     slug: Annotated[str, typer.Argument(help="Project slug")],
     name: Annotated[str, typer.Option("--name", help="Human-readable project name")],
-    description: Annotated[str | None, typer.Option("--description", help="Project description")] = None,
 ) -> None:
     """Create a project."""
-    _reject_description(description)
-
     project = get_client().create_project(CreateProjectRequest(name=name, slug=slug))
     console.print(f"[green]Created project:[/green] {project.slug}")
 
@@ -148,11 +129,8 @@ def create_project(
 def update_project(
     slug: Annotated[str, typer.Argument(help="Project slug")],
     name: Annotated[str, typer.Option("--name", help="Human-readable project name")],
-    description: Annotated[str | None, typer.Option("--description", help="Project description")] = None,
 ) -> None:
     """Update project metadata."""
-    _reject_description(description)
-
     project = get_client().update_project(slug, UpdateProjectRequest(name=name))
     console.print(f"[green]Updated project:[/green] {project.slug}")
 
