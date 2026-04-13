@@ -139,6 +139,16 @@ def main(
             help="Override authentication token (not recommended, use environment variable instead)",
         ),
     ] = None,
+    project: Annotated[
+        str | None,
+        typer.Option(
+            "--project",
+            help=(
+                "Project slug for project-scoped resource commands. Precedence: --project, "
+                "PRAGMA_PROJECT, current context config, then 'pragma projects use'."
+            ),
+        ),
+    ] = None,
 ):
     """Pragma CLI - Declarative resource management.
 
@@ -160,6 +170,7 @@ def main(
     else:
         client = PragmaClient(base_url=context_config.api_url, context=context_name, require_auth=False)
 
+    ctx.obj = {"context": context_name, "project": project}
     set_client(client)
 
 

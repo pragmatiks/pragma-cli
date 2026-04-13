@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, cast
 
 import httpx
 import typer
 import yaml
+from pydantic import BaseModel, ConfigDict
 from rich import print
 from rich.console import Console
 from rich.markup import escape
@@ -17,10 +18,42 @@ from rich.table import Table
 from pragma_cli import get_client
 from pragma_cli.commands.completions import completion_resource_ids
 from pragma_cli.helpers import OutputFormat, output_data, parse_resource_id
+from pragma_cli.project_context import resolve_project
 
 
 console = Console()
 app = typer.Typer()
+
+
+class _ScopedResourcePayload(BaseModel):
+    """Generic project-scoped resource payload for CLI-driven apply operations."""
+
+    model_config = ConfigDict(extra="allow")
+
+    project_id: str
+    provider: str
+    resource: str
+    name: str
+
+
+def _project_client(ctx: typer.Context):
+    """Return a project-scoped SDK handle for the active project."""
+    return get_client().project(resolve_project(ctx))
+
+
+def _resource_payload(resource: dict[str, Any], project_id: str) -> _ScopedResourcePayload:
+    """Inject project context into a resource document before submission.
+
+    Args:
+        resource: Resource document loaded from CLI input.
+        project_id: Resolved project slug for the active command.
+
+    Returns:
+        Validated project-scoped payload ready for SDK submission.
+    """
+    payload = dict(resource)
+    payload.setdefault("project_id", project_id)
+    return _ScopedResourcePayload.model_validate(payload)
 
 
 def _parse_resource_id(resource_id: str) -> tuple[str, str, str]:
@@ -306,6 +339,7 @@ def list_resource_schemas(
 
 @app.command("list")
 def list_resources(
+    ctx: typer.Context,
     provider: Annotated[str | None, typer.Option("--provider", "-p", help="Filter by provider")] = None,
     resource: Annotated[str | None, typer.Option("--resource", "-r", help="Filter by resource type")] = None,
     tags: Annotated[list[str] | None, typer.Option("--tag", "-t", help="Filter by tags")] = None,
@@ -318,8 +352,8 @@ def list_resources(
         pragma resources list --provider gcp
         pragma resources list -o json
     """
-    client = get_client()
-    resources = list(client.list_resources(provider=provider, resource=resource, tags=tags))
+    project = _project_client(ctx)
+    resources = list(project.list_resources(provider=provider, resource=resource, tags=tags))
 
     if not resources:
         console.print("[dim]No resources found.[/dim]")
@@ -371,6 +405,7 @@ def _print_resources_table(resources: list[dict]) -> None:
 
 @app.command()
 def get(
+    ctx: typer.Context,
     resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
 ):
@@ -387,13 +422,13 @@ def get(
     Raises:
         typer.Exit: If the resource ID format is invalid.
     """
-    client = get_client()
+    project = _project_client(ctx)
     parts = resource_id.split("/")
 
     if len(parts) == 3:
         provider = f"{parts[0]}/{parts[1]}"
         resource = parts[2]
-        resources = list(client.list_resources(provider=provider, resource=resource))
+        resources = list(project.list_resources(provider=provider, resource=resource))
 
         if not resources:
             console.print("[dim]No resources found.[/dim]")
@@ -406,7 +441,7 @@ def get(
         name = parts[3]
 
         try:
-            res = client.get_resource(provider=provider, resource=resource, name=name)
+            res = project.get_resource(provider=provider, resource=resource, name=name)
         except httpx.HTTPStatusError as e:
             console.print(f"[red]Error:[/red] {_format_api_error(e)}")
             raise typer.Exit(1) from e
@@ -575,6 +610,7 @@ def _print_resource_details(res: dict) -> None:
 
 @app.command()
 def describe(
+    ctx: typer.Context,
     resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
     reveal: Annotated[bool, typer.Option("--reveal", help="Show sensitive field values")] = False,
@@ -593,11 +629,11 @@ def describe(
     Raises:
         typer.Exit: If the resource is not found or an error occurs.
     """
-    client = get_client()
+    project = _project_client(ctx)
     provider, resource, name = _parse_resource_id(resource_id)
 
     try:
-        res = client.get_resource(provider=provider, resource=resource, name=name, reveal=reveal)
+        res = project.get_resource(provider=provider, resource=resource, name=name, reveal=reveal)
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
@@ -607,6 +643,7 @@ def describe(
 
 @app.command()
 def apply(
+    ctx: typer.Context,
     file: Annotated[
         list[typer.FileText] | None,
         typer.Option("--file", "-f", help="YAML file(s) defining resources to apply."),
@@ -637,7 +674,8 @@ def apply(
         console.print("[red]Provide -f <file> or a positional file path.[/red]")
         raise typer.Exit(1)
 
-    client = get_client()
+    project_id = resolve_project(ctx)
+    project = get_client().project(project_id)
     for f in files:
         base_dir = Path(f.name).parent
 
@@ -656,7 +694,8 @@ def apply(
                 resource["lifecycle_state"] = "pending"
             res_id = f"{resource.get('provider', '?')}/{resource.get('resource', '?')}/{resource.get('name', '?')}"
             try:
-                result = client.apply_resource(resource=resource)
+                payload = _resource_payload(resource, project_id)
+                result = project.apply_resource(cast(Any, payload))
                 res_id = f"{result['provider']}/{result['resource']}/{result['name']}"
                 print(f"Applied {res_id} {format_state(result['lifecycle_state'])}")
             except httpx.HTTPStatusError as e:
@@ -666,6 +705,7 @@ def apply(
 
 @app.command()
 def delete(
+    ctx: typer.Context,
     resource_id: Annotated[
         str | None, typer.Argument(autocompletion=completion_resource_ids, show_default=False)
     ] = None,
@@ -684,28 +724,28 @@ def delete(
         typer.Exit: If arguments are invalid or deletion fails.
     """
     if file:
-        _delete_from_files(file)
+        _delete_from_files(ctx, file)
     elif resource_id:
-        _delete_single(resource_id)
+        _delete_single(ctx, resource_id)
     else:
         console.print("[red]Provide either -f <file> or <org/provider/resource/name>.[/red]")
         raise typer.Exit(1)
 
 
-def _delete_single(resource_id: str) -> None:
-    client = get_client()
+def _delete_single(ctx: typer.Context, resource_id: str) -> None:
+    project = _project_client(ctx)
     provider, resource, name = _parse_resource_id(resource_id)
 
     try:
-        client.delete_resource(provider=provider, resource=resource, name=name)
+        project.delete_resource(provider=provider, resource=resource, name=name)
         print(f"Deleted {resource_id}")
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error deleting {resource_id}:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
 
-def _delete_from_files(files: list[typer.FileText]) -> None:
-    client = get_client()
+def _delete_from_files(ctx: typer.Context, files: list[typer.FileText]) -> None:
+    project = _project_client(ctx)
 
     for f in files:
         try:
@@ -729,7 +769,7 @@ def _delete_from_files(files: list[typer.FileText]) -> None:
             res_id = f"{provider}/{resource_type}/{name}"
 
             try:
-                client.delete_resource(provider=provider, resource=resource_type, name=name)
+                project.delete_resource(provider=provider, resource=resource_type, name=name)
                 print(f"Deleted {res_id}")
             except httpx.HTTPStatusError as e:
                 console.print(f"[red]Error deleting {res_id}:[/red] {_format_api_error(e)}")
@@ -738,6 +778,7 @@ def _delete_from_files(files: list[typer.FileText]) -> None:
 
 @app.command()
 def deactivate(
+    ctx: typer.Context,
     resource_id: Annotated[
         str | None, typer.Argument(autocompletion=completion_resource_ids, show_default=False)
     ] = None,
@@ -756,28 +797,28 @@ def deactivate(
         typer.Exit: If arguments are invalid or deactivation fails.
     """
     if file:
-        _deactivate_from_files(file)
+        _deactivate_from_files(ctx, file)
     elif resource_id:
-        _deactivate_single(resource_id)
+        _deactivate_single(ctx, resource_id)
     else:
         console.print("[red]Provide either -f <file> or <org/provider/resource/name>.[/red]")
         raise typer.Exit(1)
 
 
-def _deactivate_single(resource_id: str) -> None:
-    client = get_client()
+def _deactivate_single(ctx: typer.Context, resource_id: str) -> None:
+    project = _project_client(ctx)
     provider, resource, name = _parse_resource_id(resource_id)
 
     try:
-        client.deactivate_resource(provider=provider, resource=resource, name=name)
+        project.deactivate_resource(provider=provider, resource=resource, name=name)
         print(f"Deactivated {resource_id}")
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error deactivating {resource_id}:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
 
-def _deactivate_from_files(files: list[typer.FileText]) -> None:
-    client = get_client()
+def _deactivate_from_files(ctx: typer.Context, files: list[typer.FileText]) -> None:
+    project = _project_client(ctx)
 
     for f in files:
         try:
@@ -801,7 +842,7 @@ def _deactivate_from_files(files: list[typer.FileText]) -> None:
             res_id = f"{provider}/{resource_type}/{name}"
 
             try:
-                client.deactivate_resource(provider=provider, resource=resource_type, name=name)
+                project.deactivate_resource(provider=provider, resource=resource_type, name=name)
                 print(f"Deactivated {res_id}")
             except httpx.HTTPStatusError as e:
                 console.print(f"[red]Error deactivating {res_id}:[/red] {_format_api_error(e)}")
@@ -812,10 +853,11 @@ tags_app = typer.Typer()
 app.add_typer(tags_app, name="tags", help="Manage resource tags.")
 
 
-def _fetch_resource(resource_id: str) -> tuple[str, str, str, dict]:
+def _fetch_resource(ctx: typer.Context, resource_id: str) -> tuple[str, str, str, dict]:
     """Fetch a resource for tag operations.
 
     Args:
+        ctx: Active Typer context for resolving the current project.
         resource_id: Full resource identifier in org/provider/resource/name format.
 
     Returns:
@@ -824,24 +866,25 @@ def _fetch_resource(resource_id: str) -> tuple[str, str, str, dict]:
     Raises:
         typer.Exit: If the resource is not found.
     """
-    client = get_client()
+    project = _project_client(ctx)
     provider, resource, name = _parse_resource_id(resource_id)
 
     try:
-        data = client.get_resource(provider=provider, resource=resource, name=name)
+        data = project.get_resource(provider=provider, resource=resource, name=name)
         return provider, resource, name, data
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
 
-def _apply_tags(provider: str, resource: str, name: str, tags: list[str] | None) -> None:
+def _apply_tags(ctx: typer.Context, provider: str, resource: str, name: str, tags: list[str] | None) -> None:
     """Apply updated tags to a resource.
 
     Uses PATCH semantics: only identity fields and tags are sent,
     all other fields are preserved by the API.
 
     Args:
+        ctx: Active Typer context for resolving the current project.
         provider: Provider identifier (e.g., "pragmatiks/postgres").
         resource: Resource type (e.g., "database").
         name: Resource name.
@@ -850,17 +893,20 @@ def _apply_tags(provider: str, resource: str, name: str, tags: list[str] | None)
     Raises:
         typer.Exit: If the operation fails.
     """
-    client = get_client()
+    project_id = resolve_project(ctx)
+    project = get_client().project(project_id)
 
     try:
-        client.apply_resource(
-            resource={
+        payload = _resource_payload(
+            {
                 "provider": provider,
                 "resource": resource,
                 "name": name,
                 "tags": tags,
-            }
+            },
+            project_id,
         )
+        project.apply_resource(cast(Any, payload))
     except httpx.HTTPStatusError as e:
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
@@ -868,6 +914,7 @@ def _apply_tags(provider: str, resource: str, name: str, tags: list[str] | None)
 
 @tags_app.command("list")
 def tags_list(
+    ctx: typer.Context,
     resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
 ):
     """List tags for a resource.
@@ -875,7 +922,7 @@ def tags_list(
     Examples:
         pragma resources tags list pragmatiks/gcp/secret/my-secret
     """
-    _, _, _, res = _fetch_resource(resource_id)
+    _, _, _, res = _fetch_resource(ctx, resource_id)
     tags = res.get("tags") or []
 
     if not tags:
@@ -888,6 +935,7 @@ def tags_list(
 
 @tags_app.command("add")
 def tags_add(
+    ctx: typer.Context,
     resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
     tags: Annotated[list[str], typer.Option("--tag", "-t", help="Tag to add (can be repeated)")],
 ):
@@ -904,7 +952,7 @@ def tags_add(
         console.print("[red]Error:[/red] At least one --tag is required.")
         raise typer.Exit(1)
 
-    provider, resource, name, res = _fetch_resource(resource_id)
+    provider, resource, name, res = _fetch_resource(ctx, resource_id)
     current_tags = set(res.get("tags") or [])
     new_tags = set(tags)
     added = new_tags - current_tags
@@ -913,7 +961,7 @@ def tags_add(
         console.print("[dim]Tags already present, nothing to add.[/dim]")
         return
 
-    _apply_tags(provider, resource, name, sorted(current_tags | new_tags))
+    _apply_tags(ctx, provider, resource, name, sorted(current_tags | new_tags))
 
     for tag in sorted(added):
         console.print(f"[green]+[/green] {tag}")
@@ -921,6 +969,7 @@ def tags_add(
 
 @tags_app.command("remove")
 def tags_remove(
+    ctx: typer.Context,
     resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
     tags: Annotated[list[str], typer.Option("--tag", "-t", help="Tag to remove (can be repeated)")],
 ):
@@ -937,7 +986,7 @@ def tags_remove(
         console.print("[red]Error:[/red] At least one --tag is required.")
         raise typer.Exit(1)
 
-    provider, resource, name, res = _fetch_resource(resource_id)
+    provider, resource, name, res = _fetch_resource(ctx, resource_id)
     current_tags = set(res.get("tags") or [])
     to_remove = set(tags)
     removed = current_tags & to_remove
@@ -947,7 +996,7 @@ def tags_remove(
         return
 
     updated = sorted(current_tags - to_remove)
-    _apply_tags(provider, resource, name, updated or None)
+    _apply_tags(ctx, provider, resource, name, updated or None)
 
     for tag in sorted(removed):
         console.print(f"[red]-[/red] {tag}")
