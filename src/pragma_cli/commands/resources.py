@@ -382,15 +382,21 @@ def list_resources(
     tags: Annotated[list[str] | None, typer.Option("--tag", "-t", help="Filter by tags")] = None,
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
 ):
-    """List resources, optionally filtered by provider, resource type, or tags.
+    """List resources in the active project.
+
+    Requires a project context. Precedence: ``--project`` flag,
+    ``PRAGMA_PROJECT`` env var, then the persistent default set via
+    ``pragma projects use <slug>``. Results can be filtered by
+    provider, resource type, or tags.
 
     Examples:
         pragma resources list
+        pragma --project my-app resources list
         pragma resources list --provider gcp
         pragma resources list -o json
     """
     project = _project_client(ctx)
-    resources = list(project.list_resources(provider=provider, resource=resource, tags=tags))
+    resources = project.list_resources(provider=provider, resource=resource, tags=tags)
 
     if not resources:
         console.print("[dim]No resources found.[/dim]")
@@ -448,8 +454,11 @@ def get(
 ):
     """Get resources by type or specific resource by full ID.
 
-    With three segments (org/provider/resource), lists all resources of that type.
-    With four segments (org/provider/resource/name), gets a specific resource.
+    Resolves the active project from ``--project``, ``PRAGMA_PROJECT``,
+    or the persistent default set via ``pragma projects use <slug>``.
+    With three segments (org/provider/resource), lists all resources of
+    that type within the project. With four segments
+    (org/provider/resource/name), fetches a specific resource.
 
     Examples:
         pragma resources get pragmatiks/pragma/secret
@@ -654,8 +663,11 @@ def describe(
 ):
     """Show detailed information about a resource.
 
-    Displays the resource's config, outputs, dependencies, and error messages.
-    Sensitive fields are redacted by default. Use --reveal to show their values.
+    Resolves the active project from ``--project``, ``PRAGMA_PROJECT``,
+    or the persistent default set via ``pragma projects use <slug>``.
+    Displays the resource's config, outputs, dependencies, and error
+    messages. Sensitive fields are redacted by default; use --reveal
+    to show their values.
 
     Examples:
         pragma resources describe pragmatiks/gcp/secret/my-test-secret
@@ -854,6 +866,9 @@ def delete(
 ):
     """Delete resources by ID or from YAML files.
 
+    Resolves the active project from ``--project``, ``PRAGMA_PROJECT``,
+    or the persistent default set via ``pragma projects use <slug>``.
+
     Usage:
         pragma resources delete <org/provider/resource/name>
         pragma resources delete -f <file.yaml>
@@ -926,6 +941,9 @@ def deactivate(
     ] = None,
 ):
     """Deactivate resources by ID or from YAML files.
+
+    Resolves the active project from ``--project``, ``PRAGMA_PROJECT``,
+    or the persistent default set via ``pragma projects use <slug>``.
 
     Usage:
         pragma resources deactivate <org/provider/resource/name>
