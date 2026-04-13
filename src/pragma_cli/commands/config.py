@@ -45,6 +45,7 @@ def current_context():
     print(f"[bold]Current context:[/bold] [cyan]{context_name}[/cyan]")
     print(f"[bold]API URL:[/bold] {context_config.api_url}")
     print(f"[bold]Auth URL:[/bold] {context_config.get_auth_url()}")
+    print(f"[bold]Project:[/bold] {context_config.project or 'none set'}")
 
 
 @app.command()
@@ -55,7 +56,12 @@ def set_context(
 ):
     """Create or update a context."""
     config = load_config()
-    config.contexts[name] = ContextConfig(api_url=api_url, auth_url=auth_url)
+    existing = config.contexts.get(name)
+    config.contexts[name] = ContextConfig(
+        api_url=api_url,
+        auth_url=auth_url,
+        project=existing.project if existing else None,
+    )
     save_config(config)
 
     effective_auth = config.contexts[name].get_auth_url()

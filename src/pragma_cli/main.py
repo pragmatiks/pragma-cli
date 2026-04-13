@@ -13,7 +13,7 @@ from rich.console import Console
 from typer.core import TyperGroup
 
 from pragma_cli import set_client
-from pragma_cli.commands import auth, config, ops, organizations, providers, resources
+from pragma_cli.commands import auth, config, ops, organizations, projects, providers, resources
 from pragma_cli.config import get_current_context
 
 
@@ -180,6 +180,7 @@ app.add_typer(config.app, name="config")
 app.add_typer(ops.app, name="ops")
 app.add_typer(organizations.app, name="organizations")
 app.add_typer(providers.app, name="providers")
+app.add_typer(projects.app, name="projects")
 
 if __name__ == "__main__":  # pragma: no cover
     app()
