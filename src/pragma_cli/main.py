@@ -15,7 +15,7 @@ from typer.core import TyperGroup
 
 from pragma_cli import set_client
 from pragma_cli.commands import auth, config, ops, organizations, projects, providers, resources
-from pragma_cli.config import get_current_context
+from pragma_cli.config import MalformedConfigError, get_current_context
 
 
 console = Console(stderr=True)
@@ -98,13 +98,26 @@ def _handle_validation_error(error: ValidationError) -> None:
     raise typer.Exit(2) from error
 
 
+def _handle_malformed_config_error(error: MalformedConfigError) -> None:
+    """Print a friendly message for a malformed config file and exit.
+
+    Args:
+        error: Malformed-config error raised while loading the config file.
+
+    Raises:
+        typer.Exit: Always exits with code 2 after printing the message.
+    """
+    console.print(f"[red]Error:[/red] {error}")
+    raise typer.Exit(2) from error
+
+
 class ErrorHandlingGroup(TyperGroup):
     """Click Group subclass that catches unhandled CLI-level exceptions.
 
     Wraps command invocation to translate connection errors, timeouts,
-    HTTP status errors, project-scoping mismatches, and Pydantic
-    validation errors into friendly CLI messages instead of raw
-    Python tracebacks.
+    HTTP status errors, project-scoping mismatches, malformed config
+    files, and Pydantic validation errors into friendly CLI messages
+    instead of raw Python tracebacks.
     """
 
     def invoke(self, ctx: click.Context) -> Any:
@@ -122,6 +135,8 @@ class ErrorHandlingGroup(TyperGroup):
             _handle_httpx_error(e)
         except (ProjectMismatchError, InvalidResourceIdentityError) as e:
             _handle_project_error(e)
+        except MalformedConfigError as e:
+            _handle_malformed_config_error(e)
         except ValidationError as e:
             _handle_validation_error(e)
 

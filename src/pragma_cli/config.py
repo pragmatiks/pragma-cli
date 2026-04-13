@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import fcntl
 import os
+import stat
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import NoReturn
 from urllib.parse import urlparse
 
-import typer
 import yaml
 from pydantic import BaseModel, ValidationError
+
+
+class MalformedConfigError(RuntimeError):
+    """Raised when the config file exists but cannot be parsed or validated."""
 
 
 def _get_config_dir() -> Path:
@@ -76,24 +79,8 @@ def _default_config() -> PragmaConfig:
     )
 
 
-def _raise_malformed_config(error: Exception) -> NoReturn:
-    """Emit a clean CLI error for a corrupted config file and exit.
-
-    Args:
-        error: Original parsing/validation error.
-
-    Raises:
-        typer.Exit: Always exits with code 2.
-    """
-    typer.echo(
-        f"Error: config file at {CONFIG_PATH} is malformed: {error}",
-        err=True,
-    )
-    raise typer.Exit(2)
-
-
 def _parse_config_text(text: str) -> PragmaConfig:
-    """Parse raw YAML into a validated PragmaConfig or exit cleanly.
+    """Parse raw YAML into a validated PragmaConfig.
 
     Args:
         text: Raw config file contents.
@@ -102,27 +89,73 @@ def _parse_config_text(text: str) -> PragmaConfig:
         Validated PragmaConfig.
 
     Raises:
-        typer.Exit: If the text is invalid YAML or fails Pydantic validation.
-    """  # noqa: DOC502
+        MalformedConfigError: If the text is invalid YAML or fails Pydantic validation.
+    """
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as e:
-        _raise_malformed_config(e)
+        raise MalformedConfigError(f"config file at {CONFIG_PATH} is malformed: {e}") from e
 
     try:
         return PragmaConfig.model_validate(data)
     except ValidationError as e:
-        _raise_malformed_config(e)
+        raise MalformedConfigError(f"config file at {CONFIG_PATH} is malformed: {e}") from e
+
+
+def _open_lock_file() -> int:
+    """Open the config lock file, refusing to follow symlinks.
+
+    Uses ``O_NOFOLLOW`` so an attacker cannot point ``config.lock`` at
+    ``config`` (or anywhere else) to break mutual exclusion. Verifies
+    that the opened fd refers to a regular file — a symlink attack
+    would cause the open to fail with ``ELOOP``, but defensive checks
+    for other special files (directories, pipes, devices) are also
+    made.
+
+    Returns:
+        File descriptor for the lock file, opened O_RDWR.
+
+    Raises:
+        RuntimeError: If the lock path is not a regular file.
+        OSError: If the lock file cannot be opened (e.g., ELOOP when
+            the path is a symlink, or permission errors).
+    """
+    fd = os.open(
+        CONFIG_LOCK_PATH,
+        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        os.close(fd)
+        raise
+
+    if not stat.S_ISREG(st.st_mode):
+        os.close(fd)
+        raise RuntimeError(
+            f"Refusing to use {CONFIG_LOCK_PATH}: not a regular file. "
+            "This may indicate tampering or a misconfigured config directory."
+        )
+
+    return fd
 
 
 @contextmanager
 def _config_lock(exclusive: bool) -> Iterator[None]:
     """Acquire an advisory lock on the config lock file.
 
-    Uses ``fcntl.flock`` on a sibling lock file so the lock survives
-    ``os.replace`` of the real config file. Serializes concurrent
-    ``pragma`` invocations so readers cannot observe a truncated file
-    and writers cannot lose each other's updates.
+    Uses ``fcntl.flock`` on a sibling lock file opened with
+    ``O_NOFOLLOW`` so the lock file cannot be swapped for a symlink
+    mid-hold. The fd is verified to refer to a regular file before
+    locking. Serializes concurrent ``pragma`` invocations so readers
+    cannot observe a truncated file and writers cannot lose each
+    other's updates.
+
+    Read path (shared lock) is gated: if the config directory does
+    not exist and this is a shared lock, the caller short-circuits
+    without creating any on-disk state. Only the exclusive lock
+    (writer) may create the directory or lock file.
 
     Args:
         exclusive: ``True`` for a writer lock, ``False`` for a shared
@@ -131,17 +164,20 @@ def _config_lock(exclusive: bool) -> Iterator[None]:
     Yields:
         ``None`` — the caller performs file access while the lock is held.
     """
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    if not CONFIG_LOCK_PATH.exists():
-        CONFIG_LOCK_PATH.touch(mode=0o644)
+    if exclusive:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
+    fd = _open_lock_file()
     lock_op = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-    with open(CONFIG_LOCK_PATH, "r+") as lock_handle:
+    lock_handle = os.fdopen(fd, "r+")
+    try:
         fcntl.flock(lock_handle.fileno(), lock_op)
         try:
             yield
         finally:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        lock_handle.close()
 
 
 def _atomic_write(text: str) -> None:
@@ -178,12 +214,21 @@ def _atomic_write(text: str) -> None:
 def load_config() -> PragmaConfig:
     """Load config from ``~/.config/pragma/config`` under a shared lock.
 
+    Read path: never creates any on-disk state. If the config
+    directory or file does not exist, returns built-in defaults
+    without touching the filesystem. This keeps the CLI usable on
+    read-only home directories (CI sandboxes, read-only containers,
+    restricted NFS mounts).
+
     Returns:
         PragmaConfig with contexts loaded from file, or default if not found.
 
     Raises:
-        typer.Exit: If the config file exists but is corrupted.
+        MalformedConfigError: If the config file exists but is corrupted.
     """  # noqa: DOC502
+    if not CONFIG_DIR.exists() or not CONFIG_PATH.exists():
+        return _default_config()
+
     with _config_lock(exclusive=False):
         if not CONFIG_PATH.exists():
             return _default_config()
@@ -216,7 +261,7 @@ def update_config() -> Iterator[PragmaConfig]:
         Mutable PragmaConfig that will be persisted on context exit.
 
     Raises:
-        typer.Exit: If the existing file is corrupted.
+        MalformedConfigError: If the existing file is corrupted.
     """  # noqa: DOC502
     with _config_lock(exclusive=True):
         if CONFIG_PATH.exists():
