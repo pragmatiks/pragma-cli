@@ -111,20 +111,32 @@ class _ApplyPlan:
     errors: list[_PlanError] = field(default_factory=list)
 
 
+class _SchemaFetchError(RuntimeError):
+    """Raised when a resource schema cannot be fetched for a known provider.
+
+    Signals that the planner's pre-validation guarantee is unsafe to
+    skip — the API is reachable but returned a non-404 error (5xx,
+    auth failure, transport error) that leaves the planner unable to
+    confirm the resource's config is well-formed before apply.
+    """
+
+
 class _SchemaCache:
     """Lazy per-provider resource schema cache for plan-time validation.
 
     One instance per apply batch. Fetches the full schema list for a
     provider on first request, then serves subsequent
-    ``(provider, resource)`` lookups from memory. Providers that the
-    API cannot describe (missing auth, 404, server error) are marked
-    as unavailable so the planner can skip schema validation cleanly
-    instead of erroring on every document.
+    ``(provider, resource)`` lookups from memory. A provider that
+    returns a 404 is cached as ``None`` so unknown providers skip
+    schema validation (the server remains the authority). Any other
+    fetch failure is cached as a ``_SchemaFetchError`` and re-raised
+    on every subsequent lookup so the planner aborts rather than
+    silently applying unvalidated resources.
     """
 
     def __init__(self) -> None:
         """Initialize an empty cache."""
-        self._by_provider: dict[str, dict[str, dict[str, Any]] | None] = {}
+        self._by_provider: dict[str, dict[str, dict[str, Any]] | None | _SchemaFetchError] = {}
 
     def config_schema(self, provider: str, resource_type: str) -> dict[str, Any] | None:
         """Return the JSON schema for ``(provider, resource_type)``, or None.
@@ -134,19 +146,31 @@ class _SchemaCache:
             resource_type: Resource type name within the provider.
 
         Returns:
-            JSON schema dict if available, ``None`` when the provider
-            could not be described or the resource is unknown. Callers
-            must treat ``None`` as "skip schema validation" rather than
-            failure — the server is still the ultimate authority.
+            JSON schema dict when available, ``None`` when the
+            provider is not known to the API (404). Callers treat
+            ``None`` as "skip schema validation" — the server remains
+            the ultimate authority for unknown providers.
+
+        Raises:
+            _SchemaFetchError: If the schema fetch for ``provider``
+                failed with any non-404 error on the first lookup.
+                Cached so subsequent calls for the same provider
+                re-raise without retrying the network call.
         """
         if provider not in self._by_provider:
-            self._by_provider[provider] = self._fetch(provider)
+            try:
+                self._by_provider[provider] = self._fetch(provider)
+            except _SchemaFetchError as e:
+                self._by_provider[provider] = e
+                raise
 
-        provider_schemas = self._by_provider[provider]
-        if provider_schemas is None:
+        cached = self._by_provider[provider]
+        if isinstance(cached, _SchemaFetchError):
+            raise cached
+        if cached is None:
             return None
 
-        return provider_schemas.get(resource_type)
+        return cached.get(resource_type)
 
     def _fetch(self, provider: str) -> dict[str, dict[str, Any]] | None:
         """Fetch and index schemas for a single provider.
@@ -156,12 +180,26 @@ class _SchemaCache:
 
         Returns:
             Dict mapping resource type to JSON schema, or ``None`` if
-            the describe call failed.
+            the API returned 404 (unknown provider).
+
+        Raises:
+            _SchemaFetchError: If the fetch failed with any non-404
+                HTTP error, transport error, or RuntimeError. The
+                planner surfaces this as a plan error so no unvalidated
+                resources are applied.
         """
         try:
             schemas = get_client().list_resource_schemas(provider=provider)
-        except (httpx.HTTPError, RuntimeError):
-            return None
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise _SchemaFetchError(
+                f"schema fetch failed for {provider}: HTTP {e.response.status_code} {e.response.reason_phrase}"
+            ) from e
+        except httpx.HTTPError as e:
+            raise _SchemaFetchError(f"schema fetch failed for {provider}: {type(e).__name__}: {e}") from e
+        except RuntimeError as e:
+            raise _SchemaFetchError(f"schema fetch failed for {provider}: {e}") from e
 
         indexed: dict[str, dict[str, Any]] = {}
         for schema in schemas:
@@ -901,7 +939,19 @@ def _plan_apply_batch(
             provider = prepared.get("provider")
             resource_type = prepared.get("resource")
             if isinstance(provider, str) and isinstance(resource_type, str):
-                schema = schema_cache.config_schema(provider, resource_type)
+                try:
+                    schema = schema_cache.config_schema(provider, resource_type)
+                except _SchemaFetchError as e:
+                    plan.errors.append(
+                        _PlanError(
+                            source=source,
+                            index=index,
+                            resource_id=resource_id,
+                            message=f"schema validation unavailable for {provider}/{resource_type}: {e}",
+                        )
+                    )
+                    continue
+
                 if schema is not None:
                     schema_error = _validate_config_against_schema(prepared.get("config"), schema)
                     if schema_error is not None:
