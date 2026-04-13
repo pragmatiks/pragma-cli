@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Annotated, Any, cast
 
 import httpx
+import jsonschema
 import typer
 import yaml
 from pragma_sdk import ProjectMismatchError
@@ -29,7 +30,15 @@ app = typer.Typer()
 
 
 class _ScopedResourcePayload(BaseModel):
-    """Generic project-scoped resource payload for CLI-driven apply operations."""
+    """Generic project-scoped resource payload for CLI-driven apply operations.
+
+    ``extra="allow"`` is intentional: the CLI does not duplicate the
+    per-provider config schema here. Planning validates the nested
+    ``config`` field against the real JSON schema fetched from the
+    API before anything is applied, so this model only guards the
+    identity fields that route the request to the right project and
+    resource type.
+    """
 
     model_config = ConfigDict(extra="allow")
 
@@ -100,6 +109,88 @@ class _ApplyPlan:
 
     resources: list[_PlannedResource] = field(default_factory=list)
     errors: list[_PlanError] = field(default_factory=list)
+
+
+class _SchemaCache:
+    """Lazy per-provider resource schema cache for plan-time validation.
+
+    One instance per apply batch. Fetches the full schema list for a
+    provider on first request, then serves subsequent
+    ``(provider, resource)`` lookups from memory. Providers that the
+    API cannot describe (missing auth, 404, server error) are marked
+    as unavailable so the planner can skip schema validation cleanly
+    instead of erroring on every document.
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty cache."""
+        self._by_provider: dict[str, dict[str, dict[str, Any]] | None] = {}
+
+    def config_schema(self, provider: str, resource_type: str) -> dict[str, Any] | None:
+        """Return the JSON schema for ``(provider, resource_type)``, or None.
+
+        Args:
+            provider: Provider identifier (e.g. ``pragmatiks/gcp``).
+            resource_type: Resource type name within the provider.
+
+        Returns:
+            JSON schema dict if available, ``None`` when the provider
+            could not be described or the resource is unknown. Callers
+            must treat ``None`` as "skip schema validation" rather than
+            failure — the server is still the ultimate authority.
+        """
+        if provider not in self._by_provider:
+            self._by_provider[provider] = self._fetch(provider)
+
+        provider_schemas = self._by_provider[provider]
+        if provider_schemas is None:
+            return None
+
+        return provider_schemas.get(resource_type)
+
+    def _fetch(self, provider: str) -> dict[str, dict[str, Any]] | None:
+        """Fetch and index schemas for a single provider.
+
+        Args:
+            provider: Provider identifier to describe.
+
+        Returns:
+            Dict mapping resource type to JSON schema, or ``None`` if
+            the describe call failed.
+        """
+        try:
+            schemas = get_client().list_resource_schemas(provider=provider)
+        except (httpx.HTTPError, RuntimeError):
+            return None
+
+        indexed: dict[str, dict[str, Any]] = {}
+        for schema in schemas:
+            config_schema = schema.config_schema
+            if isinstance(config_schema, dict):
+                indexed[schema.resource] = config_schema
+        return indexed
+
+
+def _validate_config_against_schema(config: Any, schema: dict[str, Any]) -> str | None:
+    """Validate a resource config dict against a JSON schema.
+
+    Args:
+        config: Config payload from the resource document. May be any
+            type — planner is defensive and does not assume a shape.
+        schema: JSON schema fetched from the API for this resource type.
+
+    Returns:
+        Error message string on validation failure, ``None`` on success.
+    """
+    try:
+        jsonschema.validate(instance=config, schema=schema)
+    except jsonschema.ValidationError as e:
+        path = ".".join(str(part) for part in e.absolute_path) or "<root>"
+        return f"config.{path}: {e.message}"
+    except jsonschema.SchemaError as e:
+        return f"schema for this resource is invalid: {e.message}"
+
+    return None
 
 
 def _parse_resource_id(resource_id: str) -> tuple[str, str, str]:
@@ -744,10 +835,12 @@ def _plan_apply_batch(
     """Parse, validate, and plan every document across all supplied files.
 
     All documents are parsed up front, file references are read into
-    memory (without uploading), project_id is validated, and each
-    resource payload is validated through Pydantic. No network calls
-    are made. Errors are collected per document so the caller sees
-    the full picture before anything is applied.
+    memory (without uploading), project_id is validated, each
+    resource payload is validated through Pydantic, and nested
+    ``config`` fields are validated against the per-provider JSON
+    schema fetched from the API (a read-only side effect). Errors
+    are collected per document so the caller sees the full picture
+    before anything is applied.
 
     Args:
         files: YAML files supplied on the command line.
@@ -759,6 +852,7 @@ def _plan_apply_batch(
         a populated error list.
     """
     plan = _ApplyPlan()
+    schema_cache = _SchemaCache()
 
     for f in files:
         source = f.name
@@ -803,6 +897,18 @@ def _plan_apply_batch(
             except ValidationError as e:
                 plan.errors.append(_PlanError(source=source, index=index, resource_id=resource_id, message=str(e)))
                 continue
+
+            provider = prepared.get("provider")
+            resource_type = prepared.get("resource")
+            if isinstance(provider, str) and isinstance(resource_type, str):
+                schema = schema_cache.config_schema(provider, resource_type)
+                if schema is not None:
+                    schema_error = _validate_config_against_schema(prepared.get("config"), schema)
+                    if schema_error is not None:
+                        plan.errors.append(
+                            _PlanError(source=source, index=index, resource_id=resource_id, message=schema_error)
+                        )
+                        continue
 
             plan.resources.append(_PlannedResource(resource_id=resource_id, payload=payload, upload=upload))
 
@@ -873,29 +979,141 @@ def apply(
         console.print("[dim]No resources to apply.[/dim]")
         return
 
+    _execute_plan(plan, project_id)
+
+
+def _execute_plan(plan: _ApplyPlan, project_id: str) -> None:
+    """Apply a pre-validated plan with partial-failure containment.
+
+    Ordering strategy: apply every resource first, then upload file
+    bytes for ``pragma/file`` resources afterwards. This keeps a
+    failing mid-batch apply from leaking uploaded secrets to the
+    server. If an apply or upload fails mid-flight, the function
+    prints a loud ``PARTIAL APPLY FAILURE`` report listing what did
+    and did not complete, then exits with a non-zero status.
+
+    Args:
+        plan: Plan returned by ``_plan_apply_batch``.
+        project_id: Resolved project slug.
+
+    Raises:
+        typer.Exit: With code 1 on any apply or upload failure, after
+            reporting which resources were touched and which were left
+            in partial state.
+    """
     client = get_client()
     project = client.project(project_id)
 
-    applied_count = 0
-    for planned in plan.resources:
-        if planned.upload is not None:
-            try:
-                client.upload_file(planned.upload.name, planned.upload.content, planned.upload.content_type)
-            except httpx.HTTPStatusError as e:
-                console.print(f"[red]Error uploading file for {planned.resource_id}:[/red] {_format_api_error(e)}")
-                raise typer.Exit(1) from e
+    applied: list[tuple[str, str]] = []
+    uploaded: list[str] = []
+    pending_uploads: list[_PlannedResource] = []
 
+    for planned in plan.resources:
         try:
             result = project.apply_resource(cast(Any, planned.payload))
         except httpx.HTTPStatusError as e:
             console.print(f"[red]Error applying {planned.resource_id}:[/red] {_format_api_error(e)}")
+            _report_partial_apply_failure(plan, applied, uploaded, failed_resource=planned.resource_id)
             raise typer.Exit(1) from e
 
         applied_id = f"{result['provider']}/{result['resource']}/{result['name']}"
+        applied.append((planned.resource_id, result["lifecycle_state"]))
         print(f"Applied {applied_id} {format_state(result['lifecycle_state'])}")
-        applied_count += 1
 
-    console.print(f"[green]Applied {applied_count} resource(s) to project '{project_id}'.[/green]")
+        if planned.upload is not None:
+            pending_uploads.append(planned)
+
+    for planned in pending_uploads:
+        upload = planned.upload
+        if upload is None:
+            continue
+        try:
+            client.upload_file(upload.name, upload.content, upload.content_type)
+        except httpx.HTTPStatusError as e:
+            console.print(f"[red]Error uploading file for {planned.resource_id}:[/red] {_format_api_error(e)}")
+            _report_partial_apply_failure(plan, applied, uploaded, failed_resource=planned.resource_id)
+            raise typer.Exit(1) from e
+        uploaded.append(planned.resource_id)
+
+    console.print(f"[green]Applied {len(applied)} resource(s) to project '{project_id}'.[/green]")
+
+
+def _report_partial_apply_failure(
+    plan: _ApplyPlan,
+    applied: list[tuple[str, str]],
+    uploaded: list[str],
+    *,
+    failed_resource: str,
+) -> None:
+    """Print a loud report when an apply batch fails mid-flight.
+
+    The CLI has no atomic multi-resource apply endpoint, so a
+    mid-batch failure leaves the server in partial state. Callers
+    and humans both need to see exactly what made it through so they
+    can reconcile manually.
+
+    Args:
+        plan: Plan that was executing when the failure occurred.
+        applied: Resources that were successfully applied, as a list
+            of ``(resource_id, lifecycle_state)`` tuples.
+        uploaded: Resource IDs whose file bytes were uploaded.
+        failed_resource: Resource ID whose apply or upload failed.
+    """
+    all_ids = [p.resource_id for p in plan.resources]
+    applied_ids = {rid for rid, _ in applied}
+    uploaded_ids = set(uploaded)
+
+    not_applied = [rid for rid in all_ids if rid not in applied_ids]
+    orphan_uploads = [rid for rid in applied_ids if rid not in uploaded_ids and _needs_upload(plan, rid)]
+
+    console.print()
+    console.print("[red bold]PARTIAL APPLY FAILURE[/red bold]")
+    console.print(
+        f"[red]The batch failed at [bold]{failed_resource}[/bold]. "
+        "Some resources are already applied and may need manual reconciliation.[/red]"
+    )
+
+    console.print()
+    console.print(f"[bold]Applied ({len(applied)}):[/bold]")
+    if applied:
+        for rid, state in applied:
+            console.print(f"  [green]+[/green] {rid} ({state})")
+    else:
+        console.print("  [dim](none)[/dim]")
+
+    console.print()
+    console.print(f"[bold]Not applied ({len(not_applied)}):[/bold]")
+    if not_applied:
+        for rid in not_applied:
+            console.print(f"  [red]-[/red] {rid}")
+    else:
+        console.print("  [dim](none)[/dim]")
+
+    if orphan_uploads:
+        console.print()
+        console.print("[yellow bold]Orphaned pragma/file applies without uploaded bytes:[/yellow bold]")
+        for rid in orphan_uploads:
+            console.print(f"  [yellow]![/yellow] {rid}")
+        console.print("  [yellow]These resources reference file content that was never uploaded.[/yellow]")
+        console.print("  [yellow]Re-run apply once the underlying issue is resolved.[/yellow]")
+
+    console.print()
+
+
+def _needs_upload(plan: _ApplyPlan, resource_id: str) -> bool:
+    """Return True if ``resource_id`` in ``plan`` has a pending file upload.
+
+    Args:
+        plan: Plan to search.
+        resource_id: Resource identifier to look up.
+
+    Returns:
+        True if the planned resource has an associated ``_PendingUpload``.
+    """
+    for planned in plan.resources:
+        if planned.resource_id == resource_id:
+            return planned.upload is not None
+    return False
 
 
 @app.command()
