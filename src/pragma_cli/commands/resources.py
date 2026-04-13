@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, cast
 
 import httpx
 import typer
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pragma_sdk import ProjectMismatchError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from rich import print
 from rich.console import Console
 from rich.markup import escape
@@ -50,10 +52,53 @@ def _resource_payload(resource: dict[str, Any], project_id: str) -> _ScopedResou
 
     Returns:
         Validated project-scoped payload ready for SDK submission.
+
+    Raises:
+        ProjectMismatchError: If the document declares a different project_id.
     """
     payload = dict(resource)
+    declared = payload.get("project_id")
+    if declared is not None and declared != project_id:
+        raise ProjectMismatchError(project_id, declared)
+
     payload.setdefault("project_id", project_id)
     return _ScopedResourcePayload.model_validate(payload)
+
+
+@dataclass
+class _PendingUpload:
+    """Planned file upload that has been read but not yet sent to the API."""
+
+    name: str
+    content: bytes
+    content_type: str
+
+
+@dataclass
+class _PlannedResource:
+    """A single resource document that has been pre-validated for apply."""
+
+    resource_id: str
+    payload: _ScopedResourcePayload
+    upload: _PendingUpload | None = None
+
+
+@dataclass
+class _PlanError:
+    """Structured per-document error discovered during planning."""
+
+    source: str
+    index: int
+    resource_id: str
+    message: str
+
+
+@dataclass
+class _ApplyPlan:
+    """Result of pre-validating a batch of resource documents."""
+
+    resources: list[_PlannedResource] = field(default_factory=list)
+    errors: list[_PlanError] = field(default_factory=list)
 
 
 def _parse_resource_id(resource_id: str) -> tuple[str, str, str]:
@@ -143,133 +188,125 @@ def _resolve_path(path_str: str, base_dir: Path) -> Path:
     return file_path
 
 
-def _resolve_at_references(value: object, base_dir: Path) -> object:
-    """Recursively resolve @ file references in any dict/list structure.
+def _plan_file_upload(resource: dict, base_dir: Path) -> tuple[dict, _PendingUpload]:
+    """Read a pragma/file resource's ``@path`` content into memory.
 
-    String values starting with '@' are replaced with the contents of the
-    referenced file (read as text). The '@' prefix is stripped to get the
-    file path. Relative paths are resolved against base_dir.
+    Callers must ensure the resource has ``config.content`` starting
+    with ``@``. No network calls are made.
+
+    Args:
+        resource: Resource dictionary from YAML.
+        base_dir: Base directory for resolving relative paths.
+
+    Returns:
+        Tuple of (resource dict with ``content`` stripped, pending upload).
+
+    Raises:
+        ValueError: If the resource is missing required fields, the file
+            cannot be found, or the file cannot be read.
+    """
+    config = resource["config"]
+    content = config["content"]
+
+    content_type = config.get("content_type")
+    if not content_type:
+        raise ValueError("content_type is required for pragma/file resources with @path syntax")
+
+    name = resource.get("name")
+    if not name:
+        raise ValueError("Resource name is required for pragma/file resources")
+
+    file_path = _resolve_path(content[1:], base_dir)
+    if not file_path.exists():
+        raise ValueError(f"File not found: {file_path}")
+
+    try:
+        file_content = file_path.read_bytes()
+    except OSError as e:
+        raise ValueError(f"Cannot read file {file_path}: {e}") from e
+
+    stripped_resource = resource.copy()
+    stripped_resource["config"] = {k: v for k, v in config.items() if k != "content"}
+
+    return stripped_resource, _PendingUpload(name=name, content=file_content, content_type=content_type)
+
+
+def _plan_resource_file_references(resource: dict, base_dir: Path) -> tuple[dict, _PendingUpload | None]:
+    """Prepare a resource document for submission without side effects.
+
+    For pragma/file resources with an @path reference, reads the
+    referenced bytes into memory and returns them as a pending upload.
+    For all other resources, recursively resolves @path strings in the
+    config into file contents (text) inline.
+
+    Args:
+        resource: Resource dictionary from YAML.
+        base_dir: Base directory for resolving relative paths.
+
+    Returns:
+        Tuple of (prepared resource dict, optional pending upload).
+
+    Raises:
+        ValueError: If file references are missing or cannot be read.
+    """
+    provider = resource.get("provider")
+    resource_type = resource.get("resource")
+
+    if provider == "pragma" and resource_type == "file":
+        config = resource.get("config")
+        if isinstance(config, dict):
+            content = config.get("content")
+            if isinstance(content, str) and content.startswith("@"):
+                stripped, upload = _plan_file_upload(resource, base_dir)
+                return stripped, upload
+        return resource, None
+
+    config = resource.get("config")
+    if config and isinstance(config, dict):
+        resolved_resource = resource.copy()
+        try:
+            resolved_resource["config"] = _resolve_at_references_pure(config, base_dir)
+        except FileNotFoundError as e:
+            raise ValueError(str(e)) from e
+        except OSError as e:
+            raise ValueError(str(e)) from e
+        return resolved_resource, None
+
+    return resource, None
+
+
+def _resolve_at_references_pure(value: object, base_dir: Path) -> object:
+    """Side-effect-free recursive ``@path`` resolver.
+
+    Raises standard filesystem exceptions instead of emitting CLI
+    errors so that bulk planning can aggregate failures before any
+    network calls are made. The caller is expected to catch both
+    ``FileNotFoundError`` (missing file) and generic ``OSError``
+    (permission, etc.) raised from ``read_text``.
 
     Args:
         value: Any value from a config structure (dict, list, str, etc.).
         base_dir: Base directory for resolving relative file paths.
 
     Returns:
-        The value with all @ references resolved to file contents.
+        The value with all ``@`` references resolved to file contents.
 
     Raises:
-        typer.Exit: If a referenced file is not found or cannot be read.
-    """
+        FileNotFoundError: If a referenced file does not exist.
+    """  # noqa: DOC502
     if isinstance(value, dict):
-        return {k: _resolve_at_references(v, base_dir) for k, v in value.items()}
+        return {k: _resolve_at_references_pure(v, base_dir) for k, v in value.items()}
 
     if isinstance(value, list):
-        return [_resolve_at_references(item, base_dir) for item in value]
+        return [_resolve_at_references_pure(item, base_dir) for item in value]
 
     if isinstance(value, str) and value.startswith("@"):
         file_path = _resolve_path(value[1:], base_dir)
-
         if not file_path.exists():
-            console.print(f"[red]Error:[/red] File not found: {file_path}")
-            raise typer.Exit(1)
-
-        try:
-            return file_path.read_text()
-        except OSError as e:
-            console.print(f"[red]Error:[/red] Cannot read file {file_path}: {e}")
-            raise typer.Exit(1) from e
+            raise FileNotFoundError(f"File not found: {file_path}")
+        return file_path.read_text()
 
     return value
-
-
-def _resolve_file_references(resource: dict, base_dir: Path) -> dict:
-    """Resolve file references in file resource config.
-
-    For pragma/file resources, if config.content starts with '@', reads
-    the file as binary and uploads it via the API.
-
-    Args:
-        resource: Resource dictionary from YAML.
-        base_dir: Base directory for resolving relative paths.
-
-    Returns:
-        Resource dictionary with content removed (file uploaded separately).
-
-    Raises:
-        typer.Exit: If file not found, cannot be read, or upload fails.
-    """
-    config = resource.get("config")
-    if not config or not isinstance(config, dict):
-        return resource
-
-    content = config.get("content")
-    if not isinstance(content, str) or not content.startswith("@"):
-        return resource
-
-    content_type = config.get("content_type")
-    if not content_type:
-        console.print("[red]Error:[/red] content_type is required for pragma/file resources with @path syntax")
-        raise typer.Exit(1)
-
-    file_path = _resolve_path(content[1:], base_dir)
-
-    if not file_path.exists():
-        console.print(f"[red]Error:[/red] File not found: {file_path}")
-        raise typer.Exit(1)
-
-    try:
-        file_content = file_path.read_bytes()
-    except OSError as e:
-        console.print(f"[red]Error:[/red] Cannot read file {file_path}: {e}")
-        raise typer.Exit(1) from e
-
-    name = resource.get("name")
-    if not name:
-        console.print("[red]Error:[/red] Resource name is required for pragma/file resources")
-        raise typer.Exit(1)
-
-    try:
-        client = get_client()
-        client.upload_file(name, file_content, content_type)
-    except httpx.HTTPStatusError as e:
-        console.print(f"[red]Error:[/red] Failed to upload file: {_format_api_error(e)}")
-        raise typer.Exit(1) from e
-
-    resolved_resource = resource.copy()
-    resolved_config = {k: v for k, v in config.items() if k != "content"}
-    resolved_resource["config"] = resolved_config
-
-    return resolved_resource
-
-
-def resolve_file_references(resource: dict, base_dir: Path) -> dict:
-    """Resolve file references in resource config.
-
-    For pragmatiks/pragma provider with file resource type, handles binary
-    upload via _resolve_file_references. For all other resources,
-    recursively resolves '@path' strings in the config to file contents.
-
-    Args:
-        resource: Resource dictionary from YAML.
-        base_dir: Base directory for resolving relative paths.
-
-    Returns:
-        Resource dictionary with file references resolved.
-    """  # noqa: DOC502
-    provider = resource.get("provider")
-    resource_type = resource.get("resource")
-
-    if provider == "pragma" and resource_type == "file":
-        return _resolve_file_references(resource, base_dir)
-
-    config = resource.get("config")
-
-    if config and isinstance(config, dict):
-        resolved_resource = resource.copy()
-        resolved_resource["config"] = _resolve_at_references(config, base_dir)
-        return resolved_resource
-
-    return resource
 
 
 def format_state(state: str) -> str:
@@ -641,6 +678,96 @@ def describe(
     output_data(res, output, table_renderer=_print_resource_details)
 
 
+def _plan_apply_batch(
+    files: list[typer.FileText],
+    project_id: str,
+    *,
+    draft: bool,
+) -> _ApplyPlan:
+    """Parse, validate, and plan every document across all supplied files.
+
+    All documents are parsed up front, file references are read into
+    memory (without uploading), project_id is validated, and each
+    resource payload is validated through Pydantic. No network calls
+    are made. Errors are collected per document so the caller sees
+    the full picture before anything is applied.
+
+    Args:
+        files: YAML files supplied on the command line.
+        project_id: Resolved project slug for the active command.
+        draft: When False, injects ``lifecycle_state=pending``.
+
+    Returns:
+        Fully-planned batch with either a populated resource list or
+        a populated error list.
+    """
+    plan = _ApplyPlan()
+
+    for f in files:
+        source = f.name
+        base_dir = Path(source).parent
+
+        try:
+            documents = list(yaml.safe_load_all(f.read()))
+        except yaml.YAMLError as e:
+            plan.errors.append(_PlanError(source=source, index=0, resource_id="<yaml>", message=f"Invalid YAML: {e}"))
+            continue
+
+        for index, document in enumerate(documents):
+            if document is None:
+                continue
+            if not isinstance(document, dict):
+                plan.errors.append(
+                    _PlanError(
+                        source=source,
+                        index=index,
+                        resource_id="<unknown>",
+                        message="Expected a mapping at the document root.",
+                    )
+                )
+                continue
+
+            resource_id = f"{document.get('provider', '?')}/{document.get('resource', '?')}/{document.get('name', '?')}"
+
+            try:
+                prepared, upload = _plan_resource_file_references(document, base_dir)
+            except ValueError as e:
+                plan.errors.append(_PlanError(source=source, index=index, resource_id=resource_id, message=str(e)))
+                continue
+
+            if not draft:
+                prepared["lifecycle_state"] = "pending"
+
+            try:
+                payload = _resource_payload(prepared, project_id)
+            except ProjectMismatchError as e:
+                plan.errors.append(_PlanError(source=source, index=index, resource_id=resource_id, message=str(e)))
+                continue
+            except ValidationError as e:
+                plan.errors.append(_PlanError(source=source, index=index, resource_id=resource_id, message=str(e)))
+                continue
+
+            plan.resources.append(_PlannedResource(resource_id=resource_id, payload=payload, upload=upload))
+
+    return plan
+
+
+def _report_plan_errors(plan: _ApplyPlan) -> None:
+    """Print every planning error and exit without side effects.
+
+    Args:
+        plan: Failed plan containing one or more per-document errors.
+
+    Raises:
+        typer.Exit: Always exits with code 2.
+    """
+    console.print("[red]Error:[/red] Rejected batch before any resources were applied.")
+    for err in plan.errors:
+        location = f"{err.source} (document {err.index + 1}, {err.resource_id})"
+        console.print(f"  [red]-[/red] {location}: {err.message}")
+    raise typer.Exit(2)
+
+
 @app.command()
 def apply(
     ctx: typer.Context,
@@ -662,12 +789,17 @@ def apply(
     By default, resources are queued for immediate processing (deployed).
     Use --draft to keep resources in draft state without deploying.
 
+    The project context follows the standard chain:
+    ``--project`` flag > ``PRAGMA_PROJECT`` env > persistent default.
+    Any document whose ``project_id`` does not match the resolved
+    project is rejected before any side effects.
+
     For pragma/secret resources, file references in config.data values
     are resolved before submission. Use '@path/to/file' syntax to inline
     file contents.
 
     Raises:
-        typer.Exit: If the apply operation fails.
+        typer.Exit: If planning fails or the apply operation fails.
     """
     files = file or positional_file
     if not files:
@@ -675,32 +807,38 @@ def apply(
         raise typer.Exit(1)
 
     project_id = resolve_project(ctx)
-    project = get_client().project(project_id)
-    for f in files:
-        base_dir = Path(f.name).parent
+
+    plan = _plan_apply_batch(files, project_id, draft=draft)
+    if plan.errors:
+        _report_plan_errors(plan)
+
+    if not plan.resources:
+        console.print("[dim]No resources to apply.[/dim]")
+        return
+
+    client = get_client()
+    project = client.project(project_id)
+
+    applied_count = 0
+    for planned in plan.resources:
+        if planned.upload is not None:
+            try:
+                client.upload_file(planned.upload.name, planned.upload.content, planned.upload.content_type)
+            except httpx.HTTPStatusError as e:
+                console.print(f"[red]Error uploading file for {planned.resource_id}:[/red] {_format_api_error(e)}")
+                raise typer.Exit(1) from e
 
         try:
-            resources = list(yaml.safe_load_all(f.read()))
-        except yaml.YAMLError as e:
-            console.print(f"[red]Error:[/red] Invalid YAML in {f.name}: {e}")
+            result = project.apply_resource(cast(Any, planned.payload))
+        except httpx.HTTPStatusError as e:
+            console.print(f"[red]Error applying {planned.resource_id}:[/red] {_format_api_error(e)}")
             raise typer.Exit(1) from e
 
-        for resource in resources:
-            if not isinstance(resource, dict):
-                continue
+        applied_id = f"{result['provider']}/{result['resource']}/{result['name']}"
+        print(f"Applied {applied_id} {format_state(result['lifecycle_state'])}")
+        applied_count += 1
 
-            resource = resolve_file_references(resource, base_dir)
-            if not draft:
-                resource["lifecycle_state"] = "pending"
-            res_id = f"{resource.get('provider', '?')}/{resource.get('resource', '?')}/{resource.get('name', '?')}"
-            try:
-                payload = _resource_payload(resource, project_id)
-                result = project.apply_resource(cast(Any, payload))
-                res_id = f"{result['provider']}/{result['resource']}/{result['name']}"
-                print(f"Applied {res_id} {format_state(result['lifecycle_state'])}")
-            except httpx.HTTPStatusError as e:
-                console.print(f"[red]Error applying {res_id}:[/red] {_format_api_error(e)}")
-                raise typer.Exit(1) from e
+    console.print(f"[green]Applied {applied_count} resource(s) to project '{project_id}'.[/green]")
 
 
 @app.command()
