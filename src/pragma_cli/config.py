@@ -102,29 +102,18 @@ def _parse_config_text(text: str) -> PragmaConfig:
         raise MalformedConfigError(f"config file at {CONFIG_PATH} is malformed: {e}") from e
 
 
-def _open_lock_file() -> int:
-    """Open the config lock file, refusing to follow symlinks.
+def _validate_lock_fd(fd: int) -> None:
+    """Validate that ``fd`` refers to a regular file and close it on failure.
 
-    Uses ``O_NOFOLLOW`` so an attacker cannot point ``config.lock`` at
-    ``config`` (or anywhere else) to break mutual exclusion. Verifies
-    that the opened fd refers to a regular file — a symlink attack
-    would cause the open to fail with ``ELOOP``, but defensive checks
-    for other special files (directories, pipes, devices) are also
-    made.
-
-    Returns:
-        File descriptor for the lock file, opened O_RDWR.
+    Args:
+        fd: Already-opened lock file descriptor.
 
     Raises:
-        RuntimeError: If the lock path is not a regular file.
-        OSError: If the lock file cannot be opened (e.g., ELOOP when
-            the path is a symlink, or permission errors).
+        RuntimeError: If the fd does not refer to a regular file. The
+            fd is closed before raising.
+        OSError: If ``os.fstat`` fails. The fd is closed before
+            propagating.
     """
-    fd = os.open(
-        CONFIG_LOCK_PATH,
-        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-        0o600,
-    )
     try:
         st = os.fstat(fd)
     except OSError:
@@ -138,6 +127,55 @@ def _open_lock_file() -> int:
             "This may indicate tampering or a misconfigured config directory."
         )
 
+
+def _open_lock_file_for_write() -> int:
+    """Open the config lock file for writing, creating it if missing.
+
+    Uses ``O_NOFOLLOW`` so an attacker cannot point ``config.lock`` at
+    another file to break mutual exclusion. Verifies that the opened
+    fd refers to a regular file — ``ELOOP`` from the open itself
+    blocks symlink attacks, and the ``fstat`` check defends against
+    directories, pipes, and device nodes pre-planted at the lock path.
+
+    Returns:
+        File descriptor opened ``O_RDWR | O_CREAT | O_NOFOLLOW``.
+
+    Raises:
+        RuntimeError: If the lock path is not a regular file.
+        OSError: If the lock file cannot be created or opened.
+    """  # noqa: DOC502
+    fd = os.open(
+        CONFIG_LOCK_PATH,
+        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+        0o600,
+    )
+    _validate_lock_fd(fd)
+    return fd
+
+
+def _open_lock_file_for_read() -> int:
+    """Open an existing config lock file for a shared read lock.
+
+    Deliberately omits ``O_CREAT`` so the read path never writes to
+    disk. On read-only homes (CI sandboxes, restricted NFS) this lets
+    every CLI command that only reads config complete successfully,
+    even when ``config.lock`` has never been created. Callers fall
+    back to lock-free reads on ``FileNotFoundError`` because the
+    absence of the lock file implies no concurrent writer exists.
+
+    Returns:
+        File descriptor opened ``O_RDONLY | O_NOFOLLOW``.
+
+    Raises:
+        RuntimeError: If the lock path is not a regular file.
+        FileNotFoundError: If ``config.lock`` does not yet exist.
+        OSError: If the lock file cannot be opened for any other reason.
+    """  # noqa: DOC502
+    fd = os.open(
+        CONFIG_LOCK_PATH,
+        os.O_RDONLY | os.O_NOFOLLOW,
+    )
+    _validate_lock_fd(fd)
     return fd
 
 
@@ -152,10 +190,14 @@ def _config_lock(exclusive: bool) -> Iterator[None]:
     cannot observe a truncated file and writers cannot lose each
     other's updates.
 
-    Read path (shared lock) is gated: if the config directory does
-    not exist and this is a shared lock, the caller short-circuits
-    without creating any on-disk state. Only the exclusive lock
-    (writer) may create the directory or lock file.
+    Write path (exclusive lock) creates the config directory and the
+    lock file on demand. Read path (shared lock) never creates
+    on-disk state: it opens an existing lock file for read, and when
+    ``config.lock`` is absent it yields without acquiring a lock. The
+    absence of the lock file means no concurrent writer could have
+    created one, so lock-free reads are safe — and this is the only
+    way ``pragma`` stays usable on read-only homes (CI sandboxes,
+    restricted NFS mounts, read-only containers).
 
     Args:
         exclusive: ``True`` for a writer lock, ``False`` for a shared
@@ -166,10 +208,16 @@ def _config_lock(exclusive: bool) -> Iterator[None]:
     """
     if exclusive:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        fd = _open_lock_file_for_write()
+    else:
+        try:
+            fd = _open_lock_file_for_read()
+        except FileNotFoundError:
+            yield
+            return
 
-    fd = _open_lock_file()
     lock_op = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-    lock_handle = os.fdopen(fd, "r+")
+    lock_handle = os.fdopen(fd, "r+" if exclusive else "r")
     try:
         fcntl.flock(lock_handle.fileno(), lock_op)
         try:
