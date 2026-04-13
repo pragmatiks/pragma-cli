@@ -300,6 +300,32 @@ def _format_api_error(error: httpx.HTTPStatusError) -> str:
     return "".join(parts)
 
 
+def _format_operation_error(error: Exception) -> str:
+    """Render any apply/upload failure into a single user-facing line.
+
+    Discriminates between HTTP-level errors (which get the detailed
+    response-body formatter), transport-level errors (timeouts,
+    connection failures, stream errors — exception type name helps
+    distinguish them), and project-scoping mismatches.
+
+    Args:
+        error: Exception raised by a resource apply or file upload.
+
+    Returns:
+        Single-line error message suitable for Rich-markup output.
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        return _format_api_error(error)
+
+    if isinstance(error, httpx.HTTPError):
+        return f"{type(error).__name__}: {error}"
+
+    if isinstance(error, ProjectMismatchError):
+        return str(error)
+
+    return f"{type(error).__name__}: {error}"
+
+
 def _resolve_path(path_str: str, base_dir: Path) -> Path:
     """Resolve a relative ``@path`` reference confined to ``base_dir``.
 
@@ -1038,9 +1064,11 @@ def _execute_plan(plan: _ApplyPlan, project_id: str) -> None:
     Ordering strategy: apply every resource first, then upload file
     bytes for ``pragma/file`` resources afterwards. This keeps a
     failing mid-batch apply from leaking uploaded secrets to the
-    server. If an apply or upload fails mid-flight, the function
-    prints a loud ``PARTIAL APPLY FAILURE`` report listing what did
-    and did not complete, then exits with a non-zero status.
+    server. If an apply or upload fails mid-flight — whether through
+    an HTTP error, a transport error (connect/timeout/read/write),
+    or a project-scoping mismatch — the function prints a loud
+    ``PARTIAL APPLY FAILURE`` report listing what did and did not
+    complete, then exits with a non-zero status.
 
     Args:
         plan: Plan returned by ``_plan_apply_batch``.
@@ -1061,8 +1089,8 @@ def _execute_plan(plan: _ApplyPlan, project_id: str) -> None:
     for planned in plan.resources:
         try:
             result = project.apply_resource(cast(Any, planned.payload))
-        except httpx.HTTPStatusError as e:
-            console.print(f"[red]Error applying {planned.resource_id}:[/red] {_format_api_error(e)}")
+        except (httpx.HTTPError, ProjectMismatchError) as e:
+            console.print(f"[red]Error applying {planned.resource_id}:[/red] {_format_operation_error(e)}")
             _report_partial_apply_failure(plan, applied, uploaded, failed_resource=planned.resource_id)
             raise typer.Exit(1) from e
 
@@ -1079,8 +1107,8 @@ def _execute_plan(plan: _ApplyPlan, project_id: str) -> None:
             continue
         try:
             client.upload_file(upload.name, upload.content, upload.content_type)
-        except httpx.HTTPStatusError as e:
-            console.print(f"[red]Error uploading file for {planned.resource_id}:[/red] {_format_api_error(e)}")
+        except (httpx.HTTPError, ProjectMismatchError) as e:
+            console.print(f"[red]Error uploading file for {planned.resource_id}:[/red] {_format_operation_error(e)}")
             _report_partial_apply_failure(plan, applied, uploaded, failed_resource=planned.resource_id)
             raise typer.Exit(1) from e
         uploaded.append(planned.resource_id)
@@ -1100,7 +1128,9 @@ def _report_partial_apply_failure(
     The CLI has no atomic multi-resource apply endpoint, so a
     mid-batch failure leaves the server in partial state. Callers
     and humans both need to see exactly what made it through so they
-    can reconcile manually.
+    can reconcile manually. The failed resource is reported as a
+    dedicated ``Failed`` section so it is visually distinct from the
+    rest of the untouched batch listed under ``Not attempted``.
 
     Args:
         plan: Plan that was executing when the failure occurred.
@@ -1113,7 +1143,7 @@ def _report_partial_apply_failure(
     applied_ids = {rid for rid, _ in applied}
     uploaded_ids = set(uploaded)
 
-    not_applied = [rid for rid in all_ids if rid not in applied_ids]
+    not_attempted = [rid for rid in all_ids if rid not in applied_ids and rid != failed_resource]
     orphan_uploads = [rid for rid in applied_ids if rid not in uploaded_ids and _needs_upload(plan, rid)]
 
     console.print()
@@ -1132,10 +1162,14 @@ def _report_partial_apply_failure(
         console.print("  [dim](none)[/dim]")
 
     console.print()
-    console.print(f"[bold]Not applied ({len(not_applied)}):[/bold]")
-    if not_applied:
-        for rid in not_applied:
-            console.print(f"  [red]-[/red] {rid}")
+    console.print("[bold]Failed (1):[/bold]")
+    console.print(f"  [red]x[/red] {failed_resource}")
+
+    console.print()
+    console.print(f"[bold]Not attempted ({len(not_attempted)}):[/bold]")
+    if not_attempted:
+        for rid in not_attempted:
+            console.print(f"  [dim]-[/dim] {rid}")
     else:
         console.print("  [dim](none)[/dim]")
 
