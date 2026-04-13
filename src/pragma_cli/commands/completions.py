@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import click
-import typer
 from pragma_sdk import PragmaClient
 
 from pragma_cli.config import get_current_context
-from pragma_cli.project_context import resolve_project
+from pragma_cli.project_context import resolve_project_or_none
 
 
 def _get_completion_client(ctx: click.Context | None = None) -> PragmaClient | None:
@@ -73,10 +72,13 @@ def completion_resource_ids(ctx: click.Context, incomplete: str):
     client = _get_completion_client(ctx)
     if client is None:
         return
-    try:
-        project = client.project(resolve_project(ctx))
-    except typer.Exit:
+
+    project_slug = resolve_project_or_none(ctx)
+    if project_slug is None:
         return
+
+    try:
+        project = client.project(project_slug)
     except Exception:
         return
 
