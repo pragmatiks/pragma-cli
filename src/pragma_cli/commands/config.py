@@ -3,7 +3,7 @@
 import typer
 from rich import print
 
-from pragma_cli.config import ContextConfig, get_current_context, load_config, save_config
+from pragma_cli.config import ContextConfig, get_current_context, load_config, update_config
 
 
 app = typer.Typer()
@@ -16,14 +16,14 @@ def use_context(context_name: str):
     Raises:
         typer.Exit: If context not found.
     """
-    config = load_config()
-    if context_name not in config.contexts:
-        print(f"[red]\u2717[/red] Context '{context_name}' not found")
-        print(f"Available contexts: {', '.join(config.contexts.keys())}")
-        raise typer.Exit(1)
+    with update_config() as config:
+        if context_name not in config.contexts:
+            print(f"[red]\u2717[/red] Context '{context_name}' not found")
+            print(f"Available contexts: {', '.join(config.contexts.keys())}")
+            raise typer.Exit(1)
 
-    config.current_context = context_name
-    save_config(config)
+        config.current_context = context_name
+
     print(f"[green]\u2713[/green] Switched to context '{context_name}'")
 
 
@@ -55,16 +55,15 @@ def set_context(
     auth_url: str | None = typer.Option(None, help="Auth endpoint URL (derived from api_url if not set)"),
 ):
     """Create or update a context."""
-    config = load_config()
-    existing = config.contexts.get(name)
-    config.contexts[name] = ContextConfig(
-        api_url=api_url,
-        auth_url=auth_url,
-        project=existing.project if existing else None,
-    )
-    save_config(config)
+    with update_config() as config:
+        existing = config.contexts.get(name)
+        config.contexts[name] = ContextConfig(
+            api_url=api_url,
+            auth_url=auth_url,
+            project=existing.project if existing else None,
+        )
+        effective_auth = config.contexts[name].get_auth_url()
 
-    effective_auth = config.contexts[name].get_auth_url()
     print(f"[green]\u2713[/green] Context '{name}' configured")
     print(f"  API URL:  {api_url}")
     print(f"  Auth URL: {effective_auth}")
@@ -77,15 +76,15 @@ def delete_context(name: str):
     Raises:
         typer.Exit: If context not found or is current context.
     """
-    config = load_config()
-    if name not in config.contexts:
-        print(f"[red]\u2717[/red] Context '{name}' not found")
-        raise typer.Exit(1)
+    with update_config() as config:
+        if name not in config.contexts:
+            print(f"[red]\u2717[/red] Context '{name}' not found")
+            raise typer.Exit(1)
 
-    if name == config.current_context:
-        print("[red]\u2717[/red] Cannot delete current context")
-        raise typer.Exit(1)
+        if name == config.current_context:
+            print("[red]\u2717[/red] Cannot delete current context")
+            raise typer.Exit(1)
 
-    del config.contexts[name]
-    save_config(config)
+        del config.contexts[name]
+
     print(f"[green]\u2713[/green] Context '{name}' deleted")

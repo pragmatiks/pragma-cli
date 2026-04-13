@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from pragma_cli import get_client
-from pragma_cli.config import ContextConfig, load_config, save_config
+from pragma_cli.config import ContextConfig, load_config, update_config
 from pragma_cli.helpers import OutputFormat, output_data
 
 
@@ -204,14 +204,15 @@ def use_project(
     Raises:
         typer.Exit: If the active context does not exist in the config.
     """
-    config = load_config()
     context_name = _active_context_name(ctx)
-    if context_name not in config.contexts:
-        console.print(f"[red]Error:[/red] Context '{context_name}' not found in configuration.")
-        raise typer.Exit(2)
 
-    config.contexts[context_name].project = slug
-    save_config(config)
+    with update_config() as config:
+        if context_name not in config.contexts:
+            console.print(f"[red]Error:[/red] Context '{context_name}' not found in configuration.")
+            raise typer.Exit(2)
+
+        config.contexts[context_name].project = slug
+
     console.print(f"[green]Current project for context '{context_name}':[/green] {slug}")
 
 
