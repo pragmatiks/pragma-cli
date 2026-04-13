@@ -330,8 +330,34 @@ def _format_operation_error(error: Exception) -> str:
     return f"{type(error).__name__}: {error}"
 
 
-def _resolve_path(path_str: str, base_dir: Path) -> Path:
-    """Resolve a relative ``@path`` reference confined to ``base_dir``.
+def _describe_file_type(mode: int) -> str:
+    """Describe the file type of a stat ``st_mode`` for error messages.
+
+    Args:
+        mode: ``st_mode`` field from a stat result.
+
+    Returns:
+        Lowercase short label such as ``"FIFO"``, ``"socket"``,
+        ``"directory"``, ``"character device"``, ``"block device"``,
+        or ``"unknown"`` when the type does not match a known kind.
+    """
+    if stat.S_ISFIFO(mode):
+        return "FIFO"
+    if stat.S_ISSOCK(mode):
+        return "socket"
+    if stat.S_ISDIR(mode):
+        return "directory"
+    if stat.S_ISCHR(mode):
+        return "character device"
+    if stat.S_ISBLK(mode):
+        return "block device"
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    return "unknown"
+
+
+def _open_and_read_file_reference(path_str: str, base_dir: Path) -> tuple[Path, bytes]:
+    """Open and read a ``@path`` reference atomically through one fd.
 
     Security model: ``@path`` references in manifests are a data-flow
     from a potentially untrusted YAML author to the local filesystem.
@@ -339,16 +365,21 @@ def _resolve_path(path_str: str, base_dir: Path) -> Path:
     local secrets (``~/.ssh/id_rsa``, ``~/.aws/credentials``, etc.) by
     pointing ``@path`` at them — the CLI would read the bytes during
     planning and upload them during apply. To block that class of
-    attack, this resolver enforces six rules:
+    attack, this loader enforces seven rules:
 
     1. Absolute paths are rejected.
     2. Raw ``..`` segments in the path string are rejected.
     3. The resolved path must land inside ``base_dir``.
     4. Symlinks are followed before the containment check so symlink
-       escapes (``base_dir/link`` -> ``/etc/passwd``) are rejected too.
-    5. Only regular files are accepted — FIFOs, sockets, devices, and
+       escapes (``base_dir/link`` -> ``/etc/passwd``) are rejected.
+    5. The file is opened with ``O_NOFOLLOW`` and validated via
+       ``fstat`` on the same descriptor — type and size checks happen
+       on the exact bytes that are about to be read, closing the
+       stat-to-open TOCTOU race where an attacker swaps the file
+       between the planner's check and the planner's read.
+    6. Only regular files are accepted — FIFOs, sockets, devices, and
        directories would hang or mis-upload the planner.
-    6. Files larger than ``_MAX_FILE_REFERENCE_SIZE`` are rejected so
+    7. Files larger than ``_MAX_FILE_REFERENCE_SIZE`` are rejected so
        a manifest cannot OOM the planner by pointing at a huge blob.
 
     ``~`` expansion is intentionally NOT performed: a tilde should not
@@ -360,12 +391,15 @@ def _resolve_path(path_str: str, base_dir: Path) -> Path:
             stay inside it.
 
     Returns:
-        Absolute, realpath-resolved path inside ``base_dir``.
+        Tuple of ``(resolved_path, file_bytes)``. ``resolved_path`` is
+        the absolute, realpath-resolved path inside ``base_dir`` and
+        is suitable for display in error messages. ``file_bytes`` is
+        the raw file contents read from the validated descriptor.
 
     Raises:
         ValueError: If the path is absolute, contains ``..``, resolves
             outside ``base_dir`` (directly or via symlink), is not a
-            regular file, or exceeds the size limit.
+            regular file, exceeds the size limit, or cannot be opened.
     """
     raw_path = Path(path_str)
 
@@ -395,31 +429,58 @@ def _resolve_path(path_str: str, base_dir: Path) -> Path:
             "refusing to read for security reasons."
         ) from e
 
+    open_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
     try:
-        stat_result = resolved.stat()
+        fd = os.open(resolved, open_flags)
     except OSError as e:
-        raise ValueError(f"Cannot stat @path reference {path_str!r}: {e}") from e
+        raise ValueError(f"Cannot open @path reference {path_str!r}: {e}") from e
 
-    if not stat.S_ISREG(stat_result.st_mode):
-        raise ValueError(
-            f"@path reference {path_str!r} is not a regular file; FIFOs, sockets, devices, and directories are refused."
-        )
+    try:
+        try:
+            st = os.fstat(fd)
+        except OSError as e:
+            raise ValueError(f"Cannot stat @path reference {path_str!r}: {e}") from e
 
-    if stat_result.st_size > _MAX_FILE_REFERENCE_SIZE:
-        limit_mib = _MAX_FILE_REFERENCE_SIZE // (1024 * 1024)
-        size_mib = stat_result.st_size / (1024 * 1024)
-        raise ValueError(f"@path reference {path_str!r} is {size_mib:.1f} MiB, exceeding the {limit_mib} MiB limit.")
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError(
+                f"@path reference {path_str!r} is not a regular file "
+                f"(detected {_describe_file_type(st.st_mode)}); "
+                "FIFOs, sockets, devices, and directories are refused."
+            )
 
-    return resolved
+        if st.st_size > _MAX_FILE_REFERENCE_SIZE:
+            size_mib = st.st_size / (1024 * 1024)
+            limit_mib = _MAX_FILE_REFERENCE_SIZE / (1024 * 1024)
+            raise ValueError(
+                f"@path reference {path_str!r} is {size_mib:.2f} MiB "
+                f"({st.st_size} bytes), exceeding the "
+                f"{limit_mib:.0f} MiB ({_MAX_FILE_REFERENCE_SIZE} bytes) limit."
+            )
+
+        chunks: list[bytes] = []
+        while True:
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError as e:
+                raise ValueError(f"Cannot read @path reference {path_str!r}: {e}") from e
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+
+    return resolved, b"".join(chunks)
 
 
 def _plan_file_upload(resource: dict, base_dir: Path) -> tuple[dict, _PendingUpload]:
     """Read a pragma/file resource's ``@path`` content into memory.
 
     Callers must ensure the resource has ``config.content`` starting
-    with ``@``. ``_resolve_path`` rejects anything that would escape
-    ``base_dir`` (absolute paths, ``..`` traversal, symlink escapes).
-    No network calls are made.
+    with ``@``. ``_open_and_read_file_reference`` rejects anything
+    that would escape ``base_dir`` (absolute paths, ``..`` traversal,
+    symlink escapes) and atomically validates the file type and size
+    against the same descriptor it reads from. No network calls are
+    made.
 
     Args:
         resource: Resource dictionary from YAML.
@@ -444,12 +505,7 @@ def _plan_file_upload(resource: dict, base_dir: Path) -> tuple[dict, _PendingUpl
     if not name:
         raise ValueError("Resource name is required for pragma/file resources")
 
-    file_path = _resolve_path(content[1:], base_dir)
-
-    try:
-        file_content = file_path.read_bytes()
-    except OSError as e:
-        raise ValueError(f"Cannot read file {file_path}: {e}") from e
+    _, file_content = _open_and_read_file_reference(content[1:], base_dir)
 
     stripped_resource = resource.copy()
     stripped_resource["config"] = {k: v for k, v in config.items() if k != "content"}
@@ -501,10 +557,11 @@ def _resolve_at_references_pure(value: object, base_dir: Path) -> object:
     """Side-effect-free recursive ``@path`` resolver.
 
     Raises ``ValueError`` for any path that escapes the manifest
-    directory (absolute, ``..`` traversal, symlink escape) and for
-    missing/unreadable files, so bulk planning can aggregate failures
-    before any network calls are made. The caller is expected to
-    catch ``ValueError`` and surface it as a plan error.
+    directory (absolute, ``..`` traversal, symlink escape), for
+    missing/unreadable files, and for files whose bytes are not
+    valid UTF-8, so bulk planning can aggregate failures before any
+    network calls are made. The caller is expected to catch
+    ``ValueError`` and surface it as a plan error.
 
     Args:
         value: Any value from a config structure (dict, list, str, etc.).
@@ -514,8 +571,8 @@ def _resolve_at_references_pure(value: object, base_dir: Path) -> object:
         The value with all ``@`` references resolved to file contents.
 
     Raises:
-        ValueError: If a referenced file is missing, unreadable, or
-            escapes the manifest directory.
+        ValueError: If a referenced file is missing, unreadable,
+            escapes the manifest directory, or is not valid UTF-8.
     """
     if isinstance(value, dict):
         return {k: _resolve_at_references_pure(v, base_dir) for k, v in value.items()}
@@ -524,11 +581,12 @@ def _resolve_at_references_pure(value: object, base_dir: Path) -> object:
         return [_resolve_at_references_pure(item, base_dir) for item in value]
 
     if isinstance(value, str) and value.startswith("@"):
-        file_path = _resolve_path(value[1:], base_dir)
+        path_str = value[1:]
+        _, file_bytes = _open_and_read_file_reference(path_str, base_dir)
         try:
-            return file_path.read_text()
-        except OSError as e:
-            raise ValueError(f"Cannot read file {file_path}: {e}") from e
+            return file_bytes.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise ValueError(f"@path reference {path_str!r} is not valid UTF-8") from e
 
     return value
 
