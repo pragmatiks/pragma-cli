@@ -7,7 +7,7 @@ import os
 import click
 import typer
 
-from pragma_cli.config import get_current_context
+from pragma_cli.config import MalformedConfigError, get_current_context
 
 
 _MISSING_PROJECT_MESSAGE = (
@@ -24,6 +24,12 @@ def _resolve_project_slug(typer_ctx: typer.Context | click.Context | None) -> st
            completion where the callback never fires).
         2. ``PRAGMA_PROJECT`` environment variable.
         3. Persistent default on the current CLI context.
+
+    All configuration errors (malformed file, missing context, OS
+    failures on the config directory) are swallowed so that shell
+    completion callbacks never print anything to stderr. Defense in
+    depth: ``typer.Exit`` is also caught in case a future refactor
+    reintroduces it through a shared helper.
 
     Args:
         typer_ctx: Active Typer or Click context.
@@ -53,7 +59,7 @@ def _resolve_project_slug(typer_ctx: typer.Context | click.Context | None) -> st
 
     try:
         _, context_config = get_current_context(context_name)
-    except (ValueError, OSError):
+    except (ValueError, OSError, MalformedConfigError, typer.Exit):
         return None
 
     return context_config.project or None
