@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from pragma_cli import get_client
-from pragma_cli.config import ContextConfig, get_current_context, load_config, save_config
+from pragma_cli.config import ContextConfig, load_config, save_config
 from pragma_cli.helpers import OutputFormat, output_data
 
 
@@ -79,14 +79,39 @@ def _project_payload(project: Project) -> dict:
     return project.model_dump(mode="json")
 
 
-def _current_context_config() -> tuple[str, ContextConfig]:
+def _active_context_name(ctx: typer.Context) -> str:
+    """Return the resolved context name for the active CLI invocation.
+
+    Honors the global ``--context``/``-c`` flag by reading the value the
+    root callback stored on ``ctx.obj``. Falls back to the persistent
+    current context when the root callback has not run (e.g. completion).
+
+    Args:
+        ctx: Active Typer context for the invoked command.
+
+    Returns:
+        Context name to operate on.
+    """
+    root_obj = ctx.find_root().obj if ctx is not None else None
+    if isinstance(root_obj, dict):
+        context_name = root_obj.get("context")
+        if context_name:
+            return context_name
+
+    return load_config().current_context
+
+
+def _current_context_config(ctx: typer.Context) -> tuple[str, ContextConfig]:
     """Return the active context and its config object.
+
+    Args:
+        ctx: Active Typer context used to resolve the target context name.
 
     Returns:
         Tuple of context name and mutable context config.
     """
     config = load_config()
-    context_name = config.current_context
+    context_name = _active_context_name(ctx)
     context_config = config.contexts[context_name]
     return context_name, context_config
 
@@ -167,18 +192,35 @@ def delete_project(
 
 @app.command("use")
 def use_project(
+    ctx: typer.Context,
     slug: Annotated[str, typer.Argument(help="Project slug")],
 ) -> None:
-    """Persist the default project on the current CLI context."""
+    """Persist the default project on the current CLI context.
+
+    Honors the global ``--context``/``-c`` flag so that
+    ``pragma -c staging projects use <slug>`` writes to the staging
+    context instead of the persistent current context.
+
+    Raises:
+        typer.Exit: If the active context does not exist in the config.
+    """
     config = load_config()
-    context_name, _ = get_current_context()
+    context_name = _active_context_name(ctx)
+    if context_name not in config.contexts:
+        console.print(f"[red]Error:[/red] Context '{context_name}' not found in configuration.")
+        raise typer.Exit(2)
+
     config.contexts[context_name].project = slug
     save_config(config)
     console.print(f"[green]Current project for context '{context_name}':[/green] {slug}")
 
 
 @app.command("current")
-def current_project() -> None:
-    """Show the current default project for the active context."""
-    _, context_config = _current_context_config()
+def current_project(ctx: typer.Context) -> None:
+    """Show the current default project for the active context.
+
+    Honors the global ``--context``/``-c`` flag so the reported project
+    reflects the context the rest of the CLI is operating on.
+    """
+    _, context_config = _current_context_config(ctx)
     console.print(context_config.project or "none set")
