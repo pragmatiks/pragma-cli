@@ -8,7 +8,7 @@ from typing import Annotated, Any
 import click
 import httpx
 import typer
-from pragma_sdk import PragmaClient
+from pragma_sdk import InvalidResourceIdentityError, PragmaClient, ProjectMismatchError
 from rich.console import Console
 from typer.core import TyperGroup
 
@@ -68,6 +68,19 @@ def _handle_httpx_error(error: httpx.ConnectError | httpx.TimeoutException | htt
         raise typer.Exit(1) from error
 
 
+def _handle_project_error(error: ProjectMismatchError | InvalidResourceIdentityError) -> None:
+    """Print a friendly message for project-scoping errors and exit.
+
+    Args:
+        error: Project-scoping error to surface.
+
+    Raises:
+        typer.Exit: Always exits with code 2 after printing the message.
+    """
+    console.print(f"[red]Error:[/red] {error}")
+    raise typer.Exit(2) from error
+
+
 class ErrorHandlingGroup(TyperGroup):
     """Click Group subclass that catches unhandled httpx exceptions.
 
@@ -89,6 +102,8 @@ class ErrorHandlingGroup(TyperGroup):
             return super().invoke(ctx)
         except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
             _handle_httpx_error(e)
+        except (ProjectMismatchError, InvalidResourceIdentityError) as e:
+            _handle_project_error(e)
 
 
 app = typer.Typer(cls=ErrorHandlingGroup, pretty_exceptions_enable=False)
