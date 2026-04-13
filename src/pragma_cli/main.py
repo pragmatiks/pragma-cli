@@ -112,15 +112,32 @@ def _handle_malformed_config_error(error: MalformedConfigError) -> None:
 
 
 def _handle_config_os_error(error: OSError) -> None:
-    """Print a friendly message for an unhandled config I/O error and exit.
+    """Print a friendly message for an unhandled file I/O error and exit.
+
+    Reports the actual failing path from ``error.filename`` rather
+    than always blaming the config file. The hint about
+    ``XDG_CONFIG_HOME`` is only shown when the failing path is the
+    config file (or its parent) — pointing users at the config dir
+    when, say, ``pragma auth login`` fails to write the credentials
+    file would be misleading.
 
     Args:
-        error: Underlying OS error raised during config file access.
+        error: Underlying OS error raised during a file operation.
 
     Raises:
         typer.Exit: Always exits with code 2 after printing the message.
     """
-    console.print(f"[red]Error:[/red] could not access {CONFIG_PATH}: {error}")
+    failing_path = getattr(error, "filename", None) or str(CONFIG_PATH)
+    console.print(f"[red]Error:[/red] could not access {failing_path}: {error}")
+
+    if failing_path in (str(CONFIG_PATH), str(CONFIG_PATH.parent)):
+        console.print(
+            "[dim]Check file permissions and that the directory exists. "
+            "You can set XDG_CONFIG_HOME to override the default config location.[/dim]"
+        )
+    else:
+        console.print("[dim]Check file permissions and that the directory exists.[/dim]")
+
     raise typer.Exit(2) from error
 
 
@@ -142,9 +159,10 @@ class ErrorHandlingGroup(TyperGroup):
 
     Wraps command invocation to translate connection errors, timeouts,
     HTTP status errors, project-scoping mismatches, malformed config
-    files, Pydantic validation errors, config-directory I/O failures,
-    and symlinked config directories into friendly CLI messages
-    instead of raw Python tracebacks.
+    files, Pydantic validation errors, file-system I/O failures (with
+    the actual failing path surfaced from ``OSError.filename``), and
+    symlinked config directories into friendly CLI messages instead of
+    raw Python tracebacks.
     """
 
     def invoke(self, ctx: click.Context) -> Any:
