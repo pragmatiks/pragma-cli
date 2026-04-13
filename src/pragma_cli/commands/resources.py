@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, cast
@@ -171,28 +172,75 @@ def _format_api_error(error: httpx.HTTPStatusError) -> str:
 
 
 def _resolve_path(path_str: str, base_dir: Path) -> Path:
-    """Resolve a path string relative to base directory.
+    """Resolve a relative ``@path`` reference confined to ``base_dir``.
+
+    Security model: ``@path`` references in manifests are a data-flow
+    from a potentially untrusted YAML author to the local filesystem.
+    An attacker who can influence a manifest could otherwise exfiltrate
+    local secrets (``~/.ssh/id_rsa``, ``~/.aws/credentials``, etc.) by
+    pointing ``@path`` at them — the CLI would read the bytes during
+    planning and upload them during apply. To block that class of
+    attack, this resolver enforces four rules:
+
+    1. Absolute paths are rejected.
+    2. Raw ``..`` segments in the path string are rejected.
+    3. The resolved path must land inside ``base_dir``.
+    4. Symlinks are followed before the containment check so symlink
+       escapes (``base_dir/link`` -> ``/etc/passwd``) are rejected too.
+
+    ``~`` expansion is intentionally NOT performed: a tilde should not
+    map to a real path during manifest loading.
 
     Args:
-        path_str: Path string (without @ prefix).
-        base_dir: Base directory for relative paths.
+        path_str: Path string (without ``@`` prefix).
+        base_dir: Base directory for the manifest; resolved file must
+            stay inside it.
 
     Returns:
-        Resolved absolute path.
+        Absolute, realpath-resolved path inside ``base_dir``.
+
+    Raises:
+        ValueError: If the path is absolute, contains ``..``, or
+            resolves outside ``base_dir`` (directly or via symlink).
     """
-    file_path = Path(path_str).expanduser()
+    raw_path = Path(path_str)
 
-    if not file_path.is_absolute():
-        file_path = base_dir / file_path
+    if raw_path.is_absolute():
+        raise ValueError(
+            f"@path reference {path_str!r} is absolute; only paths relative to the manifest directory are allowed."
+        )
 
-    return file_path
+    if ".." in raw_path.parts:
+        raise ValueError(f"@path reference {path_str!r} contains '..'; parent traversal is not allowed.")
+
+    base_real = Path(os.path.realpath(base_dir))
+    candidate = base_real / raw_path
+
+    try:
+        resolved = candidate.resolve(strict=True)
+    except FileNotFoundError as e:
+        raise ValueError(f"File not found: {candidate}") from e
+    except OSError as e:
+        raise ValueError(f"Cannot resolve @path reference {path_str!r}: {e}") from e
+
+    try:
+        resolved.relative_to(base_real)
+    except ValueError as e:
+        raise ValueError(
+            f"@path reference {path_str!r} resolves outside the manifest directory ({base_real}); "
+            "refusing to read for security reasons."
+        ) from e
+
+    return resolved
 
 
 def _plan_file_upload(resource: dict, base_dir: Path) -> tuple[dict, _PendingUpload]:
     """Read a pragma/file resource's ``@path`` content into memory.
 
     Callers must ensure the resource has ``config.content`` starting
-    with ``@``. No network calls are made.
+    with ``@``. ``_resolve_path`` rejects anything that would escape
+    ``base_dir`` (absolute paths, ``..`` traversal, symlink escapes).
+    No network calls are made.
 
     Args:
         resource: Resource dictionary from YAML.
@@ -203,7 +251,8 @@ def _plan_file_upload(resource: dict, base_dir: Path) -> tuple[dict, _PendingUpl
 
     Raises:
         ValueError: If the resource is missing required fields, the file
-            cannot be found, or the file cannot be read.
+            cannot be found, escapes the manifest directory, or cannot
+            be read.
     """
     config = resource["config"]
     content = config["content"]
@@ -217,8 +266,6 @@ def _plan_file_upload(resource: dict, base_dir: Path) -> tuple[dict, _PendingUpl
         raise ValueError("Resource name is required for pragma/file resources")
 
     file_path = _resolve_path(content[1:], base_dir)
-    if not file_path.exists():
-        raise ValueError(f"File not found: {file_path}")
 
     try:
         file_content = file_path.read_bytes()
@@ -247,8 +294,9 @@ def _plan_resource_file_references(resource: dict, base_dir: Path) -> tuple[dict
         Tuple of (prepared resource dict, optional pending upload).
 
     Raises:
-        ValueError: If file references are missing or cannot be read.
-    """
+        ValueError: If file references are missing, unreadable, or
+            escape the manifest directory.
+    """  # noqa: DOC502
     provider = resource.get("provider")
     resource_type = resource.get("resource")
 
@@ -264,12 +312,7 @@ def _plan_resource_file_references(resource: dict, base_dir: Path) -> tuple[dict
     config = resource.get("config")
     if config and isinstance(config, dict):
         resolved_resource = resource.copy()
-        try:
-            resolved_resource["config"] = _resolve_at_references_pure(config, base_dir)
-        except FileNotFoundError as e:
-            raise ValueError(str(e)) from e
-        except OSError as e:
-            raise ValueError(str(e)) from e
+        resolved_resource["config"] = _resolve_at_references_pure(config, base_dir)
         return resolved_resource, None
 
     return resource, None
@@ -278,11 +321,11 @@ def _plan_resource_file_references(resource: dict, base_dir: Path) -> tuple[dict
 def _resolve_at_references_pure(value: object, base_dir: Path) -> object:
     """Side-effect-free recursive ``@path`` resolver.
 
-    Raises standard filesystem exceptions instead of emitting CLI
-    errors so that bulk planning can aggregate failures before any
-    network calls are made. The caller is expected to catch both
-    ``FileNotFoundError`` (missing file) and generic ``OSError``
-    (permission, etc.) raised from ``read_text``.
+    Raises ``ValueError`` for any path that escapes the manifest
+    directory (absolute, ``..`` traversal, symlink escape) and for
+    missing/unreadable files, so bulk planning can aggregate failures
+    before any network calls are made. The caller is expected to
+    catch ``ValueError`` and surface it as a plan error.
 
     Args:
         value: Any value from a config structure (dict, list, str, etc.).
@@ -292,8 +335,9 @@ def _resolve_at_references_pure(value: object, base_dir: Path) -> object:
         The value with all ``@`` references resolved to file contents.
 
     Raises:
-        FileNotFoundError: If a referenced file does not exist.
-    """  # noqa: DOC502
+        ValueError: If a referenced file is missing, unreadable, or
+            escapes the manifest directory.
+    """
     if isinstance(value, dict):
         return {k: _resolve_at_references_pure(v, base_dir) for k, v in value.items()}
 
@@ -302,9 +346,10 @@ def _resolve_at_references_pure(value: object, base_dir: Path) -> object:
 
     if isinstance(value, str) and value.startswith("@"):
         file_path = _resolve_path(value[1:], base_dir)
-        if not file_path.exists():
-            raise FileNotFoundError(f"File not found: {file_path}")
-        return file_path.read_text()
+        try:
+            return file_path.read_text()
+        except OSError as e:
+            raise ValueError(f"Cannot read file {file_path}: {e}") from e
 
     return value
 
