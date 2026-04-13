@@ -9,6 +9,7 @@ import click
 import httpx
 import typer
 from pragma_sdk import InvalidResourceIdentityError, PragmaClient, ProjectMismatchError
+from pydantic import ValidationError
 from rich.console import Console
 from typer.core import TyperGroup
 
@@ -67,6 +68,9 @@ def _handle_httpx_error(error: httpx.ConnectError | httpx.TimeoutException | htt
         console.print(f"[red]Error:[/red] {status} {reason} for {url}")
         raise typer.Exit(1) from error
 
+    console.print(f"[red]Error:[/red] {error}")
+    raise typer.Exit(1) from error
+
 
 def _handle_project_error(error: ProjectMismatchError | InvalidResourceIdentityError) -> None:
     """Print a friendly message for project-scoping errors and exit.
@@ -81,16 +85,30 @@ def _handle_project_error(error: ProjectMismatchError | InvalidResourceIdentityE
     raise typer.Exit(2) from error
 
 
+def _handle_validation_error(error: ValidationError) -> None:
+    """Print a friendly message for a Pydantic validation error and exit.
+
+    Args:
+        error: Pydantic validation error raised while building a model.
+
+    Raises:
+        typer.Exit: Always exits with code 2 after printing the message.
+    """
+    console.print(f"[red]Error:[/red] {error}")
+    raise typer.Exit(2) from error
+
+
 class ErrorHandlingGroup(TyperGroup):
-    """Click Group subclass that catches unhandled httpx exceptions.
+    """Click Group subclass that catches unhandled CLI-level exceptions.
 
     Wraps command invocation to translate connection errors, timeouts,
-    and HTTP status errors into friendly CLI messages instead of
-    raw Python tracebacks.
+    HTTP status errors, project-scoping mismatches, and Pydantic
+    validation errors into friendly CLI messages instead of raw
+    Python tracebacks.
     """
 
     def invoke(self, ctx: click.Context) -> Any:
-        """Invoke the command group with httpx exception handling.
+        """Invoke the command group with global exception handling.
 
         Args:
             ctx: Click context.
@@ -104,6 +122,8 @@ class ErrorHandlingGroup(TyperGroup):
             _handle_httpx_error(e)
         except (ProjectMismatchError, InvalidResourceIdentityError) as e:
             _handle_project_error(e)
+        except ValidationError as e:
+            _handle_validation_error(e)
 
 
 app = typer.Typer(cls=ErrorHandlingGroup, pretty_exceptions_enable=False)
