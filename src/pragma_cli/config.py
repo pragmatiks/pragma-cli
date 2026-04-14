@@ -15,20 +15,8 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 
-_ALLOW_SYMLINK_ENV_VAR = "PRAGMA_ALLOW_CONFIG_DIR_SYMLINK"
-
-
 class MalformedConfigError(RuntimeError):
     """Raised when the config file exists but cannot be parsed or validated."""
-
-
-class ConfigDirSymlinkError(RuntimeError):
-    """Raised when the config directory itself is a symlink.
-
-    Defense-in-depth against an attacker who pre-creates
-    ``~/.config/pragma`` as a symlink to attacker-controlled storage.
-    Opt-out via ``PRAGMA_ALLOW_CONFIG_DIR_SYMLINK=1``.
-    """
 
 
 def _get_config_dir() -> Path:
@@ -47,64 +35,6 @@ CONFIG_DIR = _get_config_dir()
 CONFIG_PATH = CONFIG_DIR / "config"
 CONFIG_LOCK_PATH = CONFIG_DIR / "config.lock"
 CREDENTIALS_FILE = CONFIG_DIR / "credentials"
-
-
-def _assert_config_dir_not_symlink() -> None:
-    """Reject a symlink anywhere in the config directory chain.
-
-    Defense-in-depth against an attacker who pre-creates the config
-    dir — or any parent of it — as a symlink to attacker-controlled
-    storage, redirecting the CLI into their namespace. ``lstat`` on
-    the final segment alone misses parent-chain attacks: if
-    ``XDG_CONFIG_HOME`` is set to ``/home/user/.config`` and
-    ``.config`` is a symlink to ``/attacker-root``, the CLI would
-    silently load ``/attacker-root/pragma/config``.
-
-    The full-chain check uses ``os.path.realpath`` to canonicalize
-    every component and compares against the textual normalization.
-    Any divergence indicates a symlink somewhere in the chain. The
-    leaf ``lstat`` is kept as a belt-and-braces check in case an
-    edge platform handles ``realpath`` differently. Subsequent opens
-    under ``CONFIG_DIR`` rely on ``O_NOFOLLOW`` to block tampering
-    inside the resolved directory itself.
-
-    Opt-out: set ``PRAGMA_ALLOW_CONFIG_DIR_SYMLINK=1`` if your real
-    config dir or any parent is itself a symlink (dotfile managers
-    such as chezmoi or stow, home directory relocation, etc.).
-    Raising is the safer default.
-
-    Raises:
-        ConfigDirSymlinkError: If ``CONFIG_DIR`` or any parent of it
-            is a symlink and the opt-out env var is not set.
-    """
-    if os.getenv(_ALLOW_SYMLINK_ENV_VAR):
-        return
-
-    expected = os.path.normpath(str(CONFIG_DIR))
-    try:
-        resolved = os.path.realpath(CONFIG_DIR)
-    except OSError:
-        resolved = expected
-
-    if resolved != expected:
-        raise ConfigDirSymlinkError(
-            f"Refusing to use {CONFIG_DIR}: the path resolves through a symlink "
-            f"to {resolved}. Set {_ALLOW_SYMLINK_ENV_VAR}=1 to opt in if this is "
-            f"intentional (dotfile managers, home directory relocation, etc.)."
-        )
-
-    try:
-        st = os.lstat(CONFIG_DIR)
-    except FileNotFoundError:
-        return
-    except OSError:
-        return
-
-    if stat.S_ISLNK(st.st_mode):
-        raise ConfigDirSymlinkError(
-            f"Refusing to use {CONFIG_DIR}: the path is a symlink. "
-            f"Set {_ALLOW_SYMLINK_ENV_VAR}=1 to opt in if this is intentional."
-        )
 
 
 class ContextConfig(BaseModel):
@@ -276,8 +206,6 @@ def _config_lock(exclusive: bool) -> Iterator[None]:
     Yields:
         ``None`` — the caller performs file access while the lock is held.
     """
-    _assert_config_dir_not_symlink()
-
     if exclusive:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         fd = _open_lock_file_for_write()
@@ -376,8 +304,6 @@ def load_config() -> PragmaConfig:
     Raises:
         MalformedConfigError: If the config file exists but is corrupted.
     """  # noqa: DOC502
-    _assert_config_dir_not_symlink()
-
     if not CONFIG_DIR.exists() or not CONFIG_PATH.exists():
         return _default_config()
 
