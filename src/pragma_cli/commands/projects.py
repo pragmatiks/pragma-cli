@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated
 
 import typer
@@ -13,6 +14,7 @@ from pragma_sdk import (
     UpdateProjectRequest,
 )
 from rich.console import Console
+from rich.markup import escape as rich_escape
 from rich.table import Table
 
 from pragma_cli import get_client
@@ -23,6 +25,27 @@ from pragma_cli.helpers import OutputFormat, output_data
 app = typer.Typer(help="Project management commands")
 
 console = Console()
+
+_MAX_DISPLAYED_RESOURCES = 20
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _sanitize_display(value: str) -> str:
+    """Make a server-supplied string safe to render via Rich.
+
+    Escapes Rich markup syntax (so ``[red]...[/red]`` from the API prints
+    literally instead of colouring later output) and strips control
+    characters that could corrupt column alignment or inject ANSI
+    escapes into the admin's terminal.
+
+    Args:
+        value: Untrusted string, typically a resource or project
+            identifier returned by the API.
+
+    Returns:
+        A string safe to pass to ``console.print`` inside an f-string.
+    """
+    return rich_escape(_CONTROL_CHARS_RE.sub("", value))
 
 
 def _print_projects_table(projects: list[dict]) -> None:
@@ -188,24 +211,33 @@ def _print_orphan_warning(slug: str) -> None:
 def _print_project_has_resources(error: ProjectHasResourcesError, *, orphan_already_requested: bool) -> None:
     """Render the ``ProjectHasResourcesError`` as a user-friendly CLI message.
 
+    Server-supplied fields (``project_id``, each entry in ``resources``) are
+    sanitized before rendering so that crafted identifiers cannot inject
+    Rich markup or ANSI escapes into the admin's terminal. The displayed
+    sample is also capped locally at :data:`_MAX_DISPLAYED_RESOURCES` as
+    defense-in-depth against an uncapped server response.
+
     Args:
         error: Typed 409 raised by the SDK when a project still holds resources.
         orphan_already_requested: Whether the caller already passed
             ``--orphan-resources``. Suppresses the flag suggestion when True.
     """
+    safe_project_id = _sanitize_display(error.project_id)
     console.print(
-        f"[red]Error:[/red] Project [bold]{error.project_id}[/bold] still contains {error.resource_count} resource(s)."
+        f"[red]Error:[/red] Project [bold]{safe_project_id}[/bold] still contains {error.resource_count} resource(s)."
     )
 
     if error.resources:
-        sample_size = len(error.resources)
-        if sample_size < error.resource_count:
+        display_resources = error.resources[:_MAX_DISPLAYED_RESOURCES]
+        sample_size = len(display_resources)
+        truncated = sample_size < len(error.resources) or sample_size < error.resource_count
+        if truncated:
             console.print(f"[dim]Showing {sample_size} of {error.resource_count}:[/dim]")
         else:
             console.print("[dim]Resources:[/dim]")
 
-        for resource_id in error.resources:
-            console.print(f"  [cyan]{resource_id}[/cyan]")
+        for resource_id in display_resources:
+            console.print(f"  [cyan]{_sanitize_display(resource_id)}[/cyan]")
 
     console.print()
 
