@@ -381,6 +381,11 @@ def _open_and_read_file_reference(path_str: str, base_dir: Path) -> tuple[Path, 
        directories would hang or mis-upload the planner.
     7. Files larger than ``_MAX_FILE_REFERENCE_SIZE`` are rejected so
        a manifest cannot OOM the planner by pointing at a huge blob.
+       The size is checked twice — once against ``st_size`` at open
+       time and once against the running byte count in the read
+       loop — because ``fstat`` returns the file size as of the open
+       call, and a file that grows during the read would otherwise
+       blow past the cap on the back of kernel EOF alone.
 
     ``~`` expansion is intentionally NOT performed: a tilde should not
     map to a real path during manifest loading.
@@ -458,6 +463,7 @@ def _open_and_read_file_reference(path_str: str, base_dir: Path) -> tuple[Path, 
             )
 
         chunks: list[bytes] = []
+        total = 0
         while True:
             try:
                 chunk = os.read(fd, 65536)
@@ -465,11 +471,19 @@ def _open_and_read_file_reference(path_str: str, base_dir: Path) -> tuple[Path, 
                 raise ValueError(f"Cannot read @path reference {path_str!r}: {e}") from e
             if not chunk:
                 break
+            total += len(chunk)
+            if total > _MAX_FILE_REFERENCE_SIZE:
+                limit_mib = _MAX_FILE_REFERENCE_SIZE / (1024 * 1024)
+                raise ValueError(
+                    f"@path reference {path_str!r} grew during read past the "
+                    f"{limit_mib:.0f} MiB limit; refusing to upload."
+                )
             chunks.append(chunk)
+        data = b"".join(chunks)
     finally:
         os.close(fd)
 
-    return resolved, b"".join(chunks)
+    return resolved, data
 
 
 def _plan_file_upload(resource: dict, base_dir: Path) -> tuple[dict, _PendingUpload]:
