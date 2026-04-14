@@ -5,7 +5,13 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from pragma_sdk import CreateProjectRequest, DeleteProjectRequest, Project, UpdateProjectRequest
+from pragma_sdk import (
+    CreateProjectRequest,
+    DeleteProjectRequest,
+    Project,
+    ProjectHasResourcesError,
+    UpdateProjectRequest,
+)
 from rich.console import Console
 from rich.table import Table
 
@@ -160,34 +166,138 @@ def update_project(
     console.print(f"[green]Updated project:[/green] {project.slug}")
 
 
-@app.command("delete")
-def delete_project(
-    slug: Annotated[str, typer.Argument(help="Project slug")],
-    yes: Annotated[bool, typer.Option("--yes", help="Skip the interactive confirmation prompt")] = False,
-    confirm: Annotated[str | None, typer.Option("--confirm", help="Typed confirmation value")] = None,
-) -> None:
-    """Delete a project with typed confirmation.
+def _print_orphan_warning(slug: str) -> None:
+    """Warn the caller that ``--orphan-resources`` leaves real infrastructure running.
+
+    Args:
+        slug: Slug of the project about to be deleted.
+    """
+    console.print(
+        f"[yellow]Warning:[/yellow] --orphan-resources will delete project [bold]{slug}[/bold] from Pragma only."
+    )
+    console.print(
+        "[dim]The underlying infrastructure (kubernetes pods, Supabase projects, "
+        "GCP resources, etc.) will keep running[/dim]"
+    )
+    console.print(
+        "[dim]without Pragma managing it. You are exiting tracking, not cleaning up — billing will continue.[/dim]"
+    )
+    console.print()
+
+
+def _print_project_has_resources(error: ProjectHasResourcesError, *, orphan_already_requested: bool) -> None:
+    """Render the ``ProjectHasResourcesError`` as a user-friendly CLI message.
+
+    Args:
+        error: Typed 409 raised by the SDK when a project still holds resources.
+        orphan_already_requested: Whether the caller already passed
+            ``--orphan-resources``. Suppresses the flag suggestion when True.
+    """
+    console.print(
+        f"[red]Error:[/red] Project [bold]{error.project_id}[/bold] still contains {error.resource_count} resource(s)."
+    )
+
+    if error.resources:
+        sample_size = len(error.resources)
+        if sample_size < error.resource_count:
+            console.print(f"[dim]Showing {sample_size} of {error.resource_count}:[/dim]")
+        else:
+            console.print("[dim]Resources:[/dim]")
+
+        for resource_id in error.resources:
+            console.print(f"  [cyan]{resource_id}[/cyan]")
+
+    console.print()
+
+    if orphan_already_requested:
+        console.print(
+            "[dim]The server refused the request even though --orphan-resources was set. "
+            "Delete the resources first with[/dim] "
+            "[bold]pragma resources delete <type> <name>[/bold][dim].[/dim]"
+        )
+        return
+
+    console.print("[dim]Choose one of:[/dim]")
+    console.print("  [dim]1. Delete the resources first with[/dim] [bold]pragma resources delete <type> <name>[/bold]")
+    console.print(
+        "  [dim]2. Re-run with[/dim] [bold]--orphan-resources[/bold] "
+        "[dim]to leave the resources running without Pragma tracking[/dim]"
+    )
+
+
+def _resolve_confirmation(yes: bool, confirm: str | None) -> str:
+    """Resolve the typed confirmation value from flags or an interactive prompt.
+
+    Args:
+        yes: Whether the caller passed ``--yes`` to skip interactive confirmation.
+        confirm: Value passed via ``--confirm``, required when ``yes`` is set.
+
+    Returns:
+        Typed confirmation string the caller supplied.
 
     Raises:
-        typer.Exit: If confirmation flags are invalid or confirmation does not match.
+        typer.Exit: If ``--yes``/``--confirm`` are combined incorrectly.
     """
     if yes:
         if confirm is None:
             console.print("[red]Error:[/red] --confirm <slug> is required with --yes.")
             raise typer.Exit(2)
-        confirmation = confirm
-    else:
-        if confirm is not None:
-            console.print("[red]Error:[/red] --confirm can only be used together with --yes.")
-            raise typer.Exit(2)
-        confirmation = typer.prompt("Type the project slug to confirm deletion: ")
+        return confirm
+
+    if confirm is not None:
+        console.print("[red]Error:[/red] --confirm can only be used together with --yes.")
+        raise typer.Exit(2)
+
+    return typer.prompt("Type the project slug to confirm deletion: ")
+
+
+@app.command("delete")
+def delete_project(
+    slug: Annotated[str, typer.Argument(help="Project slug")],
+    yes: Annotated[bool, typer.Option("--yes", help="Skip the interactive confirmation prompt")] = False,
+    confirm: Annotated[str | None, typer.Option("--confirm", help="Typed confirmation value")] = None,
+    orphan_resources: Annotated[
+        bool,
+        typer.Option(
+            "--orphan-resources",
+            help="Delete the project but leave its resources running. "
+            "The infrastructure will keep billing — you are exiting Pragma tracking, not cleaning up.",
+        ),
+    ] = False,
+) -> None:
+    """Delete a project with typed confirmation.
+
+    By default the server refuses to delete a project that still contains
+    resources. Pass ``--orphan-resources`` to remove Pragma's tracking
+    without touching the underlying infrastructure.
+
+    Raises:
+        typer.Exit: If confirmation flags are invalid, confirmation does not
+            match, or the server refuses the delete because resources remain.
+    """
+    if orphan_resources and not yes:
+        _print_orphan_warning(slug)
+
+    confirmation = _resolve_confirmation(yes, confirm)
 
     if confirmation != slug:
         console.print("[red]Error:[/red] Confirmation did not match project slug.")
         raise typer.Exit(1)
 
-    get_client().delete_project(slug, DeleteProjectRequest(confirmation=confirmation))
-    console.print(f"[green]Deleted project:[/green] {slug}")
+    try:
+        get_client().delete_project(
+            slug,
+            DeleteProjectRequest(confirmation=confirmation, orphan_resources=orphan_resources),
+        )
+    except ProjectHasResourcesError as error:
+        _print_project_has_resources(error, orphan_already_requested=orphan_resources)
+        raise typer.Exit(1) from error
+
+    if orphan_resources:
+        console.print(f"[green]Deleted project tracking:[/green] {slug}")
+        console.print("[dim]Resources were not touched and continue to run outside Pragma.[/dim]")
+    else:
+        console.print(f"[green]Deleted project:[/green] {slug}")
 
 
 @app.command("use")
