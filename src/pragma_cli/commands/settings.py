@@ -8,6 +8,7 @@ import httpx
 import typer
 from pragma_sdk import PerformanceProfile
 from rich.console import Console
+from rich.table import Table
 
 from pragma_cli import get_client
 from pragma_cli.helpers import OutputFormat, output_data
@@ -113,3 +114,64 @@ def set_profile(
     console.print("[green]Updated LLM settings:[/green]")
     console.print(f"  [bold]Provider:[/bold]  {updated.provider}")
     console.print(f"  [bold]Profile:[/bold]   {updated.performance_profile}")
+
+
+def _print_llm_providers_table(providers: list[dict]) -> None:
+    """Print LLM providers in a formatted table.
+
+    Args:
+        providers: List of provider dictionaries to display.
+    """
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Name")
+    table.add_column("Connected")
+    table.add_column("Tiers")
+
+    for p in providers:
+        connected = "[green]\u2713[/green]" if p.get("connected") else "[red]\u2717[/red]"
+        tiers = ", ".join(p.get("tiers_available", []))
+        table.add_row(p.get("label", p.get("slug", "")), connected, tiers or "[dim]-[/dim]")
+
+    console.print(table)
+
+
+@app.command()
+def providers(
+    output: Annotated[
+        OutputFormat,
+        typer.Option("--output", "-o", help="Output format"),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """List available LLM providers for your organization.
+
+    Shows each provider's connection status and available model tiers.
+
+    Examples:
+        pragma settings providers
+        pragma settings providers -o json
+    """  # noqa: DOC501
+    organization_id = _get_organization_id()
+    client = get_client()
+
+    try:
+        llm_providers = client.list_llm_providers(organization_id)
+    except httpx.HTTPStatusError as e:
+        console.print(f"[red]Error:[/red] {e.response.text}")
+        raise typer.Exit(1) from e
+
+    if not llm_providers:
+        console.print("[dim]No LLM providers available.[/dim]")
+        return
+
+    data = [
+        {
+            "slug": p.slug,
+            "label": p.label,
+            "connected": p.connected,
+            "is_platform_default": p.is_platform_default,
+            "tiers_available": [t.value for t in p.tiers_available],
+        }
+        for p in llm_providers
+    ]
+
+    output_data(data, output, table_renderer=_print_llm_providers_table)
