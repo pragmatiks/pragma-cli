@@ -8,13 +8,14 @@ from typing import Annotated, Any
 import click
 import httpx
 import typer
-from pragma_sdk import PragmaClient
+from pragma_sdk import InvalidResourceIdentityError, PragmaClient, ProjectMismatchError
+from pydantic import ValidationError
 from rich.console import Console
 from typer.core import TyperGroup
 
 from pragma_cli import set_client
-from pragma_cli.commands import auth, config, ops, organizations, providers, resources
-from pragma_cli.config import get_current_context
+from pragma_cli.commands import auth, config, ops, organizations, projects, providers, resources
+from pragma_cli.config import CONFIG_PATH, MalformedConfigError, get_current_context
 
 
 console = Console(stderr=True)
@@ -67,17 +68,91 @@ def _handle_httpx_error(error: httpx.ConnectError | httpx.TimeoutException | htt
         console.print(f"[red]Error:[/red] {status} {reason} for {url}")
         raise typer.Exit(1) from error
 
+    console.print(f"[red]Error:[/red] {error}")
+    raise typer.Exit(1) from error
+
+
+def _handle_project_error(error: ProjectMismatchError | InvalidResourceIdentityError) -> None:
+    """Print a friendly message for project-scoping errors and exit.
+
+    Args:
+        error: Project-scoping error to surface.
+
+    Raises:
+        typer.Exit: Always exits with code 2 after printing the message.
+    """
+    console.print(f"[red]Error:[/red] {error}")
+    raise typer.Exit(2) from error
+
+
+def _handle_validation_error(error: ValidationError) -> None:
+    """Print a friendly message for a Pydantic validation error and exit.
+
+    Args:
+        error: Pydantic validation error raised while building a model.
+
+    Raises:
+        typer.Exit: Always exits with code 2 after printing the message.
+    """
+    console.print(f"[red]Error:[/red] {error}")
+    raise typer.Exit(2) from error
+
+
+def _handle_malformed_config_error(error: MalformedConfigError) -> None:
+    """Print a friendly message for a malformed config file and exit.
+
+    Args:
+        error: Malformed-config error raised while loading the config file.
+
+    Raises:
+        typer.Exit: Always exits with code 2 after printing the message.
+    """
+    console.print(f"[red]Error:[/red] {error}")
+    raise typer.Exit(2) from error
+
+
+def _handle_config_os_error(error: OSError) -> None:
+    """Print a friendly message for an unhandled file I/O error and exit.
+
+    Reports the actual failing path from ``error.filename`` rather
+    than always blaming the config file. The hint about
+    ``XDG_CONFIG_HOME`` is only shown when the failing path is the
+    config file (or its parent) — pointing users at the config dir
+    when, say, ``pragma auth login`` fails to write the credentials
+    file would be misleading.
+
+    Args:
+        error: Underlying OS error raised during a file operation.
+
+    Raises:
+        typer.Exit: Always exits with code 2 after printing the message.
+    """
+    failing_path = getattr(error, "filename", None) or str(CONFIG_PATH)
+    console.print(f"[red]Error:[/red] could not access {failing_path}: {error}")
+
+    if failing_path in (str(CONFIG_PATH), str(CONFIG_PATH.parent)):
+        console.print(
+            "[dim]Check file permissions and that the directory exists. "
+            "You can set XDG_CONFIG_HOME to override the default config location.[/dim]"
+        )
+    else:
+        console.print("[dim]Check file permissions and that the directory exists.[/dim]")
+
+    raise typer.Exit(2) from error
+
 
 class ErrorHandlingGroup(TyperGroup):
-    """Click Group subclass that catches unhandled httpx exceptions.
+    """Click Group subclass that catches unhandled CLI-level exceptions.
 
     Wraps command invocation to translate connection errors, timeouts,
-    and HTTP status errors into friendly CLI messages instead of
-    raw Python tracebacks.
+    HTTP status errors, project-scoping mismatches, malformed config
+    files, Pydantic validation errors, and file-system I/O failures
+    (with the actual failing path surfaced from ``OSError.filename``)
+    into friendly CLI messages instead of raw Python tracebacks.
     """
 
     def invoke(self, ctx: click.Context) -> Any:
-        """Invoke the command group with httpx exception handling.
+        """Invoke the command group with global exception handling.
 
         Args:
             ctx: Click context.
@@ -89,6 +164,14 @@ class ErrorHandlingGroup(TyperGroup):
             return super().invoke(ctx)
         except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
             _handle_httpx_error(e)
+        except (ProjectMismatchError, InvalidResourceIdentityError) as e:
+            _handle_project_error(e)
+        except MalformedConfigError as e:
+            _handle_malformed_config_error(e)
+        except ValidationError as e:
+            _handle_validation_error(e)
+        except OSError as e:
+            _handle_config_os_error(e)
 
 
 app = typer.Typer(cls=ErrorHandlingGroup, pretty_exceptions_enable=False)
@@ -139,6 +222,16 @@ def main(
             help="Override authentication token (not recommended, use environment variable instead)",
         ),
     ] = None,
+    project: Annotated[
+        str | None,
+        typer.Option(
+            "--project",
+            help=(
+                "Project slug for project-scoped resource commands. Precedence: --project, "
+                "PRAGMA_PROJECT, current context config, then 'pragma projects use'."
+            ),
+        ),
+    ] = None,
 ):
     """Pragma CLI - Declarative resource management.
 
@@ -160,6 +253,7 @@ def main(
     else:
         client = PragmaClient(base_url=context_config.api_url, context=context_name, require_auth=False)
 
+    ctx.obj = {"context": context_name, "project": project}
     set_client(client)
 
 
@@ -169,6 +263,7 @@ app.add_typer(config.app, name="config")
 app.add_typer(ops.app, name="ops")
 app.add_typer(organizations.app, name="organizations")
 app.add_typer(providers.app, name="providers")
+app.add_typer(projects.app, name="projects")
 
 if __name__ == "__main__":  # pragma: no cover
     app()

@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import click
 from pragma_sdk import PragmaClient
 
 from pragma_cli.config import get_current_context
+from pragma_cli.project_context import resolve_project_or_none
 
 
-def _get_completion_client() -> PragmaClient | None:
+def _get_completion_client(ctx: click.Context | None = None) -> PragmaClient | None:
     """Get a client for shell completion context.
 
     Returns:
         PragmaClient instance or None if configuration unavailable.
     """
     try:
-        context_name, context_config = get_current_context()
+        root_ctx = ctx.find_root() if ctx is not None else None
+        context = root_ctx.params.get("context") if root_ctx is not None else None
+        context_name, context_config = get_current_context(context)
         if context_config is None:
             return None
         return PragmaClient(
@@ -26,16 +30,17 @@ def _get_completion_client() -> PragmaClient | None:
         return None
 
 
-def completion_provider_ids(incomplete: str):
+def completion_provider_ids(ctx: click.Context, incomplete: str):
     """Complete provider identifiers based on deployed providers.
 
     Args:
+        ctx: Active Click context for resolving the selected CLI context.
         incomplete: Partial input to complete against available providers.
 
     Yields:
         Provider IDs matching the incomplete input.
     """
-    client = _get_completion_client()
+    client = _get_completion_client(ctx)
     if client is None:
         return
     try:
@@ -48,7 +53,7 @@ def completion_provider_ids(incomplete: str):
             yield provider.name
 
 
-def completion_resource_ids(incomplete: str):
+def completion_resource_ids(ctx: click.Context, incomplete: str):
     """Progressively complete resource identifiers in org/provider/resource/name format.
 
     Completion progresses through four levels based on slash count:
@@ -58,20 +63,30 @@ def completion_resource_ids(incomplete: str):
     - Three slashes: complete resource instance names
 
     Args:
+        ctx: Active Click context for resolving the selected project context.
         incomplete: Partial input to complete against available resources.
 
     Yields:
         Resource identifier segments matching the incomplete input.
     """
-    client = _get_completion_client()
+    client = _get_completion_client(ctx)
     if client is None:
+        return
+
+    project_slug = resolve_project_or_none(ctx)
+    if project_slug is None:
+        return
+
+    try:
+        project = client.project(project_slug)
+    except Exception:
         return
 
     slash_count = incomplete.count("/")
 
     if slash_count == 0:
         try:
-            resources = client.list_resources()
+            resources = project.list_resources()
         except Exception:
             return
 
@@ -85,7 +100,7 @@ def completion_resource_ids(incomplete: str):
         org, partial = incomplete.split("/", 1)
 
         try:
-            resources = client.list_resources()
+            resources = project.list_resources()
         except Exception:
             return
 
@@ -104,7 +119,7 @@ def completion_resource_ids(incomplete: str):
         full_provider = f"{org}/{provider_name}"
 
         try:
-            resources = client.list_resources(provider=full_provider)
+            resources = project.list_resources(provider=full_provider)
         except Exception:
             return
 
@@ -119,7 +134,7 @@ def completion_resource_ids(incomplete: str):
         full_provider = f"{org}/{provider_name}"
 
         try:
-            resources = client.list_resources(provider=full_provider, resource=resource_type)
+            resources = project.list_resources(provider=full_provider, resource=resource_type)
         except Exception:
             return
 
