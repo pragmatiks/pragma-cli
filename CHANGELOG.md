@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.0 (2026-04-16)
+
+### Feat
+
+- **cli**: add settings and LLM provider commands (#45)
+
 ## v1.0.0 (2026-04-16)
 
 ### Feat
