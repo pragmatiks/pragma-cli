@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.0 (2026-04-16)
+
+### Feat
+
+- **cli**: project-scoped resource commands and projects subcommand (#42)
+
 ## v0.29.0 (2026-04-04)
 
 ### Feat
