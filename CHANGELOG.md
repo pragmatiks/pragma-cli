@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.0 (2026-04-20)
+
+### Feat
+
+- **cli**: show generic message on organization bootstrap 503 (#46)
+
 ## v1.1.0 (2026-04-16)
 
 ### Feat
