@@ -21,6 +21,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from pragma_cli import get_client
+from pragma_cli.bootstrap_errors import check_bootstrap_error
 from pragma_cli.commands.completions import completion_resource_ids
 from pragma_cli.helpers import OutputFormat, output_data, parse_resource_id
 from pragma_cli.project_context import resolve_project
@@ -195,6 +196,8 @@ class _SchemaCache:
         try:
             schemas = get_client().list_resource_schemas(provider=provider)
         except httpx.HTTPStatusError as e:
+            check_bootstrap_error(e)
+
             if e.response.status_code == 404:
                 return None
             raise _SchemaFetchError(
@@ -660,6 +663,7 @@ def list_resource_schemas(
     try:
         types = client.list_resource_schemas(provider=provider)
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
@@ -785,6 +789,7 @@ def get(
         try:
             res = project.get_resource(provider=provider, resource=resource, name=name)
         except httpx.HTTPStatusError as e:
+            check_bootstrap_error(e)
             console.print(f"[red]Error:[/red] {_format_api_error(e)}")
             raise typer.Exit(1) from e
 
@@ -980,6 +985,7 @@ def describe(
     try:
         res = project.get_resource(provider=provider, resource=resource, name=name, reveal=reveal)
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
@@ -1186,6 +1192,9 @@ def _execute_plan(plan: _ApplyPlan, project_id: str) -> None:
         try:
             result = project.apply_resource(cast(Any, planned.payload))
         except (httpx.HTTPError, ProjectMismatchError) as e:
+            if isinstance(e, httpx.HTTPStatusError):
+                check_bootstrap_error(e)
+
             console.print(f"[red]Error applying {planned.resource_id}:[/red] {_format_operation_error(e)}")
             _report_partial_apply_failure(plan, applied, uploaded, failed_resource=planned.resource_id)
             raise typer.Exit(1) from e
@@ -1204,6 +1213,9 @@ def _execute_plan(plan: _ApplyPlan, project_id: str) -> None:
         try:
             client.upload_file(upload.name, upload.content, upload.content_type)
         except (httpx.HTTPError, ProjectMismatchError) as e:
+            if isinstance(e, httpx.HTTPStatusError):
+                check_bootstrap_error(e)
+
             console.print(f"[red]Error uploading file for {planned.resource_id}:[/red] {_format_operation_error(e)}")
             _report_partial_apply_failure(plan, applied, uploaded, failed_resource=planned.resource_id)
             raise typer.Exit(1) from e
@@ -1336,6 +1348,7 @@ def _delete_single(ctx: typer.Context, resource_id: str) -> None:
         project.delete_resource(provider=provider, resource=resource, name=name)
         print(f"Deleted {resource_id}")
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
         console.print(f"[red]Error deleting {resource_id}:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
@@ -1368,6 +1381,7 @@ def _delete_from_files(ctx: typer.Context, files: list[typer.FileText]) -> None:
                 project.delete_resource(provider=provider, resource=resource_type, name=name)
                 print(f"Deleted {res_id}")
             except httpx.HTTPStatusError as e:
+                check_bootstrap_error(e)
                 console.print(f"[red]Error deleting {res_id}:[/red] {_format_api_error(e)}")
                 raise typer.Exit(1) from e
 
@@ -1412,6 +1426,7 @@ def _deactivate_single(ctx: typer.Context, resource_id: str) -> None:
         project.deactivate_resource(provider=provider, resource=resource, name=name)
         print(f"Deactivated {resource_id}")
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
         console.print(f"[red]Error deactivating {resource_id}:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
@@ -1444,6 +1459,7 @@ def _deactivate_from_files(ctx: typer.Context, files: list[typer.FileText]) -> N
                 project.deactivate_resource(provider=provider, resource=resource_type, name=name)
                 print(f"Deactivated {res_id}")
             except httpx.HTTPStatusError as e:
+                check_bootstrap_error(e)
                 console.print(f"[red]Error deactivating {res_id}:[/red] {_format_api_error(e)}")
                 raise typer.Exit(1) from e
 
@@ -1472,6 +1488,7 @@ def _fetch_resource(ctx: typer.Context, resource_id: str) -> tuple[str, str, str
         data = project.get_resource(provider=provider, resource=resource, name=name)
         return provider, resource, name, data
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
@@ -1507,6 +1524,7 @@ def _apply_tags(ctx: typer.Context, provider: str, resource: str, name: str, tag
         )
         project.apply_resource(cast(Any, payload))
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 

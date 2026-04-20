@@ -14,6 +14,7 @@ from rich import print
 from rich.console import Console
 
 from pragma_cli import get_client
+from pragma_cli.bootstrap_errors import check_bootstrap_error
 from pragma_cli.config import CREDENTIALS_FILE, ContextConfig, get_current_context, load_config
 
 
@@ -306,7 +307,7 @@ def whoami():
 
     Displays the current context, authentication state, and user details
     including email and organization name from the API.
-    """
+    """  # noqa: DOC501
     current_context_name, _ = get_current_context()
     client = get_client()
 
@@ -349,12 +350,14 @@ def whoami():
         console.print(f"  Organization: [cyan]{user_info.organization_name or user_info.organization_id}[/cyan]")
 
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
         if e.response.status_code == 401:
             console.print()
             console.print("[yellow]Token invalid. Run 'pragma auth login' to re-authenticate.[/yellow]")
-        else:
-            console.print()
-            console.print(f"[red]Error fetching user info:[/red] {e.response.text}")
+            return
+
+        raise
     except httpx.RequestError as e:
         console.print()
         console.print(f"[red]Connection error:[/red] {e}")

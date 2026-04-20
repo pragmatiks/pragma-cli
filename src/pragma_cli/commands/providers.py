@@ -32,6 +32,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from pragma_cli import get_client
+from pragma_cli.bootstrap_errors import check_bootstrap_error
 from pragma_cli.commands.completions import completion_provider_ids
 from pragma_cli.helpers import OutputFormat, output_data
 
@@ -567,7 +568,7 @@ def publish(
 
     Raises:
         typer.Exit: If provider detection fails or publish fails.
-    """
+    """  # noqa: DOC501
     config = read_provider_config(directory)
 
     if not directory.exists():
@@ -640,6 +641,8 @@ def publish(
         _poll_publish_status(client, provider_id, published_version)
 
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
         if e.response.status_code == 409:
             console.print(f"[red]Error:[/red] {_format_api_error(e)}")
             raise typer.Exit(1) from e
@@ -649,8 +652,7 @@ def publish(
             console.print(f"[dim]Size: {len(tarball) / 1024:.1f} KB[/dim]")
             raise typer.Exit(1) from e
 
-        console.print(f"[red]Error:[/red] {e.response.text}")
-        raise typer.Exit(1) from e
+        raise
     except Exception as e:
         if isinstance(e, typer.Exit):
             raise
@@ -813,6 +815,8 @@ def install(
             lambda: client.get_provider(name),
         )
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
         if e.response.status_code == 404:
             console.print(f"[red]Error:[/red] Provider '{name}' not found in the store.")
             raise typer.Exit(1) from e
@@ -854,6 +858,8 @@ def install(
             ),
         )
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
         if e.response.status_code == 409:
             console.print(f"[yellow]Warning:[/yellow] Provider '{name}' is already installed.")
             raise typer.Exit(1) from e
@@ -907,6 +913,8 @@ def uninstall(
             lambda: client.uninstall_provider(name, cascade=cascade),
         )
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
         if e.response.status_code == 404:
             console.print(f"[red]Error:[/red] Provider '{name}' is not installed.")
             raise typer.Exit(1) from e
@@ -958,6 +966,8 @@ def upgrade(
             lambda: client.upgrade_provider(name, target_version=version),
         )
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
         if e.response.status_code == 404:
             console.print(f"[red]Error:[/red] Provider '{name}' is not installed.")
             raise typer.Exit(1) from e
@@ -1009,6 +1019,8 @@ def downgrade(
             lambda: client.downgrade_provider(name, target_version=version),
         )
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
         if e.response.status_code == 404:
             console.print(f"[red]Error:[/red] Provider '{name}' is not installed.")
             raise typer.Exit(1) from e
@@ -1093,6 +1105,7 @@ def list_providers(
             ),
         )
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
@@ -1125,6 +1138,7 @@ def _list_installations(client: PragmaClient, output: OutputFormat) -> None:
             lambda: client.list_installations(),
         )
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
@@ -1163,6 +1177,8 @@ def info(
             lambda: client.get_provider(name),
         )
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
         if e.response.status_code == 404:
             console.print(f"[red]Error:[/red] Provider '{name}' not found in the store.")
             raise typer.Exit(1) from e
@@ -1175,7 +1191,8 @@ def info(
             "Fetching versions...",
             lambda: client.list_provider_versions(name),
         )
-    except httpx.HTTPStatusError:
+    except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
         versions = []
 
     if output == OutputFormat.TABLE:
@@ -1238,6 +1255,7 @@ def deploy(
         if deploy_result.image:
             console.print(f"[dim]Image:[/dim] {deploy_result.image}")
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
         console.print(_format_api_error(e))
         raise typer.Exit(1) from e
     except Exception as e:
@@ -1273,19 +1291,20 @@ def status(
 
     Raises:
         typer.Exit: If deployment not found or status check fails.
-    """
+    """  # noqa: DOC501
     client = get_client()
     _require_auth(client)
 
     try:
         result = client.get_deployment_status(provider_id)
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
         if e.response.status_code == 404:
             console.print(f"[red]Error:[/red] Deployment not found for provider: {provider_id}")
-        else:
-            console.print(f"[red]Error:[/red] {e.response.text}")
+            raise typer.Exit(1) from e
 
-        raise typer.Exit(1) from e
+        raise
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from e
@@ -1345,6 +1364,8 @@ def delete(
         )
         console.print(f"[green]✓[/green] Provider [bold]{name}[/bold] deleted successfully")
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
         if e.response.status_code == 409:
             try:
                 detail = e.response.json().get("detail", "Provider has resources")

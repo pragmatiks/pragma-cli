@@ -14,6 +14,7 @@ from rich.console import Console
 from typer.core import TyperGroup
 
 from pragma_cli import set_client
+from pragma_cli.bootstrap_errors import check_bootstrap_error
 from pragma_cli.commands import auth, config, ops, organizations, projects, providers, resources, settings
 from pragma_cli.config import CONFIG_PATH, MalformedConfigError, get_current_context
 
@@ -58,6 +59,8 @@ def _handle_httpx_error(error: httpx.ConnectError | httpx.TimeoutException | htt
         raise typer.Exit(1) from error
 
     if isinstance(error, httpx.HTTPStatusError):
+        check_bootstrap_error(error)
+
         if error.response.status_code == 401:
             console.print("[red]Error:[/red] Not authenticated. Run 'pragma auth login' to authenticate.")
             raise typer.Exit(1) from error
