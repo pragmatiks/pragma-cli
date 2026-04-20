@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from pragma_cli import get_client
+from pragma_cli.bootstrap_errors import check_bootstrap_error
 from pragma_cli.helpers import OutputFormat, output_data
 
 
@@ -26,18 +27,19 @@ def _get_organization_id() -> str:
 
     Raises:
         typer.Exit: If not authenticated or organization cannot be resolved.
-    """
+    """  # noqa: DOC501
     client = get_client()
 
     try:
         user_info = client.get_me()
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
         if e.response.status_code == 401:
             console.print("[red]Error:[/red] Not authenticated. Run 'pragma auth login' first.")
             raise typer.Exit(1) from e
 
-        console.print(f"[red]Error:[/red] Failed to resolve organization: {e.response.text}")
-        raise typer.Exit(1) from e
+        raise
 
     return user_info.organization_id
 
@@ -60,11 +62,7 @@ def show(
     organization_id = _get_organization_id()
     client = get_client()
 
-    try:
-        settings = client.get_organization_settings(organization_id)
-    except httpx.HTTPStatusError as e:
-        console.print(f"[red]Error:[/red] {e.response.text}")
-        raise typer.Exit(1) from e
+    settings = client.get_organization_settings(organization_id)
 
     if output == OutputFormat.TABLE:
         console.print(f"[bold]Provider:[/bold]  {settings.provider}")
@@ -101,15 +99,11 @@ def set_profile(
     organization_id = _get_organization_id()
     client = get_client()
 
-    try:
-        updated = client.update_organization_settings(
-            organization_id,
-            provider=provider,
-            performance_profile=profile,
-        )
-    except httpx.HTTPStatusError as e:
-        console.print(f"[red]Error:[/red] {e.response.text}")
-        raise typer.Exit(1) from e
+    updated = client.update_organization_settings(
+        organization_id,
+        provider=provider,
+        performance_profile=profile,
+    )
 
     console.print("[green]Updated LLM settings:[/green]")
     console.print(f"  [bold]Provider:[/bold]  {updated.provider}")
@@ -153,11 +147,7 @@ def providers(
     organization_id = _get_organization_id()
     client = get_client()
 
-    try:
-        llm_providers = client.list_llm_providers(organization_id)
-    except httpx.HTTPStatusError as e:
-        console.print(f"[red]Error:[/red] {e.response.text}")
-        raise typer.Exit(1) from e
+    llm_providers = client.list_llm_providers(organization_id)
 
     if not llm_providers:
         console.print("[dim]No LLM providers available.[/dim]")

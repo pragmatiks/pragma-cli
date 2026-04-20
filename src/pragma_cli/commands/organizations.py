@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from pragma_cli import get_client
+from pragma_cli.bootstrap_errors import check_bootstrap_error
 from pragma_cli.helpers import OutputFormat, output_data
 
 
@@ -73,11 +74,7 @@ def list_organizations(
     """  # noqa: DOC501
     client = get_client()
 
-    try:
-        organizations = client.list_organizations()
-    except httpx.HTTPStatusError as e:
-        console.print(f"[red]Error:[/red] {e.response.text}")
-        raise typer.Exit(1) from e
+    organizations = client.list_organizations()
 
     if not organizations:
         console.print("[dim]No organizations found.[/dim]")
@@ -122,10 +119,12 @@ def cleanup(
     try:
         client.cleanup_organization(organization_id)
     except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
         if e.response.status_code == 404:
             console.print(f"[red]Error:[/red] Organization not found: {organization_id}")
             raise typer.Exit(1) from e
-        console.print(f"[red]Error:[/red] {e.response.text}")
-        raise typer.Exit(1) from e
+
+        raise
 
     console.print(f"[green]Cleanup initiated for organization:[/green] {organization_id}")
