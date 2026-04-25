@@ -404,6 +404,42 @@ def _print_next_cursor(cursor: str | None) -> None:
         console.print(f"[dim]Next page cursor: {cursor}[/dim]")
 
 
+def _print_derived_cursor_hint(
+    items: list[dict[str, Any]],
+    limit: int,
+    timestamp_field: str,
+    id_field: str,
+) -> None:
+    """Print a pagination hint derived from the last item in a page.
+
+    The ``list_task_comments`` and ``list_task_activity`` SDK methods
+    return plain lists with no explicit ``next_cursor``. When the page
+    is full (``len(items) == limit``) we approximate the cursor by
+    composing it from the last row using the same
+    ``"<iso-timestamp>|<id>"`` shape the API documents.
+
+    Args:
+        items: Serialized payloads for the current page.
+        limit: Page size requested by the caller.
+        timestamp_field: Name of the timestamp field on the payload
+            (``created_at`` for comments, ``timestamp`` for activity).
+        id_field: Name of the identifier field on the payload (``id``
+            for comments, ``edge_id`` for activity).
+    """
+    if len(items) < limit:
+        return
+
+    last = items[-1]
+    timestamp = last.get(timestamp_field)
+    identifier = last.get(id_field)
+
+    if not timestamp or not identifier:
+        return
+
+    cursor = f"{timestamp}|{identifier}"
+    console.print(f'[dim]More results — pass --cursor "{cursor}" to advance.[/dim]')
+
+
 def _print_graph_diff(payload: list[dict[str, Any]] | dict[str, Any]) -> None:
     """Render the per-resource net delta with a truncation banner.
 
@@ -414,9 +450,8 @@ def _print_graph_diff(payload: list[dict[str, Any]] | dict[str, Any]) -> None:
     resources: list[dict[str, Any]] = diff.get("resources", [])
 
     if diff.get("truncated"):
-        scanned = diff.get("total_mutations_scanned") or diff.get("total_mutations") or 0
-        console.print(f"[yellow]Showing partial view ({scanned} of N changes) — open mutation log[/yellow]")
-        console.print(f"[dim]Hint: pragma tasks mutations {diff.get('task_id')}[/dim]")
+        console.print("[yellow]Showing partial view (5000 of ? changes) — open mutation log[/yellow]")
+        console.print(f"[dim]Hint: pragma tasks mutations {_safe(diff.get('task_id') or '')}[/dim]")
         console.print()
 
     if not resources:
@@ -625,11 +660,11 @@ def comments_command(
         console.print("[dim]No comments found.[/dim]")
         return
 
-    output_data(
-        [_comment_payload(comment) for comment in comments],
-        output,
-        table_renderer=_print_comments,
-    )
+    payloads = [_comment_payload(comment) for comment in comments]
+    output_data(payloads, output, table_renderer=_print_comments)
+
+    if output == OutputFormat.TABLE:
+        _print_derived_cursor_hint(payloads, limit, "created_at", "id")
 
 
 @app.command("activity")
@@ -663,11 +698,11 @@ def activity_command(
         console.print("[dim]No activity found.[/dim]")
         return
 
-    output_data(
-        [_activity_payload(entry) for entry in entries],
-        output,
-        table_renderer=_print_activity,
-    )
+    payloads = [_activity_payload(entry) for entry in entries]
+    output_data(payloads, output, table_renderer=_print_activity)
+
+    if output == OutputFormat.TABLE:
+        _print_derived_cursor_hint(payloads, limit, "timestamp", "edge_id")
 
 
 @app.command("mutations")
