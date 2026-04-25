@@ -49,8 +49,8 @@ def completion_provider_ids(ctx: click.Context, incomplete: str):
         return
 
     for provider in providers.items:
-        if provider.name.lower().startswith(incomplete.lower()):
-            yield provider.name
+        if provider.canonical.lower().startswith(incomplete.lower()):
+            yield provider.canonical
 
 
 def completion_resource_ids(ctx: click.Context, incomplete: str):
