@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.0.0 (2026-04-25)
+
+### Refactor
+
+- **cli**: align with PRA-369 SDK and API changes (#49)
+
 ## v1.2.0 (2026-04-20)
 
 ### Feat
