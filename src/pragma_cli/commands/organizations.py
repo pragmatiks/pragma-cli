@@ -1,13 +1,21 @@
-"""Organization management commands."""
+"""Organization management commands.
+
+Customer-realm self-scoped commands for the caller's own organization.
+Cross-tenant administration (listing every organization, reading
+another tenant's record, triggering tenant cleanup) lives under the
+console realm and is exposed by the separate ``pragma-console`` CLI;
+those endpoints are deliberately not reachable from this CLI.
+"""
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 import httpx
 import typer
+from pragma_sdk import PragmaClient
+from pragma_sdk.models.api import Organization
 from rich.console import Console
-from rich.table import Table
 
 from pragma_cli import get_client
 from pragma_cli.bootstrap_errors import check_bootstrap_error
@@ -19,112 +27,140 @@ app = typer.Typer(help="Organization management commands")
 console = Console()
 
 
-def _format_status_color(status: str) -> str:
-    """Format organization status with color markup.
+_STATUS_COLORS: dict[str, str] = {
+    "active": "green",
+    "ready": "green",
+    "bootstrapping": "yellow",
+    "deactivating": "yellow",
+    "pending": "yellow",
+    "failed": "red",
+    "deleted": "red",
+}
+
+
+def _format_status(status: str) -> str:
+    """Wrap a lifecycle status string in Rich colour markup.
+
+    Args:
+        status: Lifecycle status returned by the API.
 
     Returns:
         Status string wrapped in Rich color markup.
     """
-    status_colors = {
-        "active": "green",
-        "deactivating": "yellow",
-        "deleted": "red",
-    }
-    color = status_colors.get(status.lower(), "white")
+    color = _STATUS_COLORS.get(status.lower(), "white")
     return f"[{color}]{status}[/{color}]"
 
 
-def _print_organizations_table(organizations: list[dict]) -> None:
-    """Print organizations in a formatted table.
+def _require_auth(client: PragmaClient) -> None:
+    """Verify the client has credentials, exit with error if not.
 
     Args:
-        organizations: List of organization dictionaries to display.
+        client: SDK client instance.
+
+    Raises:
+        typer.Exit: If authentication is missing.
     """
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("Organization ID")
-    table.add_column("Name")
-    table.add_column("Slug")
-    table.add_column("Status")
-
-    for org in organizations:
-        table.add_row(
-            org.get("organization_id", ""),
-            org.get("name", ""),
-            org.get("slug", ""),
-            _format_status_color(org.get("status", "")),
-        )
-
-    console.print(table)
+    if client._auth is None:
+        console.print("[red]Error:[/red] Authentication required. Run 'pragma auth login' first.")
+        raise typer.Exit(1)
 
 
-@app.command("list")
-def list_organizations(
+def _print_organization_panel(organization: Organization) -> None:
+    """Render the caller's organization as a labelled key/value list.
+
+    Args:
+        organization: The fetched organization record.
+    """
+    console.print()
+    console.print("[bold]Organization[/bold]")
+    console.print()
+    console.print(f"  ID:      [cyan]{organization.organization_id}[/cyan]")
+    console.print(f"  Name:    [cyan]{organization.name}[/cyan]")
+    console.print(f"  Slug:    [cyan]{organization.slug}[/cyan]")
+    console.print(f"  Status:  {_format_status(organization.status.value)}")
+    console.print(f"  Created: [dim]{organization.created_at.isoformat()}[/dim]")
+    console.print(f"  Updated: [dim]{organization.updated_at.isoformat()}[/dim]")
+
+
+@app.command("me")
+def show_me(
     output: Annotated[
         OutputFormat,
         typer.Option("--output", "-o", help="Output format"),
     ] = OutputFormat.TABLE,
 ) -> None:
-    """List all organizations.
+    """Show the caller's own organization.
 
-    Displays a table of organizations accessible to the current user.
-
-    Examples:
-        pragma organizations list
-        pragma organizations list -o json
-    """  # noqa: DOC501
-    client = get_client()
-
-    organizations = client.list_organizations()
-
-    if not organizations:
-        console.print("[dim]No organizations found.[/dim]")
-        return
-
-    output_data(
-        [org.model_dump(mode="json") for org in organizations],
-        output,
-        table_renderer=_print_organizations_table,
-    )
-
-
-@app.command()
-def cleanup(
-    organization_id: Annotated[str, typer.Argument(help="Organization ID to clean up")],
-    yes: Annotated[
-        bool,
-        typer.Option("--yes", "-y", help="Skip confirmation prompt"),
-    ] = False,
-) -> None:
-    """Trigger cleanup for an organization.
-
-    Initiates resource teardown and deprovisioning for all resources
-    within the organization. This is a destructive operation.
+    Calls ``GET /organizations/me`` and renders the result. Replaces
+    the previous cross-tenant listing commands, which moved to the
+    console realm.
 
     Examples:
-        pragma organizations cleanup org_abc123
-        pragma organizations cleanup org_abc123 --yes
-
-    Raises:
-        typer.Exit: If organization not found or user cancels.
+        pragma organizations me
+        pragma organizations me -o json
     """  # noqa: DOC501
     client = get_client()
-
-    if not yes:
-        confirm = typer.confirm(f"Clean up organization '{organization_id}'? This will tear down all resources.")
-
-        if not confirm:
-            console.print("[dim]Cancelled.[/dim]")
-            raise typer.Exit(0)
+    _require_auth(client)
 
     try:
-        client.cleanup_organization(organization_id)
+        response = client._request("GET", "/organizations/me")
     except httpx.HTTPStatusError as e:
         check_bootstrap_error(e)
 
-        if e.response.status_code == 404:
-            console.print(f"[red]Error:[/red] Organization not found: {organization_id}")
+        if e.response.status_code == 401:
+            console.print("[red]Error:[/red] Not authenticated. Run 'pragma auth login' to authenticate.")
             raise typer.Exit(1) from e
 
         raise
 
-    console.print(f"[green]Cleanup initiated for organization:[/green] {organization_id}")
+    organization = Organization.model_validate(response)
+
+    if output == OutputFormat.TABLE:
+        _print_organization_panel(organization)
+        return
+
+    output_data(organization.model_dump(mode="json"), output)
+
+
+@app.command("status")
+def show_status(
+    output: Annotated[
+        OutputFormat,
+        typer.Option("--output", "-o", help="Output format"),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Show the bootstrap status of the caller's own organization.
+
+    Calls ``GET /organizations/me/status``. The endpoint collapses the
+    internal lifecycle into three public states: ``bootstrapping``,
+    ``ready``, and ``failed``. Polling is safe while the organization
+    is bootstrapping.
+
+    Examples:
+        pragma organizations status
+        pragma organizations status -o json
+    """  # noqa: DOC501
+    client = get_client()
+    _require_auth(client)
+
+    try:
+        response: dict[str, Any] = client._request("GET", "/organizations/me/status")
+    except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
+
+        if e.response.status_code == 401:
+            console.print("[red]Error:[/red] Not authenticated. Run 'pragma auth login' to authenticate.")
+            raise typer.Exit(1) from e
+
+        raise
+
+    status_value = str(response.get("status", "unknown"))
+
+    if output == OutputFormat.TABLE:
+        console.print()
+        console.print("[bold]Organization Status[/bold]")
+        console.print()
+        console.print(f"  Status: {_format_status(status_value)}")
+        return
+
+    output_data({"status": status_value}, output)

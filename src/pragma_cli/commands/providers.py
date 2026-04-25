@@ -63,12 +63,6 @@ TEMPLATE_PATH_ENV = "PRAGMA_PROVIDER_TEMPLATE"
 PUBLISH_POLL_INTERVAL = 2.0
 PUBLISH_POLL_TIMEOUT = 600
 
-TRUST_TIER_STYLES = {
-    "official": "green",
-    "verified": "blue",
-    "community": "dim",
-}
-
 
 def create_tarball(source_dir: Path) -> bytes:
     """Create a gzipped tarball of the provider source directory.
@@ -300,22 +294,6 @@ def _format_api_error(error: httpx.HTTPStatusError) -> str:
         return detail.get("message", str(error))
 
     return str(detail)
-
-
-def _format_trust_tier(tier: str | None) -> str:
-    """Format a trust tier with Rich color markup.
-
-    Args:
-        tier: Trust tier string or None.
-
-    Returns:
-        Formatted string with Rich markup.
-    """
-    if not tier:
-        return "[dim]-[/dim]"
-
-    color = TRUST_TIER_STYLES.get(tier, "white")
-    return f"[{color}]{tier}[/{color}]"
 
 
 def _format_deployment_status(status: DeploymentStatus | None) -> str:
@@ -631,7 +609,7 @@ def publish(
         )
 
         published_version = result.version
-        console.print(f"[green]Published:[/green] {result.provider_name} v{published_version}")
+        console.print(f"[green]Published:[/green] {result.canonical} v{published_version}")
 
         if not wait:
             console.print()
@@ -1042,10 +1020,6 @@ def downgrade(
 
 @app.command("list")
 def list_providers(
-    trust_tier: Annotated[
-        str | None,
-        typer.Option("--trust-tier", help="Filter by trust tier (official, verified, community)"),
-    ] = None,
     scope: Annotated[
         str | None,
         typer.Option("--scope", help="Filter by scope (public or tenant)"),
@@ -1098,7 +1072,6 @@ def list_providers(
             lambda: client.list_providers(
                 query=query,
                 scope=scope,
-                trust_tier=trust_tier,
                 tags=tag_list,
                 limit=limit,
                 offset=offset,
@@ -1435,7 +1408,7 @@ def _print_store_list_table(result) -> None:
     table = Table(show_header=True, header_style="bold")
     table.add_column("Name")
     table.add_column("Display Name")
-    table.add_column("Trust Tier")
+    table.add_column("Author")
     table.add_column("Latest Version")
     table.add_column("Installs", justify="right")
     table.add_column("Tags")
@@ -1443,11 +1416,13 @@ def _print_store_list_table(result) -> None:
     for provider in result.items:
         tags_display = ", ".join(getattr(provider, "tags", []) or [])
         install_count = getattr(provider, "install_count", 0) or 0
+        author = getattr(provider, "author", None)
+        author_display = getattr(author, "display_name", None) or "[dim]-[/dim]"
 
         table.add_row(
-            provider.name,
+            provider.canonical,
             getattr(provider, "display_name", None) or "[dim]-[/dim]",
-            _format_trust_tier(getattr(provider, "trust_tier", "community")),
+            author_display,
             getattr(provider, "latest_version", None) or "[dim]-[/dim]",
             str(install_count),
             tags_display or "[dim]-[/dim]",
@@ -1470,8 +1445,8 @@ def _print_provider_info(provider, versions: list | None = None) -> None:
     """
     versions = versions or []
 
-    trust_tier = getattr(provider, "trust_tier", "community")
-    author = getattr(getattr(provider, "author", None), "org_name", None) or "[dim]-[/dim]"
+    author = getattr(provider, "author", None)
+    author_display = getattr(author, "display_name", None) or "[dim]-[/dim]"
     tags = ", ".join(getattr(provider, "tags", []) or []) or "[dim]-[/dim]"
     install_count = getattr(provider, "install_count", 0) or 0
     description = getattr(provider, "description", None) or "[dim]No description[/dim]"
@@ -1479,10 +1454,9 @@ def _print_provider_info(provider, versions: list | None = None) -> None:
     updated_at = getattr(provider, "updated_at", None)
 
     info_lines = [
-        f"[bold]Name:[/bold]         {provider.name}",
-        f"[bold]Display Name:[/bold] {getattr(provider, 'display_name', None) or provider.name}",
-        f"[bold]Author:[/bold]       {author}",
-        f"[bold]Trust Tier:[/bold]   {_format_trust_tier(trust_tier)}",
+        f"[bold]Name:[/bold]         {provider.canonical}",
+        f"[bold]Display Name:[/bold] {getattr(provider, 'display_name', None) or provider.canonical}",
+        f"[bold]Author:[/bold]       {author_display}",
         f"[bold]Description:[/bold]  {description}",
         f"[bold]Tags:[/bold]         {tags}",
         f"[bold]Installs:[/bold]     {install_count}",
@@ -1494,7 +1468,7 @@ def _print_provider_info(provider, versions: list | None = None) -> None:
     if updated_at:
         info_lines.append(f"[bold]Updated:[/bold]      {str(updated_at)[:19]}")
 
-    panel = Panel("\n".join(info_lines), title=provider.name, border_style="blue")
+    panel = Panel("\n".join(info_lines), title=provider.canonical, border_style="blue")
     console.print(panel)
 
     if versions:
@@ -1547,7 +1521,7 @@ def _print_installed_table(providers) -> None:
             upgrade_display = "[dim]-[/dim]"
 
         table.add_row(
-            p.provider_name,
+            p.canonical,
             p.installed_version,
             getattr(p, "resource_tier", None) or "[dim]-[/dim]",
             getattr(p, "upgrade_policy", None) or "[dim]-[/dim]",
@@ -1563,6 +1537,25 @@ def _serialize_datetime(obj: object, attr: str) -> str | None:
     return val.isoformat() if val else None
 
 
+def _author_to_dict(author) -> dict | None:
+    """Convert a ProviderAuthor model to a plain dict for JSON/YAML output.
+
+    Args:
+        author: ProviderAuthor object or None.
+
+    Returns:
+        Dictionary representation, or None if no author.
+    """
+    if author is None:
+        return None
+
+    return {
+        "kind": getattr(author, "kind", None),
+        "organization_id": getattr(author, "organization_id", None),
+        "display_name": getattr(author, "display_name", None),
+    }
+
+
 def _provider_summary_to_dict(provider) -> dict:
     """Convert a store provider summary to a plain dict for JSON/YAML output.
 
@@ -1573,11 +1566,12 @@ def _provider_summary_to_dict(provider) -> dict:
         Dictionary representation.
     """
     return {
+        "prefix": provider.prefix,
         "name": provider.name,
+        "canonical": provider.canonical,
         "display_name": getattr(provider, "display_name", None),
         "description": getattr(provider, "description", None),
-        "author": getattr(getattr(provider, "author", None), "org_name", None),
-        "trust_tier": getattr(provider, "trust_tier", None),
+        "author": _author_to_dict(getattr(provider, "author", None)),
         "tags": getattr(provider, "tags", []),
         "latest_version": getattr(provider, "latest_version", None),
         "install_count": getattr(provider, "install_count", 0),
@@ -1597,11 +1591,12 @@ def _provider_detail_to_dict(provider, versions: list | None = None) -> dict:
     versions = versions or []
 
     return {
+        "prefix": provider.prefix,
         "name": provider.name,
+        "canonical": provider.canonical,
         "display_name": getattr(provider, "display_name", None),
         "description": getattr(provider, "description", None),
-        "author": getattr(getattr(provider, "author", None), "org_name", None),
-        "trust_tier": getattr(provider, "trust_tier", None),
+        "author": _author_to_dict(getattr(provider, "author", None)),
         "tags": getattr(provider, "tags", []),
         "latest_version": getattr(provider, "latest_version", None),
         "install_count": getattr(provider, "install_count", 0),
@@ -1631,7 +1626,9 @@ def _installed_provider_to_dict(provider) -> dict:
         Dictionary representation.
     """
     return {
-        "provider_name": provider.provider_name,
+        "prefix": provider.prefix,
+        "name": provider.name,
+        "canonical": provider.canonical,
         "installed_version": provider.installed_version,
         "upgrade_policy": getattr(provider, "upgrade_policy", None),
         "resource_tier": getattr(provider, "resource_tier", None),
