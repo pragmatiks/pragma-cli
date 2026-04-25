@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.0.1 (2026-04-25)
+
+### Fix
+
+- **ci**: detect new commitizen no-commits output (#50)
+
 ## v2.0.0 (2026-04-25)
 
 ### Refactor
