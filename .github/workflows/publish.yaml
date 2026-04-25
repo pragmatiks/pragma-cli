@@ -43,7 +43,7 @@ jobs:
           EXIT_CODE=${PIPESTATUS[0]}
 
           # Check for no-bump scenarios (cz bump exits 0 even for NO_COMMITS_TO_BUMP)
-          if grep -qE "No commits found|is not a bump|NO_COMMITS_TO_BUMP" bump_output.txt; then
+          if grep -qE "No commits found|No new commits found|is not a bump|NO_COMMITS_TO_BUMP|NO_COMMITS_FOUND" bump_output.txt; then
             echo "No version bump needed"
             echo "bumped=false" >> $GITHUB_OUTPUT
           elif [ $EXIT_CODE -eq 0 ]; then
