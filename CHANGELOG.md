@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.1.0 (2026-04-25)
+
+### Feat
+
+- add read-only task commands
+
 ## v2.0.1 (2026-04-25)
 
 ### Fix
