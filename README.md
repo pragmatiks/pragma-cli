@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/wordmark.png" alt="Pragma-OS" width="800">
+  <img src="assets/wordmark.png" alt="Pragmatiks" width="800">
 </p>
 
 # Pragma CLI
@@ -11,7 +11,7 @@
 
 **[Documentation](https://docs.pragmatiks.io/cli/overview)** | **[SDK](https://github.com/pragmatiks/pragma-sdk)** | **[Providers](https://github.com/pragmatiks/pragma-providers)**
 
-Command-line interface for managing pragma-os resources.
+Command-line interface for managing Pragmatiks resources.
 
 ## Installation
 
