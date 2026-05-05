@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.0.0 (2026-05-05)
+
+### BREAKING CHANGE
+
+- 'pragma providers publish' drops --version, --org,
+and --wait flags. Version is read from pyproject.toml's
+[project].version; the publishing organization is auto-resolved
+from the authenticated user; publishing is fully synchronous.
+
+### Feat
+
+- migrate provider publish to wheel-based SDK (#55)
+
 ## v2.1.0 (2026-04-25)
 
 ### Feat
