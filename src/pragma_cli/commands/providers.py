@@ -6,12 +6,7 @@ Pragmatiks providers.
 
 from __future__ import annotations
 
-import base64
-import io
-import json
 import os
-import tarfile
-import time
 import tomllib
 from pathlib import Path
 from typing import Annotated, Any
@@ -25,7 +20,6 @@ from pragma_sdk import (
     DeploymentStatus,
     PragmaClient,
 )
-from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -40,67 +34,8 @@ from pragma_cli.helpers import OutputFormat, output_data
 app = typer.Typer(help="Provider management commands")
 console = Console()
 
-TARBALL_EXCLUDES = {
-    ".git",
-    "__pycache__",
-    ".venv",
-    ".env",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    "*.pyc",
-    "*.pyo",
-    "*.egg-info",
-    "dist",
-    "build",
-    ".tox",
-    ".nox",
-}
-
 DEFAULT_TEMPLATE_URL = "gh:pragmatiks/pragma-providers"
 TEMPLATE_PATH_ENV = "PRAGMA_PROVIDER_TEMPLATE"
-
-PUBLISH_POLL_INTERVAL = 2.0
-PUBLISH_POLL_TIMEOUT = 600
-
-
-def create_tarball(source_dir: Path) -> bytes:
-    """Create a gzipped tarball of the provider source directory.
-
-    Excludes common development artifacts like .git, __pycache__, .venv, etc.
-
-    Args:
-        source_dir: Path to the provider source directory.
-
-    Returns:
-        Gzipped tarball bytes suitable for upload.
-    """
-    buffer = io.BytesIO()
-
-    def exclude_filter(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
-        """Filter out excluded files and directories.
-
-        Returns:
-            The TarInfo object if included, None if excluded.
-        """
-        name = tarinfo.name
-        parts = Path(name).parts
-
-        for part in parts:
-            if part in TARBALL_EXCLUDES:
-                return None
-
-            for pattern in TARBALL_EXCLUDES:
-                if pattern.startswith("*") and part.endswith(pattern[1:]):
-                    return None
-
-        return tarinfo
-
-    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
-        tar.add(source_dir, arcname=".", filter=exclude_filter)
-
-    buffer.seek(0)
-    return buffer.read()
 
 
 def get_template_source() -> str:
@@ -125,81 +60,50 @@ def get_template_source() -> str:
     return DEFAULT_TEMPLATE_URL
 
 
-class PragmaProviderConfig(BaseModel):
-    """Validated provider configuration from [tool.pragma] in pyproject.toml."""
-
-    provider: str
-    package: str | None = None
-    display_name: str | None = None
-    description: str | None = None
-    icon_url: str | None = None
-    tags: list[str] = []
-
-    @field_validator("provider")
-    @classmethod
-    def validate_provider(cls, v: str) -> str:
-        """Strip whitespace and reject slashes in provider name.
-
-        Args:
-            v: Raw provider name value.
-
-        Returns:
-            Stripped provider name.
-
-        Raises:
-            ValueError: If the provider name contains a slash.
-        """
-        v = v.strip()
-
-        if "/" in v:
-            msg = "Provider name must not contain slashes (the org prefix is added automatically)"
-            raise ValueError(msg)
-
-        return v
-
-
-def read_provider_config(directory: Path | None = None) -> PragmaProviderConfig:
-    """Read and validate provider configuration from [tool.pragma] in pyproject.toml.
+def _read_provider_short_name(directory: Path) -> str:
+    """Read the provider short name from [tool.pragma].provider in pyproject.toml.
 
     Args:
-        directory: Directory containing pyproject.toml. Defaults to current directory.
+        directory: Directory containing pyproject.toml.
 
     Returns:
-        Validated provider configuration.
+        Provider short name (no org prefix).
 
     Raises:
-        typer.Exit: If pyproject.toml is missing or [tool.pragma].provider is not configured.
+        typer.Exit: If pyproject.toml is missing, malformed, or
+            [tool.pragma].provider is missing/invalid.
     """
-    pyproject = (directory or Path(".")) / "pyproject.toml"
+    pyproject = directory / "pyproject.toml"
 
     if not pyproject.exists():
-        console.print("[red]Error:[/red] No pyproject.toml found in current directory.")
+        console.print(f"[red]Error:[/red] No pyproject.toml found in {directory}.")
         raise typer.Exit(1)
 
     try:
         with open(pyproject, "rb") as f:
             data = tomllib.load(f)
-
-        pragma_config = data.get("tool", {}).get("pragma")
-
-        if not isinstance(pragma_config, dict):
-            pragma_config = {}
-    except Exception as e:
+    except tomllib.TOMLDecodeError as e:
         console.print(f"[red]Error:[/red] Failed to parse pyproject.toml: {e}")
         raise typer.Exit(1) from e
 
-    if not pragma_config.get("provider"):
+    name = data.get("tool", {}).get("pragma", {}).get("provider")
+
+    if not isinstance(name, str) or not name.strip():
         console.print(
-            "[red]Error:[/red] Missing [tool.pragma] provider field in pyproject.toml.\n"
+            "[red]Error:[/red] Missing [tool.pragma].provider in pyproject.toml.\n"
             'Add a [tool.pragma] section with at least: provider = "your-provider-name"'
         )
         raise typer.Exit(1)
 
-    try:
-        return PragmaProviderConfig.model_validate(pragma_config)
-    except ValidationError as e:
-        console.print(f"[red]Error:[/red] Invalid [tool.pragma] configuration: {e}")
-        raise typer.Exit(1) from e
+    name = name.strip()
+
+    if "/" in name:
+        console.print(
+            "[red]Error:[/red] [tool.pragma].provider must not contain slashes (the org prefix is added automatically)."
+        )
+        raise typer.Exit(1)
+
+    return name
 
 
 def _require_auth(client: PragmaClient) -> None:
@@ -214,43 +118,6 @@ def _require_auth(client: PragmaClient) -> None:
     if client._auth is None:
         console.print("[red]Error:[/red] Authentication required. Run 'pragma auth login' first.")
         raise typer.Exit(1)
-
-
-def _extract_org_slug(client: PragmaClient) -> str | None:
-    """Extract the organization slug from the client's JWT token payload.
-
-    Decodes the JWT payload without signature verification to read the
-    org_slug claim set by Clerk on session tokens.
-
-    Args:
-        client: Authenticated SDK client instance.
-
-    Returns:
-        Organization slug string, or None if not available.
-    """
-    token = client._auth.token if client._auth else None
-
-    if not token:
-        return None
-
-    try:
-        parts = token.split(".")
-
-        if len(parts) != 3:
-            return None
-
-        payload_b64 = parts[1]
-        padding = 4 - len(payload_b64) % 4
-
-        if padding != 4:
-            payload_b64 += "=" * padding
-
-        payload_bytes = base64.urlsafe_b64decode(payload_b64)
-        payload = json.loads(payload_bytes)
-
-        return payload.get("org_slug")
-    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
-        return None
 
 
 def _fetch_with_spinner(description: str, fetch_fn) -> Any:
@@ -476,43 +343,8 @@ def update(
     typer.echo("Provider project updated successfully.")
 
 
-def _read_pyproject_version(directory: Path) -> str | None:
-    """Read the version from [project].version in pyproject.toml.
-
-    Args:
-        directory: Directory containing pyproject.toml.
-
-    Returns:
-        Version string if found, None otherwise.
-    """
-    pyproject = directory / "pyproject.toml"
-
-    if not pyproject.exists():
-        return None
-
-    try:
-        with open(pyproject, "rb") as f:
-            data = tomllib.load(f)
-
-        return data.get("project", {}).get("version")
-    except Exception:
-        return None
-
-
 @app.command()
 def publish(
-    version: Annotated[
-        str | None,
-        typer.Option(
-            "--version",
-            "-v",
-            help="Semantic version for this release (auto-detected from pyproject.toml if omitted)",
-        ),
-    ] = None,
-    org: Annotated[
-        str | None,
-        typer.Option("--org", help="Organization namespace (auto-detected from authenticated user if omitted)"),
-    ] = None,
     changelog: Annotated[
         str | None,
         typer.Option("--changelog", help="Changelog text for this version"),
@@ -521,34 +353,33 @@ def publish(
         Path,
         typer.Option("--directory", "-d", help="Provider source directory"),
     ] = Path("."),
-    wait: Annotated[
-        bool,
-        typer.Option("--wait/--no-wait", help="Wait for build to complete"),
-    ] = True,
 ):
-    """Publish a provider to the store.
+    """Publish a provider version via the wheel-based flow.
 
-    Creates a tarball of the provider source and publishes it to the
-    Pragmatiks Provider Store with the specified semantic version.
+    The SDK builds a wheel locally with `uv build`, extracts resource
+    schemas from the provider package, uploads the wheel to GCP
+    Artifact Registry via `uv publish`, and registers the version
+    with the catalog.
 
-    The provider name is read from [tool.pragma].provider in pyproject.toml
-    and namespaced under the specified organization.
+    Inputs are read from pyproject.toml:
+    - tool.pragma.provider: provider short name
+    - project.version: version cut by this publish
+    - tool.pragma.image / tool.pragma.entrypoint: optional runtime overrides
 
-    Version and organization are auto-detected when not provided:
-    - Version is read from [project].version in pyproject.toml
-    - Organization is read from the authenticated user's context
+    Requires `uv` on PATH and `keyrings.google-artifactregistry-auth`
+    installed for Artifact Registry credentials. The publishing
+    organization is resolved from the authenticated user.
 
     Examples:
         pragma providers publish
-        pragma providers publish --version 1.0.0 --org myorg
-        pragma providers publish --version 1.1.0 --changelog "Added new resources"
-        pragma providers publish --no-wait
+        pragma providers publish --directory ./postgres-provider
+        pragma providers publish --changelog "Added new resources"
 
     Raises:
-        typer.Exit: If provider detection fails or publish fails.
-    """  # noqa: DOC501
-    config = read_provider_config(directory)
-
+        typer.Exit: If the directory is missing, configuration is
+            invalid, the local build/upload fails, or the API rejects
+            the request.
+    """
     if not directory.exists():
         console.print(f"[red]Error:[/red] Directory not found: {directory}")
         raise typer.Exit(1)
@@ -556,130 +387,32 @@ def publish(
     client = get_client()
     _require_auth(client)
 
-    if version is None:
-        version = _read_pyproject_version(directory)
+    name = _read_provider_short_name(directory)
 
-        if version is None:
-            console.print(
-                "[red]Error:[/red] Could not detect version. Set [project].version in pyproject.toml or pass --version."
-            )
-            raise typer.Exit(1)
-
-    if org is None:
-        org = _extract_org_slug(client)
-
-        if org is None:
-            console.print("[red]Error:[/red] Could not detect organization. Pass --org explicitly.")
-            raise typer.Exit(1)
-
-    provider_id = f"{org}/{config.provider}"
-
-    metadata: dict[str, Any] = {}
-
-    if config.display_name is not None:
-        metadata["display_name"] = config.display_name
-
-    if config.description is not None:
-        metadata["description"] = config.description
-
-    if config.icon_url is not None:
-        metadata["icon_url"] = config.icon_url
-
-    if config.tags:
-        metadata["tags"] = config.tags
-
-    console.print(f"[bold]Publishing provider:[/bold] {provider_id}")
-    console.print(f"[dim]Version:[/dim] {version}")
+    console.print(f"[bold]Publishing provider:[/bold] {name}")
     console.print(f"[dim]Source directory:[/dim] {directory.absolute()}")
     console.print()
 
-    tarball = _fetch_with_spinner("Creating tarball...", lambda: create_tarball(directory))
-    console.print(f"[green]Created tarball:[/green] {len(tarball) / 1024:.1f} KB")
-
     try:
         result = _fetch_with_spinner(
-            "Publishing to store...",
-            lambda: client.publish_provider(
-                provider_id,
-                tarball,
-                version,
-                changelog=changelog,
-                **metadata,
-            ),
+            "Building wheel, uploading, and registering version...",
+            lambda: client.publish_provider(directory, name=name, changelog=changelog),
         )
-
-        published_version = result.version
-        console.print(f"[green]Published:[/green] {result.canonical} v{published_version}")
-
-        if not wait:
-            console.print()
-            console.print("[dim]Build running in background.[/dim]")
-            return
-
-        _poll_publish_status(client, provider_id, published_version)
-
     except httpx.HTTPStatusError as e:
         check_bootstrap_error(e)
-
-        if e.response.status_code == 409:
-            console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-            raise typer.Exit(1) from e
-
-        if e.response.status_code == 413:
-            console.print("[red]Error:[/red] Tarball is too large.")
-            console.print(f"[dim]Size: {len(tarball) / 1024:.1f} KB[/dim]")
-            raise typer.Exit(1) from e
-
-        raise
-    except Exception as e:
-        if isinstance(e, typer.Exit):
-            raise
-
+        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
+        raise typer.Exit(1) from e
+    except (FileNotFoundError, ValueError, TypeError) as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from e
+    except RuntimeError as e:
+        console.print(f"[red]Build failed:[/red] {e}")
+        raise typer.Exit(1) from e
 
+    console.print(f"[green]Published:[/green] {result.canonical} v{result.version}")
 
-def _poll_publish_status(client: PragmaClient, provider_id: str, version: str) -> None:
-    """Poll store build status until completion or timeout.
-
-    Args:
-        client: SDK client instance.
-        provider_id: Provider identifier.
-        version: Semantic version string.
-    """  # noqa: DOC501
-    start_time = time.time()
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("Building...", total=None)
-
-        while True:
-            build_status = client.get_publish_status(provider_id, version)
-            current_status = getattr(build_status, "status", None)
-
-            if current_status in ("published", "failed"):
-                break
-
-            elapsed = time.time() - start_time
-
-            if elapsed > PUBLISH_POLL_TIMEOUT:
-                console.print("[red]Error:[/red] Build timed out")
-                raise typer.Exit(1)
-
-            progress.update(task, description=f"Building... ({current_status})")
-            time.sleep(PUBLISH_POLL_INTERVAL)
-
-    if current_status == "published":
-        console.print(f"[green]Build successful:[/green] {provider_id} v{version}")
-    elif current_status == "failed":
-        console.print(f"[red]Build failed:[/red] {provider_id} v{version}")
-        raise typer.Exit(1)
-    else:
-        console.print(f"[dim]Build status:[/dim] {current_status}")
+    if result.wheel_url:
+        console.print(f"[dim]Wheel:[/dim] {result.wheel_url}")
 
 
 def _merge_install_config(

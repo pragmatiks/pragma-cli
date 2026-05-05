@@ -8,11 +8,10 @@
 
 ```
 pragma-cli/
-├── src/pragma_cli/
-│   ├── main.py            # Typer app entry point
-│   ├── commands/          # Command modules
-│   └── utils/             # Helpers (output, config)
-└── tests/
+└── src/pragma_cli/
+    ├── main.py            # Typer app entry point
+    ├── commands/          # Command modules
+    └── utils/             # Helpers (output, config)
 ```
 
 ## Dependencies
@@ -50,10 +49,9 @@ pragma = "pragma_cli.main:app"
 - `pragma providers list` - List deployed providers
 - `pragma providers init <name>` - Initialize a new provider project
 - `pragma providers update` - Update project from template
-- `pragma providers push [--deploy]` - Build and push (optionally deploy)
+- `pragma providers publish [--changelog <text>] [-d <dir>]` - Build wheel via `uv build`, upload to Artifact Registry, register version (requires `uv` + `keyrings.google-artifactregistry-auth`)
 - `pragma providers deploy <id> [version]` - Deploy a specific version
 - `pragma providers status <id>` - Check deployment status
-- `pragma providers builds <id>` - List build history
 - `pragma providers delete <id> [--cascade]` - Delete a provider
 
 ### Configuration
@@ -80,7 +78,6 @@ Always use `task` commands:
 
 | Command | Purpose |
 |---------|---------|
-| `task test` | Run pytest |
 | `task format` | Format with ruff |
 | `task check` | Lint + type check |
 
@@ -90,12 +87,6 @@ Always use `task` commands:
 - Rich console for formatted output
 - SDK client for all API operations
 - YAML for resource definitions
-
-## Testing
-
-- Mock SDK calls, don't hit real API
-- Test command output formatting
-- Test error handling paths
 
 ## Publishing to PyPI
 
