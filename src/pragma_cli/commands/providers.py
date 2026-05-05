@@ -86,12 +86,20 @@ def _read_provider_short_name(directory: Path) -> str:
         console.print(f"[red]Error:[/red] Failed to parse pyproject.toml: {e}")
         raise typer.Exit(1) from e
 
-    name = data.get("tool", {}).get("pragma", {}).get("provider")
+    pragma = data.get("tool", {}).get("pragma", {})
 
-    if not isinstance(name, str) or not name.strip():
+    if "provider" not in pragma:
         console.print(
             "[red]Error:[/red] Missing [tool.pragma].provider in pyproject.toml.\n"
             'Add a [tool.pragma] section with at least: provider = "your-provider-name"'
+        )
+        raise typer.Exit(1)
+
+    name = pragma["provider"]
+
+    if not isinstance(name, str) or not name.strip():
+        console.print(
+            f"[red]Error:[/red] [tool.pragma].provider must be a non-empty string, got {type(name).__name__}: {name!r}"
         )
         raise typer.Exit(1)
 
@@ -354,17 +362,18 @@ def publish(
         typer.Option("--directory", "-d", help="Provider source directory"),
     ] = Path("."),
 ):
-    """Publish a provider version via the wheel-based flow.
+    """Publish a new version of a provider.
 
-    The SDK builds a wheel locally with `uv build`, extracts resource
-    schemas from the provider package, uploads the wheel to GCP
-    Artifact Registry via `uv publish`, and registers the version
-    with the catalog.
+    Builds a wheel locally with `uv build`, extracts resource schemas
+    from the provider package, uploads the wheel to GCP Artifact
+    Registry via `uv publish`, and registers the version in the
+    catalog.
 
-    Inputs are read from pyproject.toml:
-    - tool.pragma.provider: provider short name
-    - project.version: version cut by this publish
-    - tool.pragma.image / tool.pragma.entrypoint: optional runtime overrides
+    Reads from pyproject.toml:
+    - tool.pragma.provider: provider short name (read by the CLI)
+    - project.version: version cut by this publish (read by the SDK)
+    - tool.pragma.image / tool.pragma.entrypoint: optional runtime
+      overrides (read by the SDK)
 
     Requires `uv` on PATH and `keyrings.google-artifactregistry-auth`
     installed for Artifact Registry credentials. The publishing
@@ -402,11 +411,18 @@ def publish(
         check_bootstrap_error(e)
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
-    except (FileNotFoundError, ValueError, TypeError) as e:
+    except FileNotFoundError as e:
+        console.print(f"[red]Error:[/red] {e}")
+
+        if "'uv' binary not found" in str(e):
+            console.print("[dim]Install uv: https://docs.astral.sh/uv/getting-started/installation/[/dim]")
+
+        raise typer.Exit(1) from e
+    except (ValueError, TypeError) as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from e
     except RuntimeError as e:
-        console.print(f"[red]Build failed:[/red] {e}")
+        console.print(f"[red]Build or upload failed:[/red] {e}")
         raise typer.Exit(1) from e
 
     console.print(f"[green]Published:[/green] {result.canonical} v{result.version}")

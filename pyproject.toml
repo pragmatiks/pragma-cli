@@ -31,7 +31,6 @@ select = [
     "UP",      # Pyupgrade
     "D",       # pydocstyle - docstring conventions
     "DOC",     # Ruff's docstring checks (parameters match signature)
-    "PT",      # pytest rules
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -41,17 +40,6 @@ convention = "google"
 lines-after-imports = 2
 known-first-party = ["pragma_cli"]
 
-[tool.ruff.lint.per-file-ignores]
-"**/tests/**/*.py" = [
-    "D100",  # Missing docstring in public module
-    "D101",  # Missing docstring in public class
-    "D102",  # Missing docstring in public method
-    "D103",  # Missing docstring in public function
-    "D104",  # Missing docstring in public package
-    "D107",  # Missing docstring in __init__
-    "DOC",   # Docstring content rules (Returns, Raises, Yields sections)
-]
-
 [tool.ruff.format]
 preview = true
 
@@ -59,10 +47,7 @@ preview = true
 python-version = "3.13"
 
 [tool.ty.src]
-exclude = ["**/tests/**", "**/__pycache__/**"]
-
-[tool.pytest.ini_options]
-addopts = ["-v"]
+exclude = ["**/__pycache__/**"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
@@ -73,13 +58,9 @@ update_changelog_on_bump = true
 changelog_file = "CHANGELOG.md"
 
 [dependency-groups]
-test = ["pytest>=8.4.1", "pytest-cov>=7.0.0", "pytest-mock>=3.14.0"]
 dev = [
     "commitizen>=4.11.0",
     "pre-commit>=4.0.0",
-    "pytest>=8.4.2",
-    "pytest-cov>=7.0.0",
-    "pytest-mock>=3.15.1",
     "ruff>=0.11.0",
 ]
 
