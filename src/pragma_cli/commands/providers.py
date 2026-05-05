@@ -300,8 +300,8 @@ def init(
     typer.echo("To update this project when the template changes:")
     typer.echo("  copier update")
     typer.echo("")
-    typer.echo("When ready to publish:")
-    typer.echo("  pragma providers publish --version 0.1.0")
+    typer.echo("When ready to publish (bump [project].version first):")
+    typer.echo("  pragma providers publish")
 
 
 @app.command()
