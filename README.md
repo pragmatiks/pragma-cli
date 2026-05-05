@@ -59,10 +59,9 @@ pragma resources get gcp/storage my-bucket
 | `pragma providers list` | List deployed providers |
 | `pragma providers init <name>` | Initialize a new provider project |
 | `pragma providers update` | Update project from template |
-| `pragma providers push [--deploy]` | Build and push (optionally deploy) |
+| `pragma providers publish [--changelog <text>] [-d <dir>]` | Build wheel via `uv build`, upload to Artifact Registry, register version (requires `uv` + `keyrings.google-artifactregistry-auth`) |
 | `pragma providers deploy <id> [version]` | Deploy a specific version |
 | `pragma providers status <id>` | Check deployment status |
-| `pragma providers builds <id>` | List build history |
 | `pragma providers delete <id> [--cascade]` | Delete a provider |
 
 ### Configuration

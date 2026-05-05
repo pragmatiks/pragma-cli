@@ -14,7 +14,3 @@ tasks:
     cmds:
       - uv run ruff check --fix .
       - uvx ty check
-
-  test:
-    desc: Run tests
-    cmd: uv run pytest tests/ --cov=pragma_cli --cov-report=term-missing {{.CLI_ARGS}}
