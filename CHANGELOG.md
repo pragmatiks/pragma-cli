@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.0.0 (2026-05-07)
+
+### BREAKING CHANGE
+
+- pragma providers publish is removed. Publishers
+must now build and upload the wheel themselves (uv build +
+uv publish, twine, ...) and call pragma providers register with the
+resulting URL.
+
+### Feat
+
+- replace providers publish with providers register (PRA-381) (#56)
+
 ## v3.0.0 (2026-05-05)
 
 ### BREAKING CHANGE
