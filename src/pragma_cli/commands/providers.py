@@ -1,13 +1,18 @@
 """Provider management commands.
 
-Unified commands for publishing, installing, deploying, and managing
+Unified commands for registering, installing, deploying, and managing
 Pragmatiks providers.
 """
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import os
+import re
+import sys
 import tomllib
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -19,7 +24,9 @@ from pragma_sdk import (
     DeploymentResult,
     DeploymentStatus,
     PragmaClient,
+    ProviderVersionMetadata,
 )
+from pragma_sdk.provider.extract_schemas import extract_schemas
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -60,58 +67,273 @@ def get_template_source() -> str:
     return DEFAULT_TEMPLATE_URL
 
 
-def _read_provider_short_name(directory: Path) -> str:
-    """Read the provider short name from [tool.pragma].provider in pyproject.toml.
+def _require_pragma_string(pragma: dict[str, Any], key: str) -> str:
+    """Read a required string field from [tool.pragma].
 
     Args:
-        directory: Directory containing pyproject.toml.
+        pragma: Parsed [tool.pragma] table.
+        key: Field name.
 
     Returns:
-        Provider short name (no org prefix).
+        Stripped non-empty string value.
 
     Raises:
-        typer.Exit: If pyproject.toml is missing, malformed, or
-            [tool.pragma].provider is missing/invalid.
+        typer.Exit: If the field is missing, not a string, or blank.
     """
-    pyproject = directory / "pyproject.toml"
+    if key not in pragma:
+        console.print(f"[red]Error:[/red] Missing [tool.pragma].{key} in pyproject.toml.")
+        raise typer.Exit(1)
 
-    if not pyproject.exists():
-        console.print(f"[red]Error:[/red] No pyproject.toml found in {directory}.")
+    value = pragma[key]
+
+    if not isinstance(value, str) or not value.strip():
+        console.print(
+            f"[red]Error:[/red] [tool.pragma].{key} must be a non-empty string, got {type(value).__name__}: {value!r}"
+        )
+        raise typer.Exit(1)
+
+    return value.strip()
+
+
+def _optional_pragma_string(pragma: dict[str, Any], key: str) -> str | None:
+    """Read an optional string field from [tool.pragma].
+
+    Args:
+        pragma: Parsed [tool.pragma] table.
+        key: Field name.
+
+    Returns:
+        Stripped non-empty string value, or ``None`` when the key is absent.
+
+    Raises:
+        typer.Exit: If the key is set but is not a non-empty string.
+    """
+    if key not in pragma:
+        return None
+
+    value = pragma[key]
+
+    if not isinstance(value, str) or not value.strip():
+        console.print(
+            f"[red]Error:[/red] [tool.pragma].{key} must be a non-empty string when set, "
+            f"got {type(value).__name__}: {value!r}"
+        )
+        raise typer.Exit(1)
+
+    return value.strip()
+
+
+def _read_provider_metadata(pyproject_path: Path) -> tuple[str, str, ProviderVersionMetadata]:
+    """Read provider identity and catalog metadata from pyproject.toml.
+
+    Reads ``[tool.pragma]``: ``provider`` (short name, no slashes),
+    ``package`` (importable Python package), ``display_name``,
+    ``description``, optional ``icon_url``, optional ``tags``.
+
+    Args:
+        pyproject_path: Path to the provider's pyproject.toml.
+
+    Returns:
+        Tuple of (provider short name, package name, catalog metadata).
+
+    Raises:
+        typer.Exit: If the file is missing, malformed, or any required
+            field under [tool.pragma] is missing or invalid.
+    """
+    if not pyproject_path.exists():
+        console.print(f"[red]Error:[/red] pyproject.toml not found: {pyproject_path}")
         raise typer.Exit(1)
 
     try:
-        with open(pyproject, "rb") as f:
+        with open(pyproject_path, "rb") as f:
             data = tomllib.load(f)
     except tomllib.TOMLDecodeError as e:
-        console.print(f"[red]Error:[/red] Failed to parse pyproject.toml: {e}")
+        console.print(f"[red]Error:[/red] Failed to parse {pyproject_path}: {e}")
         raise typer.Exit(1) from e
 
     pragma = data.get("tool", {}).get("pragma", {})
 
-    if "provider" not in pragma:
+    if not pragma:
         console.print(
-            "[red]Error:[/red] Missing [tool.pragma].provider in pyproject.toml.\n"
-            'Add a [tool.pragma] section with at least: provider = "your-provider-name"'
+            f"[red]Error:[/red] Missing [tool.pragma] section in {pyproject_path}.\n"
+            "Required fields: provider, package, display_name, description."
         )
         raise typer.Exit(1)
 
-    name = pragma["provider"]
+    provider = _require_pragma_string(pragma, "provider")
 
-    if not isinstance(name, str) or not name.strip():
-        console.print(
-            f"[red]Error:[/red] [tool.pragma].provider must be a non-empty string, got {type(name).__name__}: {name!r}"
-        )
-        raise typer.Exit(1)
-
-    name = name.strip()
-
-    if "/" in name:
+    if "/" in provider:
         console.print(
             "[red]Error:[/red] [tool.pragma].provider must not contain slashes (the org prefix is added automatically)."
         )
         raise typer.Exit(1)
 
-    return name
+    package = _require_pragma_string(pragma, "package")
+    display_name = _require_pragma_string(pragma, "display_name")
+    description = _require_pragma_string(pragma, "description")
+
+    icon_url = _optional_pragma_string(pragma, "icon_url")
+
+    tags = pragma.get("tags", [])
+
+    if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+        console.print("[red]Error:[/red] [tool.pragma].tags must be a list of strings.")
+        raise typer.Exit(1)
+
+    metadata = ProviderVersionMetadata(
+        display_name=display_name,
+        description=description,
+        icon_url=icon_url,
+        tags=list(tags),
+    )
+
+    return provider, package, metadata
+
+
+@contextlib.contextmanager
+def _provider_on_sys_path(provider_dir: Path) -> Iterator[None]:
+    """Add the provider's source roots to ``sys.path`` for the duration of the block.
+
+    Restores ``sys.path`` and evicts modules imported during the block
+    on exit, so a second invocation in the same process re-imports
+    fresh sources rather than reusing stale module objects.
+
+    Args:
+        provider_dir: Provider source tree root (the directory that
+            contains ``pyproject.toml`` and ``src/``).
+
+    Yields:
+        None.
+    """
+    candidates = [provider_dir / "src", provider_dir]
+    added: list[str] = []
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            entry = str(candidate.resolve())
+
+            if entry not in sys.path:
+                sys.path.insert(0, entry)
+                added.append(entry)
+
+    pre_modules = set(sys.modules)
+
+    try:
+        yield
+    finally:
+        for entry in added:
+            if entry in sys.path:
+                sys.path.remove(entry)
+
+        for name in set(sys.modules) - pre_modules:
+            sys.modules.pop(name, None)
+
+
+def _extract_schemas_dict(
+    provider_dir: Path,
+    package_name: str,
+    catalog_name: str,
+) -> dict[str, dict[str, Any]]:
+    """Run schema extraction and reshape the result for the API.
+
+    Args:
+        provider_dir: Provider source tree root.
+        package_name: Importable package name (e.g. ``postgres_provider``).
+        catalog_name: Namespaced provider name (``org/short``).
+
+    Returns:
+        Mapping of resource name to ``ResourceSchemaResponse``-shaped dict.
+
+    Raises:
+        ImportError: If the provider package cannot be imported.
+        ValueError: If a resource is missing required fields or has
+            invalid type annotations.
+        TypeError: If ``[tool.pragma]`` fields have wrong types.
+    """  # noqa: DOC502
+    with _provider_on_sys_path(provider_dir):
+        entries = extract_schemas(package_name, catalog_name)
+
+    return {
+        entry["resource"]: {
+            "provider": entry["provider"],
+            "resource": entry["resource"],
+            "description": entry.get("description"),
+            "config_schema": entry.get("config_schema"),
+            "outputs_schema": entry.get("outputs_schema"),
+        }
+        for entry in entries
+    }
+
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _validate_sha256(value: str) -> str:
+    """Validate that a string is a 64-character lowercase hex SHA-256.
+
+    Args:
+        value: Candidate digest.
+
+    Returns:
+        The validated digest.
+
+    Raises:
+        typer.Exit: If the digest is not 64 lowercase hex characters.
+    """
+    if not _SHA256_RE.match(value):
+        console.print(f"[red]Error:[/red] --sha256 must be 64 lowercase hex characters, got: {value!r}")
+        raise typer.Exit(1)
+
+    return value
+
+
+def _compute_wheel_sha256(wheel_url: str) -> str:
+    """Stream the wheel from ``wheel_url`` and return its SHA-256 digest.
+
+    Args:
+        wheel_url: HTTPS URL pointing at the published ``.whl``.
+
+    Returns:
+        64-character lowercase hex SHA-256 digest.
+
+    Raises:
+        httpx.HTTPError: If the URL is unreachable or returns a non-2xx response.
+    """  # noqa: DOC502
+    digest = hashlib.sha256()
+
+    with httpx.stream("GET", wheel_url, follow_redirects=True, timeout=60.0) as response:
+        response.raise_for_status()
+
+        for chunk in response.iter_bytes():
+            digest.update(chunk)
+
+    return digest.hexdigest()
+
+
+def _read_changelog(path: Path | None) -> str | None:
+    """Read changelog text from a file path, returning ``None`` when not supplied.
+
+    Args:
+        path: Path to a UTF-8 text file, or ``None``.
+
+    Returns:
+        The file's text content, or ``None`` if no path was given.
+
+    Raises:
+        typer.Exit: If the file is missing or cannot be read.
+    """
+    if path is None:
+        return None
+
+    if not path.exists():
+        console.print(f"[red]Error:[/red] Changelog file not found: {path}")
+        raise typer.Exit(1)
+
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as e:
+        console.print(f"[red]Error:[/red] Could not read changelog '{path}': {e}")
+        raise typer.Exit(1) from e
 
 
 def _require_auth(client: PragmaClient) -> None:
@@ -308,8 +530,11 @@ def init(
     typer.echo("To update this project when the template changes:")
     typer.echo("  copier update")
     typer.echo("")
-    typer.echo("When ready to publish (bump [project].version first):")
-    typer.echo("  pragma providers publish")
+    typer.echo("When ready to publish a version:")
+    typer.echo("  1. Build the wheel:                uv build")
+    typer.echo("  2. Upload the wheel to a registry: uv publish (or twine, gh-action-pypi-publish, ...)")
+    typer.echo("  3. Register with Pragmatiks:       pragma providers register \\")
+    typer.echo("       --wheel-url <https url> --version <semver> --pyproject ./pyproject.toml")
 
 
 @app.command()
@@ -352,80 +577,135 @@ def update(
 
 
 @app.command()
-def publish(
-    changelog: Annotated[
-        str | None,
-        typer.Option("--changelog", help="Changelog text for this version"),
-    ] = None,
-    directory: Annotated[
+def register(
+    wheel_url: Annotated[
+        str,
+        typer.Option("--wheel-url", help="HTTPS URL to a hosted .whl"),
+    ],
+    version: Annotated[
+        str,
+        typer.Option("--version", help="Semver version for this release"),
+    ],
+    pyproject: Annotated[
         Path,
-        typer.Option("--directory", "-d", help="Provider source directory"),
-    ] = Path("."),
+        typer.Option("--pyproject", help="Path to the provider's pyproject.toml"),
+    ],
+    sha256: Annotated[
+        str | None,
+        typer.Option(
+            "--sha256",
+            help="64-char lowercase hex SHA-256 of the wheel; computed from --wheel-url when omitted",
+        ),
+    ] = None,
+    changelog: Annotated[
+        Path | None,
+        typer.Option("--changelog", help="Path to a UTF-8 text file with release notes"),
+    ] = None,
 ):
-    """Publish a new version of a provider.
+    r"""Register a new provider version against an externally hosted wheel.
 
-    Builds a wheel locally with `uv build`, extracts resource schemas
-    from the provider package, uploads the wheel to GCP Artifact
-    Registry via `uv publish`, and registers the version in the
-    catalog.
+    Build and upload the wheel yourself (``uv build``, ``uv publish``,
+    ``twine``, ``pypa/gh-action-pypi-publish``, …) onto any HTTPS-reachable
+    registry, then point this command at the resulting URL. The CLI does
+    not build, upload, or host wheels.
 
-    Reads from pyproject.toml:
-    - tool.pragma.provider: provider short name (read by the CLI)
-    - project.version: version cut by this publish (read by the SDK)
-    - tool.pragma.image / tool.pragma.entrypoint: optional runtime
-      overrides (read by the SDK)
-
-    Requires `uv` on PATH and `keyrings.google-artifactregistry-auth`
-    installed for Artifact Registry credentials. The publishing
-    organization is resolved from the authenticated user.
+    Reads from the ``\[tool.pragma]`` table in the supplied pyproject.toml:
+    ``provider`` (short name), ``package`` (importable Python package),
+    ``display_name``, ``description``, optional ``icon_url``, optional
+    ``tags``. Resource schemas are extracted from the importable provider
+    package. The publishing organization is resolved from the
+    authenticated user. If ``--sha256`` is omitted the wheel is fetched
+    via HTTPS and hashed client-side.
 
     Examples:
-        pragma providers publish
-        pragma providers publish --directory ./postgres-provider
-        pragma providers publish --changelog "Added new resources"
+        pragma providers register --wheel-url <url> --version 1.0.0 --pyproject ./pyproject.toml
+        pragma providers register --wheel-url <url> --version 1.0.0 --pyproject ./pyproject.toml --sha256 <hex>
+        pragma providers register --wheel-url <url> --version 1.0.0 --pyproject ./pyproject.toml --changelog NOTES.md
 
     Raises:
-        typer.Exit: If the directory is missing, configuration is
-            invalid, the local build/upload fails, or the API rejects
-            the request.
+        typer.Exit: If the pyproject is missing or invalid, schema
+            extraction fails, the wheel cannot be fetched for hashing,
+            or the API rejects the registration.
     """
-    if not directory.exists():
-        console.print(f"[red]Error:[/red] Directory not found: {directory}")
-        raise typer.Exit(1)
+    if sha256 is not None:
+        sha256 = _validate_sha256(sha256)
+
+    pyproject_path = pyproject.resolve()
+    provider_short, package_name, metadata = _read_provider_metadata(pyproject_path)
 
     client = get_client()
     _require_auth(client)
 
-    name = _read_provider_short_name(directory)
+    try:
+        me = client.get_me()
+        org = client.get_organization(me.organization_id)
+    except httpx.HTTPStatusError as e:
+        check_bootstrap_error(e)
 
-    console.print(f"[bold]Publishing provider:[/bold] {name}")
-    console.print(f"[dim]Source directory:[/dim] {directory.absolute()}")
+        if e.response.status_code == 401:
+            console.print("[red]Error:[/red] Not authenticated. Run 'pragma auth login' first.")
+            raise typer.Exit(1) from e
+
+        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
+        raise typer.Exit(1) from e
+
+    catalog_name = f"{org.slug}/{provider_short}"
+
+    console.print(f"[bold]Registering provider:[/bold] {catalog_name} v{version}")
+    console.print(f"[dim]Wheel:[/dim] {wheel_url}")
+    console.print(f"[dim]pyproject:[/dim] {pyproject_path}")
     console.print()
 
     try:
+        schemas = _extract_schemas_dict(pyproject_path.parent, package_name, catalog_name)
+    except ImportError as e:
+        console.print(
+            f"[red]Error:[/red] Could not import provider package '{package_name}' from {pyproject_path.parent}: {e}"
+        )
+        raise typer.Exit(1) from e
+    except (ValueError, TypeError, KeyError, AttributeError, RuntimeError) as e:
+        console.print(f"[red]Error:[/red] Failed to extract schemas from package '{package_name}': {e}")
+        raise typer.Exit(1) from e
+
+    if sha256 is None:
+        console.print(
+            "[yellow]Warning:[/yellow] --sha256 omitted; hashing the wheel as served by the URL. "
+            "Pass --sha256 with a publisher-controlled digest for stronger integrity."
+        )
+
+        try:
+            sha256 = _fetch_with_spinner(
+                "Computing wheel SHA-256...",
+                lambda: _compute_wheel_sha256(wheel_url),
+            )
+        except httpx.HTTPError as e:
+            console.print(f"[red]Error:[/red] Failed to fetch wheel from {wheel_url}: {e}")
+            raise typer.Exit(1) from e
+
+    changelog_text = _read_changelog(changelog)
+
+    try:
         result = _fetch_with_spinner(
-            "Building wheel, uploading, and registering version...",
-            lambda: client.publish_provider(directory, name=name, changelog=changelog),
+            "Registering version...",
+            lambda: client.register_provider_version(
+                name=catalog_name,
+                version=version,
+                wheel_url=wheel_url,
+                sha256=sha256,
+                schemas=schemas,
+                metadata=metadata,
+                changelog=changelog_text,
+            ),
         )
     except httpx.HTTPStatusError as e:
         check_bootstrap_error(e)
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
-    except FileNotFoundError as e:
-        console.print(f"[red]Error:[/red] {e}")
-
-        if "'uv' binary not found" in str(e):
-            console.print("[dim]Install uv: https://docs.astral.sh/uv/getting-started/installation/[/dim]")
-
-        raise typer.Exit(1) from e
     except (ValueError, TypeError) as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from e
-    except RuntimeError as e:
-        console.print(f"[red]Build or upload failed:[/red] {e}")
-        raise typer.Exit(1) from e
 
-    console.print(f"[green]Published:[/green] {result.canonical} v{result.version}")
+    console.print(f"[green]Registered:[/green] {result.canonical} v{result.version}")
 
     if result.wheel_url:
         console.print(f"[dim]Wheel:[/dim] {result.wheel_url}")
