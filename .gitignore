@@ -15,6 +15,3 @@ build/
 # Claude Code local settings (per-machine, not committed)
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
-
-# Claude-mem context dumps (per-machine, not committed)
-AGENTS.md
