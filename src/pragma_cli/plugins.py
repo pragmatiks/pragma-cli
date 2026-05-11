@@ -24,11 +24,14 @@ def load_plugins(app: typer.Typer) -> None:
     Args:
         app: Root Typer application to receive plugin subcommands.
     """
-    existing_names = {group.name for group in app.registered_groups if group.name is not None}
+    existing_names = {group.name for group in getattr(app, "registered_groups", []) if group.name is not None}
+    existing_names.update(
+        command.name for command in getattr(app, "registered_commands", []) if command.name is not None
+    )
 
     for entry in entry_points(group=PLUGIN_GROUP):
         if entry.name in existing_names:
-            logger.warning("Skipping pragma plugin %r because a command with that name already exists", entry.name)
+            logger.warning("Plugin %r conflicts with an already-registered command, skipping", entry.name)
             continue
 
         try:
@@ -46,3 +49,4 @@ def load_plugins(app: typer.Typer) -> None:
             continue
 
         app.add_typer(subcommand, name=entry.name)
+        existing_names.add(entry.name)
