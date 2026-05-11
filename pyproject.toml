@@ -10,7 +10,8 @@ dependencies = [
     "pyyaml>=6.0.3",
     "copier>=9.0.0",
     "rich>=13.9.0",
-    "jsonschema>=4.26.0",
+    "jsonschema>=4.25.1",
+    "pragmatiks-lint>=0.3.1",
 ]
 
 [project.scripts]
@@ -49,6 +50,9 @@ python-version = "3.13"
 [tool.ty.src]
 exclude = ["**/__pycache__/**"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.commitizen]
 name = "cz_conventional_commits"
 version = "4.0.0"
@@ -61,6 +65,7 @@ changelog_file = "CHANGELOG.md"
 dev = [
     "commitizen>=4.11.0",
     "pre-commit>=4.0.0",
+    "pytest>=8.0.0",
     "ruff>=0.11.0",
 ]
 

@@ -48,11 +48,13 @@ task check
 Test / CLI smoke checks that do not require authentication:
 
 ```bash
+task test
 uv run pragma --help
 uv run pragma config current-context
 ```
 
-There is no dedicated test suite or pytest command in this repository right now. When validating behavior, run `task check` plus targeted CLI smoke checks or command-specific checks that match the change.
+Run `task test` when changes touch plugin discovery. For other behavior, run `task check` plus targeted CLI smoke
+checks or command-specific checks that match the change.
 
 Build distributions:
 
@@ -70,12 +72,40 @@ uv publish
 
 Only publish when explicitly asked and when PyPI credentials are available. The GitHub `Publish CLI` workflow also bumps with Commitizen, builds, creates a GitHub release, publishes to PyPI, and triggers the providers publish workflow after changes land on `main`.
 
+## Plugin Authoring
+
+`pragma` discovers and mounts top-level subcommands at startup via the `pragma.commands`
+Python entry-point group. To extend the CLI with a new command, publish a package that
+exposes a Typer app and registers it under the group:
+
+```toml
+# in your plugin package's pyproject.toml
+[project.entry-points."pragma.commands"]
+mycommand = "my_package.cli:app"
+```
+
+`my_package.cli:app` must be a `typer.Typer` instance. After installation, `pragma mycommand`
+becomes available; broken plugins log a warning and are skipped, so the host never crashes.
+
+### Distribution
+
+| Plugin type | Channel | Auth |
+| -- | -- | -- |
+| Public | PyPI | none |
+| Private | `[tool.uv.sources] my-plugin = { git = "...", tag = "v..." }` | git credentials |
+
+For a public plugin like `pragmatiks-lint`, consumers install via `uv add pragmatiks-lint`.
+For an internal plugin (e.g. future `pragmatiks-console`), consumers declare a git source
+in their pyproject.toml. No central index is required; auth piggybacks on existing GitHub
+SSH/HTTPS credentials.
+
 ## Validation Expectations
 
 Before handing off code changes, run the narrowest reliable validation for the change. For most changes in this repo, that means:
 
 ```bash
 task check
+task test
 uv run pragma --help
 ```
 

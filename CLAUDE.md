@@ -72,6 +72,33 @@ pragma = "pragma_cli.main:app"
 - `pragma ops dead-letter retry <id> [--all]` - Retry failed event(s)
 - `pragma ops dead-letter delete <id> [--all]` - Delete failed event(s)
 
+## Plugin Authoring
+
+`pragma` discovers and mounts top-level subcommands at startup via the `pragma.commands`
+Python entry-point group. To extend the CLI with a new command, publish a package that
+exposes a Typer app and registers it under the group:
+
+```toml
+# in your plugin package's pyproject.toml
+[project.entry-points."pragma.commands"]
+mycommand = "my_package.cli:app"
+```
+
+`my_package.cli:app` must be a `typer.Typer` instance. After installation, `pragma mycommand`
+becomes available; broken plugins log a warning and are skipped, so the host never crashes.
+
+### Distribution
+
+| Plugin type | Channel | Auth |
+| -- | -- | -- |
+| Public | PyPI | none |
+| Private | `[tool.uv.sources] my-plugin = { git = "...", tag = "v..." }` | git credentials |
+
+For a public plugin like `pragmatiks-lint`, consumers install via `uv add pragmatiks-lint`.
+For an internal plugin (e.g. future `pragmatiks-console`), consumers declare a git source
+in their pyproject.toml. No central index is required; auth piggybacks on existing GitHub
+SSH/HTTPS credentials.
+
 ## Development
 
 Always use `task` commands:
@@ -80,6 +107,7 @@ Always use `task` commands:
 |---------|---------|
 | `task format` | Format with ruff |
 | `task check` | Lint + type check |
+| `task test` | Run integration tests |
 
 ## Patterns
 
