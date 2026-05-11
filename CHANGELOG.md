@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.1.0 (2026-05-11)
+
+### Feat
+
+- add pragma command plugin discovery and pragmatiks-lint subcommand
+
 ## v4.0.0 (2026-05-07)
 
 ### BREAKING CHANGE
