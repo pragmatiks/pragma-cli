@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.1.1 (2026-05-11)
+
+### Fix
+
+- harden pragma plugin discovery against plugin-plugin collisions
+
 ## v4.1.0 (2026-05-11)
 
 ### Feat
