@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.1.2 (2026-05-15)
+
+### Refactor
+
+- switch extract_schemas import path (#63)
+
 ## v4.1.1 (2026-05-11)
 
 ### Fix
