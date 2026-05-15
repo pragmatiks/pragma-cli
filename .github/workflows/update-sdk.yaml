@@ -42,23 +42,28 @@ jobs:
           sed -i "s|pragmatiks-sdk>=.*\"|pragmatiks-sdk>=${SDK_VERSION}\"|" pyproject.toml
           sed -i "s|tag = \"v.*\"|tag = \"v${SDK_VERSION}\"|" pyproject.toml
 
-      - name: Wait for PyPI availability
+      - name: Update lockfile (retry on simple-index propagation lag)
         run: |
           SDK_VERSION="${{ inputs.sdk_version }}"
-          echo "Waiting for pragmatiks-sdk==${SDK_VERSION} on PyPI..."
-          for i in $(seq 1 60); do
-            if curl -s "https://pypi.org/pypi/pragmatiks-sdk/json" | python3 -c "import sys,json; versions=json.load(sys.stdin)['releases'].keys(); sys.exit(0 if '${SDK_VERSION}' in versions else 1)" 2>/dev/null; then
-              echo "Found pragmatiks-sdk==${SDK_VERSION} on PyPI"
+          for ATTEMPT in $(seq 1 60); do
+            if OUTPUT=$(uv lock --upgrade-package pragmatiks-sdk 2>&1); then
+              echo "$OUTPUT"
+              echo "uv lock succeeded on attempt ${ATTEMPT}"
               exit 0
+            else
+              EXIT=$?
             fi
-            echo "Attempt ${i}/60: not yet available, waiting 10s..."
-            sleep 10
+            if echo "$OUTPUT" | grep -q "only pragmatiks-sdk"; then
+              echo "Attempt ${ATTEMPT}/60: simple-index propagation lag; sleeping 10s"
+              sleep 10
+              continue
+            fi
+            echo "$OUTPUT"
+            echo "uv lock failed with unrelated error"
+            exit $EXIT
           done
-          echo "Timed out waiting for pragmatiks-sdk==${SDK_VERSION}"
+          echo "Timed out waiting for pragmatiks-sdk==${SDK_VERSION} in simple-index"
           exit 1
-
-      - name: Update lockfile
-        run: uv sync --no-sources --all-groups
 
       - name: Commit changes
         id: commit
