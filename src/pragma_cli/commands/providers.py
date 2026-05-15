@@ -26,7 +26,7 @@ from pragma_sdk import (
     PragmaClient,
     ProviderVersionMetadata,
 )
-from pragma_sdk.provider.extract_schemas import extract_schemas
+from pragma_sdk.provider import extract_schemas
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
