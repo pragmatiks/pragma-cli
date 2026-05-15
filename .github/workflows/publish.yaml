@@ -55,6 +55,16 @@ jobs:
             exit 1
           fi
 
+      - name: Refresh lockfile self-entry
+        if: steps.bump.outputs.bumped == 'true'
+        run: |
+          uv lock
+          if ! git diff --quiet uv.lock; then
+            git add uv.lock
+            git commit --amend --no-edit
+            git tag -f "v${{ steps.bump.outputs.version }}" HEAD
+          fi
+
       - name: Push changes
         if: steps.bump.outputs.bumped == 'true'
         run: |
