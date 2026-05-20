@@ -141,7 +141,7 @@ Canonical engineering rules for all Pragmatiks code in this repository. Workers 
 
 Applies to all code in this repository. Some principles only apply to one language or stack — flagged where relevant.
 
-This section is the ground truth for engineering principles in this repository. The same text is embedded in every Pragmatiks subrepo's `AGENTS.md` and `CLAUDE.md`. When a principle changes, every embed must be updated in lockstep and the corresponding `pragmatiks-lint` / `@pragmatiks/lint` rule versions bumped.
+This section is the ground truth for engineering principles in this repository. The same text is embedded in every Pragmatiks subrepo's `CLAUDE.md`. When a principle changes, every embed must be updated in lockstep and the corresponding `pragmatiks-lint` / `@pragmatiks/lint` rule versions bumped.
 
 ### Enforcement layers
 
