@@ -204,13 +204,13 @@ Do not add features, abstractions, or configuration for hypothetical future need
 
 ### 2. KISS — Keep It Simple
 
-Prefer the simplest implementation that works. Three similar lines beat a premature abstraction. Inline the obvious; abstract only when a third caller appears.
+Prefer the simplest implementation that works. Inline the obvious; abstract on the second caller — duplication is a smell, not a feature.
 
 **Programmatic check**:
 - Python: `ruff C901` (cyclomatic complexity threshold).
 - TS: `eslint-plugin-sonarjs/cognitive-complexity`.
 
-**Reviewer hint**: extract-method PR? Verify there are at least three callers in the diff or repo.
+**Reviewer hint**: extract-method PR? Verify there are at least two callers in the diff or repo.
 
 ### 3. Boy Scout Rule
 
