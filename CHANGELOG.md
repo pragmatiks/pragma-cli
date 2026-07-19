@@ -1,5 +1,19 @@
 # Changelog
 
+## v5.0.0 (2026-07-19)
+
+### BREAKING CHANGE
+
+- the legacy URL-based publish flags (--wheel-url,
+--sha256) are removed along with client-side sha256 hashing; the wheel
+registry is API-hosted (pragmatiks-sdk>=6.0.0). The repo's test suite
+is removed by policy: verification is e2e-first in pragma-os; per-repo
+suites will be designed separately.
+
+### Feat
+
+- publish wheels through the SDK, add auth token command
+
 ## v4.1.2 (2026-05-15)
 
 ### Refactor
