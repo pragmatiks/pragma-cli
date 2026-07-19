@@ -50,8 +50,6 @@ python-version = "3.13"
 [tool.ty.src]
 exclude = ["**/__pycache__/**"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
@@ -65,7 +63,6 @@ changelog_file = "CHANGELOG.md"
 dev = [
     "commitizen>=4.11.0",
     "pre-commit>=4.0.0",
-    "pytest>=8.0.0",
     "ruff>=0.11.0",
 ]
 

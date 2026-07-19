@@ -299,6 +299,29 @@ def logout(
 
 
 @app.command()
+def token():
+    """Print the current context's bearer token to stdout.
+
+    Emits only the raw token on stdout so it can be captured in a shell:
+    ``TOKEN=$(pragma auth token)``. Resolves the token the same way as every
+    other command (--token flag > PRAGMA_AUTH_TOKEN env var > stored
+    credentials). A missing or expired token prints guidance on stderr and
+    exits non-zero, leaving stdout empty.
+
+    Raises:
+        typer.Exit: If no token is stored or the stored token is expired.
+    """
+    client = get_client()
+    current_token = client._auth.token if client._auth else None
+
+    if not current_token or _is_token_expired(current_token):
+        typer.echo("Error: No valid token for the current context. Run 'pragma auth login' first.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(current_token)
+
+
+@app.command()
 def whoami():
     """Show current authentication status and user information.
 

@@ -49,7 +49,7 @@ pragma = "pragma_cli.main:app"
 - `pragma providers list` - List deployed providers
 - `pragma providers init <name>` - Initialize a new provider project
 - `pragma providers update` - Update project from template
-- `pragma providers register --wheel-url <https url> --version <semver> --pyproject <path> [--sha256 <hex>] [--changelog <file>]` - Register an externally hosted wheel as a new provider version. The CLI does not build, upload, or host wheels — publishers run their own build + upload (`uv build` + `uv publish`, `twine`, `pypa/gh-action-pypi-publish`, ...) first, then call this command with the resulting URL. Reads provider identity (`provider`, `package`) and catalog metadata (`display_name`, `description`, `icon_url`, `tags`) from `[tool.pragma]` in the supplied pyproject.toml. SHA-256 is computed from the wheel URL when `--sha256` is omitted
+- `pragma providers publish [project-dir] [--wheel <path>] [--version <semver>] [--changelog <file>]` - Publish a new provider version by uploading the wheel bytes to `POST /providers/publish` (multipart). Builds the wheel with `uv build` unless `--wheel` points at a prebuilt one; the version defaults to the one encoded in the wheel filename. The API hosts the wheel in its own registry and computes the SHA-256 server-side — no external registry, wheel URL, or client-side digest. Reads provider identity (`provider`, `package`) and catalog metadata (`display_name`, `description`, `icon_url`, `tags`) from `[tool.pragma]` in the project's pyproject.toml. Published versions are immutable (409 on republish)
 - `pragma providers deploy <id> [version]` - Deploy a specific version
 - `pragma providers status <id>` - Check deployment status
 - `pragma providers delete <id> [--cascade]` - Delete a provider

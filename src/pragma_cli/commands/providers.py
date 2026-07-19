@@ -7,9 +7,8 @@ Pragmatiks providers.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import os
-import re
+import subprocess
 import sys
 import tomllib
 from collections.abc import Iterator
@@ -24,9 +23,10 @@ from pragma_sdk import (
     DeploymentResult,
     DeploymentStatus,
     PragmaClient,
+    ProviderVersionConflictError,
     ProviderVersionMetadata,
 )
-from pragma_sdk.provider import extract_schemas
+from pragma_sdk.provider import load_provider_schemas
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -184,7 +184,7 @@ def _read_provider_metadata(pyproject_path: Path) -> tuple[str, str, ProviderVer
         display_name=display_name,
         description=description,
         icon_url=icon_url,
-        tags=list(tags),
+        tags=[str(tag) for tag in tags],
     )
 
     return provider, package, metadata
@@ -251,7 +251,7 @@ def _extract_schemas_dict(
         TypeError: If ``[tool.pragma]`` fields have wrong types.
     """  # noqa: DOC502
     with _provider_on_sys_path(provider_dir):
-        entries = extract_schemas(package_name, catalog_name)
+        entries = load_provider_schemas(package_name, catalog_name)
 
     return {
         entry["resource"]: {
@@ -265,49 +265,54 @@ def _extract_schemas_dict(
     }
 
 
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-
-
-def _validate_sha256(value: str) -> str:
-    """Validate that a string is a 64-character lowercase hex SHA-256.
+def parse_wheel_version(wheel_path: Path) -> str:
+    """Extract the version encoded in a wheel filename (PEP 427).
 
     Args:
-        value: Candidate digest.
+        wheel_path: Path to a ``.whl`` file.
 
     Returns:
-        The validated digest.
+        The version component of the filename.
 
     Raises:
-        typer.Exit: If the digest is not 64 lowercase hex characters.
+        typer.Exit: If the filename is not a valid wheel filename.
     """
-    if not _SHA256_RE.match(value):
-        console.print(f"[red]Error:[/red] --sha256 must be 64 lowercase hex characters, got: {value!r}")
+    parts = wheel_path.name.removesuffix(".whl").split("-")
+
+    if not wheel_path.name.endswith(".whl") or len(parts) < 5:
+        console.print(f"[red]Error:[/red] Not a valid wheel filename: {wheel_path.name}")
         raise typer.Exit(1)
 
-    return value
+    return parts[1]
 
 
-def _compute_wheel_sha256(wheel_url: str) -> str:
-    """Stream the wheel from ``wheel_url`` and return its SHA-256 digest.
+def _build_wheel(project_dir: Path) -> Path:
+    """Build the provider wheel with ``uv build`` and return its path.
 
     Args:
-        wheel_url: HTTPS URL pointing at the published ``.whl``.
+        project_dir: Provider project directory containing pyproject.toml.
 
     Returns:
-        64-character lowercase hex SHA-256 digest.
+        Path to the freshly built wheel in ``dist/``.
 
     Raises:
-        httpx.HTTPError: If the URL is unreachable or returns a non-2xx response.
-    """  # noqa: DOC502
-    digest = hashlib.sha256()
+        typer.Exit: If the build fails or produces no wheel.
+    """
+    console.print("[dim]Building wheel with 'uv build'...[/dim]")
 
-    with httpx.stream("GET", wheel_url, follow_redirects=True, timeout=60.0) as response:
-        response.raise_for_status()
+    result = subprocess.run(["uv", "build", "--wheel"], cwd=project_dir, capture_output=True, text=True)
 
-        for chunk in response.iter_bytes():
-            digest.update(chunk)
+    if result.returncode != 0:
+        console.print(f"[red]Error:[/red] uv build failed:\n{result.stderr}")
+        raise typer.Exit(1)
 
-    return digest.hexdigest()
+    wheels = sorted((project_dir / "dist").glob("*.whl"), key=lambda path: path.stat().st_mtime)
+
+    if not wheels:
+        console.print("[red]Error:[/red] uv build produced no wheel in dist/.")
+        raise typer.Exit(1)
+
+    return wheels[-1].resolve()
 
 
 def _read_changelog(path: Path | None) -> str | None:
@@ -531,10 +536,7 @@ def init(
     typer.echo("  copier update")
     typer.echo("")
     typer.echo("When ready to publish a version:")
-    typer.echo("  1. Build the wheel:                uv build")
-    typer.echo("  2. Upload the wheel to a registry: uv publish (or twine, gh-action-pypi-publish, ...)")
-    typer.echo("  3. Register with Pragmatiks:       pragma providers register \\")
-    typer.echo("       --wheel-url <https url> --version <semver> --pyproject ./pyproject.toml")
+    typer.echo("  pragma providers publish")
 
 
 @app.command()
@@ -576,69 +578,87 @@ def update(
     typer.echo("Provider project updated successfully.")
 
 
+def _print_publish_error(error: httpx.HTTPStatusError, catalog_name: str) -> None:
+    """Print an actionable message for a failed publish request.
+
+    Args:
+        error: The HTTP status error from the publish request.
+        catalog_name: Namespaced provider name (``org/short``).
+    """
+    if error.response.status_code == 403:
+        namespace = catalog_name.partition("/")[0]
+        console.print(f"[red]Error:[/red] Your organization does not own the '{namespace}' provider namespace.")
+    else:
+        console.print(f"[red]Error:[/red] {_format_api_error(error)}")
+
+
 @app.command()
-def register(
-    wheel_url: Annotated[
-        str,
-        typer.Option("--wheel-url", help="HTTPS URL to a hosted .whl"),
-    ],
-    version: Annotated[
-        str,
-        typer.Option("--version", help="Semver version for this release"),
-    ],
-    pyproject: Annotated[
+def publish(
+    project_dir: Annotated[
         Path,
-        typer.Option("--pyproject", help="Path to the provider's pyproject.toml"),
-    ],
-    sha256: Annotated[
+        typer.Argument(help="Provider project directory"),
+    ] = Path("."),
+    wheel: Annotated[
+        Path | None,
+        typer.Option("--wheel", help="Prebuilt .whl to upload (skips 'uv build')"),
+    ] = None,
+    version: Annotated[
         str | None,
-        typer.Option(
-            "--sha256",
-            help="64-char lowercase hex SHA-256 of the wheel; computed from --wheel-url when omitted",
-        ),
+        typer.Option("--version", help="Version to declare (default: parsed from the wheel filename)"),
     ] = None,
     changelog: Annotated[
         Path | None,
         typer.Option("--changelog", help="Path to a UTF-8 text file with release notes"),
     ] = None,
 ):
-    r"""Register a new provider version against an externally hosted wheel.
+    r"""Publish a new provider version by uploading its wheel to Pragmatiks.
 
-    Build and upload the wheel yourself (``uv build``, ``uv publish``,
-    ``twine``, ``pypa/gh-action-pypi-publish``, …) onto any HTTPS-reachable
-    registry, then point this command at the resulting URL. The CLI does
-    not build, upload, or host wheels.
+    Builds the wheel with ``uv build`` (or takes a prebuilt one via
+    ``--wheel``) and uploads the bytes to the API, which hosts the wheel
+    in its own registry and computes the SHA-256 server-side. No external
+    registry or wheel URL is involved.
 
-    Reads from the ``\[tool.pragma]`` table in the supplied pyproject.toml:
+    Reads from the ``\[tool.pragma]`` table in the project's pyproject.toml:
     ``provider`` (short name), ``package`` (importable Python package),
     ``display_name``, ``description``, optional ``icon_url``, optional
     ``tags``. Resource schemas are extracted from the importable provider
     package. The publishing organization is resolved from the
-    authenticated user. If ``--sha256`` is omitted the wheel is fetched
-    via HTTPS and hashed client-side.
+    authenticated user.
 
     Examples:
-        pragma providers register --wheel-url <url> --version 1.0.0 --pyproject ./pyproject.toml
-        pragma providers register --wheel-url <url> --version 1.0.0 --pyproject ./pyproject.toml --sha256 <hex>
-        pragma providers register --wheel-url <url> --version 1.0.0 --pyproject ./pyproject.toml --changelog NOTES.md
+        pragma providers publish
+        pragma providers publish ./my-provider --changelog NOTES.md
+        pragma providers publish --wheel dist/my_provider-1.0.0-py3-none-any.whl
 
     Raises:
-        typer.Exit: If the pyproject is missing or invalid, schema
-            extraction fails, the wheel cannot be fetched for hashing,
-            or the API rejects the registration.
+        typer.Exit: If the pyproject is missing or invalid, the build or
+            schema extraction fails, or the API rejects the publish.
     """
-    if sha256 is not None:
-        sha256 = _validate_sha256(sha256)
-
-    pyproject_path = pyproject.resolve()
+    pyproject_path = (project_dir / "pyproject.toml").resolve()
     provider_short, package_name, metadata = _read_provider_metadata(pyproject_path)
+
+    wheel_path = wheel.resolve() if wheel else _build_wheel(project_dir)
+
+    if not wheel_path.exists():
+        console.print(f"[red]Error:[/red] Wheel not found: {wheel_path}")
+        raise typer.Exit(1)
+
+    wheel_version = parse_wheel_version(wheel_path)
+
+    if version is not None and version != wheel_version:
+        console.print(
+            f"[red]Error:[/red] Declared version '{version}' does not match "
+            f"the wheel's version '{wheel_version}' ({wheel_path.name})."
+        )
+        raise typer.Exit(1)
+
+    declared_version = version or wheel_version
 
     client = get_client()
     _require_auth(client)
 
     try:
-        me = client.get_me()
-        org = client.get_organization(me.organization_id)
+        organization = client.get_current_organization()
     except httpx.HTTPStatusError as e:
         check_bootstrap_error(e)
 
@@ -649,11 +669,10 @@ def register(
         console.print(f"[red]Error:[/red] {_format_api_error(e)}")
         raise typer.Exit(1) from e
 
-    catalog_name = f"{org.slug}/{provider_short}"
+    catalog_name = f"{organization.slug}/{provider_short}"
 
-    console.print(f"[bold]Registering provider:[/bold] {catalog_name} v{version}")
-    console.print(f"[dim]Wheel:[/dim] {wheel_url}")
-    console.print(f"[dim]pyproject:[/dim] {pyproject_path}")
+    console.print(f"[bold]Publishing provider:[/bold] {catalog_name} v{declared_version}")
+    console.print(f"[dim]Wheel:[/dim] {wheel_path}")
     console.print()
 
     try:
@@ -667,48 +686,32 @@ def register(
         console.print(f"[red]Error:[/red] Failed to extract schemas from package '{package_name}': {e}")
         raise typer.Exit(1) from e
 
-    if sha256 is None:
-        console.print(
-            "[yellow]Warning:[/yellow] --sha256 omitted; hashing the wheel as served by the URL. "
-            "Pass --sha256 with a publisher-controlled digest for stronger integrity."
-        )
-
-        try:
-            sha256 = _fetch_with_spinner(
-                "Computing wheel SHA-256...",
-                lambda: _compute_wheel_sha256(wheel_url),
-            )
-        except httpx.HTTPError as e:
-            console.print(f"[red]Error:[/red] Failed to fetch wheel from {wheel_url}: {e}")
-            raise typer.Exit(1) from e
-
     changelog_text = _read_changelog(changelog)
 
     try:
         result = _fetch_with_spinner(
-            "Registering version...",
-            lambda: client.register_provider_version(
+            "Uploading wheel...",
+            lambda: client.publish_provider_version(
+                wheel_path=wheel_path,
                 name=catalog_name,
-                version=version,
-                wheel_url=wheel_url,
-                sha256=sha256,
+                version=declared_version,
                 schemas=schemas,
                 metadata=metadata,
                 changelog=changelog_text,
             ),
         )
+    except ProviderVersionConflictError as e:
+        console.print(
+            f"[red]Error:[/red] {catalog_name} v{declared_version} is already published — "
+            "bump the version (published versions are immutable)."
+        )
+        raise typer.Exit(1) from e
     except httpx.HTTPStatusError as e:
         check_bootstrap_error(e)
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
-    except (ValueError, TypeError) as e:
-        console.print(f"[red]Error:[/red] {e}")
+        _print_publish_error(e, catalog_name)
         raise typer.Exit(1) from e
 
-    console.print(f"[green]Registered:[/green] {result.canonical} v{result.version}")
-
-    if result.wheel_url:
-        console.print(f"[dim]Wheel:[/dim] {result.wheel_url}")
+    console.print(f"[green]Published:[/green] {catalog_name} v{result.version} ({result.status.value})")
 
 
 def _merge_install_config(
