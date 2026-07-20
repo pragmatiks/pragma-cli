@@ -16,7 +16,7 @@ from typer.core import TyperGroup
 
 from pragma_cli import set_client
 from pragma_cli.bootstrap_errors import check_bootstrap_error
-from pragma_cli.commands import auth, config, ops, organizations, projects, providers, resources, settings, tasks
+from pragma_cli.commands import auth, config, ops, organizations, projects, providers, resources
 from pragma_cli.config import CONFIG_PATH, MalformedConfigError, get_current_context
 from pragma_cli.plugins import load_plugins
 
@@ -304,8 +304,6 @@ app.add_typer(ops.app, name="ops")
 app.add_typer(organizations.app, name="organizations")
 app.add_typer(providers.app, name="providers")
 app.add_typer(projects.app, name="projects")
-app.add_typer(settings.app, name="settings")
-app.add_typer(tasks.app, name="tasks")
 
 load_plugins(app)
 
