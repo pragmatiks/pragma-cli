@@ -1,5 +1,17 @@
 # Changelog
 
+## v6.0.0 (2026-07-20)
+
+### BREAKING CHANGE
+
+- the `pragma tasks` and `pragma settings` command
+groups are removed. Use the web surface for agent task inspection;
+organization LLM settings no longer exist.
+
+### Feat
+
+- remove retired agent, task, and LLM-settings commands
+
 ## v5.0.1 (2026-07-20)
 
 ### Fix
