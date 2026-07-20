@@ -15,7 +15,7 @@ from rich.console import Console
 
 from pragma_cli import get_client
 from pragma_cli.bootstrap_errors import check_bootstrap_error
-from pragma_cli.config import CREDENTIALS_FILE, ContextConfig, get_current_context, load_config
+from pragma_cli.config import CREDENTIALS_FILE, ContextConfig, load_config
 
 
 console = Console()
@@ -209,6 +209,7 @@ def clear_credentials(context_name: str | None = None):
 
 @app.command()
 def login(
+    ctx: typer.Context,
     context: str | None = typer.Option(None, help="Context to authenticate for (default: current)"),
     org: str | None = typer.Option(None, help="Organization slug to authenticate with (skips org picker)"),
 ):
@@ -216,19 +217,28 @@ def login(
 
     Opens your default browser to Clerk authentication page. After successful
     login, your credentials are stored locally in ~/.config/pragma/credentials.
+    The token is saved under this command's ``--context`` if given, otherwise
+    under the context resolved by the top-level CLI (``--context`` / ``-c`` /
+    ``PRAGMA_CONTEXT``), so the same key every reader uses.
 
     Example:
         pragma auth login
         pragma auth login --context production
         pragma auth login --org ycombinator
 
+    Args:
+        ctx: Typer context carrying the top-level resolved context name.
+        context: Explicit context to authenticate for, overriding the resolved one.
+        org: Organization slug to pre-select, skipping the org picker.
+
     Raises:
-        typer.Exit: If context not found or authentication fails/times out.
+        typer.Exit: If context not found, authentication fails/times out, or the
+            returned token is already expired.
     """
     config = load_config()
 
     if context is None:
-        context = config.current_context
+        context = ctx.obj["context"]
 
     if context not in config.contexts:
         print(f"[red]\u2717[/red] Context '{context}' not found")
@@ -257,6 +267,12 @@ def login(
     server.timeout = 300
     server.handle_request()
 
+    if CallbackHandler.token and _is_token_expired(CallbackHandler.token):
+        print()
+        print("[red]\u2717 Received an expired token[/red]")
+        print("[dim]Please run 'pragma auth login' again[/dim]")
+        raise typer.Exit(1)
+
     if CallbackHandler.token:
         save_credentials(CallbackHandler.token, context)
         print()
@@ -276,15 +292,25 @@ def login(
 
 @app.command()
 def logout(
+    ctx: typer.Context,
     context: str | None = typer.Option(None, help="Context to logout from (all if not specified)"),
     all: bool = typer.Option(False, "--all", help="Logout from all contexts"),
 ):
     """Clear stored authentication credentials.
 
+    Clears the credential for this command's ``--context`` if given, otherwise
+    the context resolved by the top-level CLI (``--context`` / ``-c`` /
+    ``PRAGMA_CONTEXT``), so it removes the same key ``login`` wrote.
+
     Example:
         pragma logout                    # Clear current context
         pragma logout --all              # Clear all contexts
         pragma logout --context staging  # Clear specific context
+
+    Args:
+        ctx: Typer context carrying the top-level resolved context name.
+        context: Explicit context to clear, overriding the resolved one.
+        all: Clear credentials for every context.
     """
     if all:
         clear_credentials(None)
@@ -293,7 +319,7 @@ def logout(
         clear_credentials(context)
         print(f"[green]\u2713[/green] Cleared credentials for context '{context}'")
     else:
-        context_name, _ = get_current_context()
+        context_name = ctx.obj["context"]
         clear_credentials(context_name)
         print(f"[green]\u2713[/green] Cleared credentials for current context '{context_name}'")
 
@@ -322,16 +348,20 @@ def token():
 
 
 @app.command()
-def whoami():
+def whoami(ctx: typer.Context):
     """Show current authentication status and user information.
 
     Uses the same token resolution as all other commands:
     --token flag > PRAGMA_AUTH_TOKEN env var > stored credentials.
 
-    Displays the current context, authentication state, and user details
-    including email and organization name from the API.
+    Displays the resolved context (``--context`` / ``-c`` / ``PRAGMA_CONTEXT``),
+    authentication state, and user details including email and organization
+    name from the API.
+
+    Args:
+        ctx: Typer context carrying the top-level resolved context name.
     """  # noqa: DOC501
-    current_context_name, _ = get_current_context()
+    current_context_name = ctx.obj["context"]
     client = get_client()
 
     token = client._auth.token if client._auth else None
