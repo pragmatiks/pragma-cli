@@ -1,5 +1,11 @@
 # Changelog
 
+## v5.0.1 (2026-07-20)
+
+### Fix
+
+- **auth**: honor top-level context on login/logout/whoami; reject expired tokens
+
 ## v5.0.0 (2026-07-19)
 
 ### BREAKING CHANGE
