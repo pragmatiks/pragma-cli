@@ -1,5 +1,21 @@
 # Changelog
 
+## v7.0.0 (2026-07-22)
+
+### BREAKING CHANGE
+
+- pragma providers install no longer accepts
+--resource-tier, and installed-provider output no longer carries a
+tier column or field.
+
+### Feat
+
+- remove the --resource-tier install option
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v9.0.1 (#71)
+
 ## v6.0.2 (2026-07-22)
 
 ### Fix
