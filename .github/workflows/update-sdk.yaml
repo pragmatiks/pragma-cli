@@ -73,7 +73,7 @@ jobs:
             echo "No changes to commit"
             echo "has_changes=false" >> $GITHUB_OUTPUT
           else
-            git commit -m "chore(deps): update pragmatiks-sdk to v${{ inputs.sdk_version }}"
+            git commit -m "fix(deps): update pragmatiks-sdk to v${{ inputs.sdk_version }}"
             echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
 
@@ -83,13 +83,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SDK_VERSION="${{ inputs.sdk_version }}"
-          BRANCH="chore/update-sdk-${SDK_VERSION}"
+          BRANCH="fix/update-sdk-${SDK_VERSION}"
 
           git checkout -b "${BRANCH}"
           git push origin "${BRANCH}"
 
           gh pr create \
-            --title "chore(deps): update pragmatiks-sdk to v${SDK_VERSION}" \
+            --title "fix(deps): update pragmatiks-sdk to v${SDK_VERSION}" \
             --body "Automated SDK dependency update to v${SDK_VERSION}."
 
           gh pr merge --squash
