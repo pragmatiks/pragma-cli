@@ -775,10 +775,6 @@ def _merge_install_config(
 def install(
     name: Annotated[str, typer.Argument(help="Provider name (org/name format)")],
     version: Annotated[str | None, typer.Option("--version", "-v", help="Version to install (default: latest)")] = None,
-    resource_tier: Annotated[
-        str,
-        typer.Option("--resource-tier", help="Resource tier (free, standard, performance)"),
-    ] = "standard",
     upgrade_policy: Annotated[
         str,
         typer.Option("--upgrade-policy", help="Upgrade policy (manual, auto-minor, auto-patch)"),
@@ -801,7 +797,7 @@ def install(
     Examples:
         pragma providers install pragmatiks/qdrant
         pragma providers install pragmatiks/postgres --version 1.2.0
-        pragma providers install pragmatiks/redis --resource-tier performance --upgrade-policy auto-minor
+        pragma providers install pragmatiks/redis --upgrade-policy auto-minor
         pragma providers install pragmatiks/qdrant --config SOME_KEY=some_value
         pragma providers install pragmatiks/qdrant --config-file config.yaml --config OVERRIDE_KEY=value
         pragma providers install pragmatiks/qdrant -y
@@ -832,7 +828,6 @@ def install(
 
     console.print(f"[bold]Provider:[/bold] {display} ({name})")
     console.print(f"[bold]Version:[/bold]  {install_version}")
-    console.print(f"[bold]Tier:[/bold]     {resource_tier}")
 
     if merged_config:
         console.print("[bold]Config:[/bold]")
@@ -854,7 +849,6 @@ def install(
             lambda: client.install_provider(
                 name,
                 version=version,
-                resource_tier=resource_tier,
                 upgrade_policy=upgrade_policy,
                 config=merged_config,
             ),
@@ -1529,7 +1523,6 @@ def _print_installed_table(providers) -> None:
     table = Table(show_header=True, header_style="bold")
     table.add_column("Provider")
     table.add_column("Version")
-    table.add_column("Tier")
     table.add_column("Upgrade Policy")
     table.add_column("Installed At")
     table.add_column("Upgrade Available")
@@ -1547,7 +1540,6 @@ def _print_installed_table(providers) -> None:
         table.add_row(
             p.canonical,
             p.installed_version,
-            getattr(p, "resource_tier", None) or "[dim]-[/dim]",
             getattr(p, "upgrade_policy", None) or "[dim]-[/dim]",
             installed_at,
             upgrade_display,
@@ -1655,7 +1647,6 @@ def _installed_provider_to_dict(provider) -> dict:
         "canonical": provider.canonical,
         "installed_version": provider.installed_version,
         "upgrade_policy": getattr(provider, "upgrade_policy", None),
-        "resource_tier": getattr(provider, "resource_tier", None),
         "installed_at": _serialize_datetime(provider, "installed_at"),
         "latest_version": getattr(provider, "latest_version", None),
         "upgrade_available": getattr(provider, "upgrade_available", False),
