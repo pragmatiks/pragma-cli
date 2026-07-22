@@ -1,5 +1,11 @@
 # Changelog
 
+## v6.0.1 (2026-07-22)
+
+### Fix
+
+- extract provider schemas in the provider's own environment (PRA-472)
+
 ## v6.0.0 (2026-07-20)
 
 ### BREAKING CHANGE
