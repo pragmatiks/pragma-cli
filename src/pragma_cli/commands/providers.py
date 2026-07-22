@@ -6,12 +6,11 @@ Pragmatiks providers.
 
 from __future__ import annotations
 
-import contextlib
+import json
 import os
 import subprocess
-import sys
+import tempfile
 import tomllib
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -26,7 +25,6 @@ from pragma_sdk import (
     ProviderVersionConflictError,
     ProviderVersionMetadata,
 )
-from pragma_sdk.provider import load_provider_schemas
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -190,68 +188,73 @@ def _read_provider_metadata(pyproject_path: Path) -> tuple[str, str, ProviderVer
     return provider, package, metadata
 
 
-@contextlib.contextmanager
-def _provider_on_sys_path(provider_dir: Path) -> Iterator[None]:
-    """Add the provider's source roots to ``sys.path`` for the duration of the block.
+_SCHEMA_EXTRACTION_SCRIPT = (
+    "import json, sys\n"
+    "from pragma_sdk.provider import load_provider_schemas\n"
+    "package_name, catalog_name, output_path = sys.argv[1], sys.argv[2], sys.argv[3]\n"
+    "with open(output_path, 'w', encoding='utf-8') as output_file:\n"
+    "    json.dump(load_provider_schemas(package_name, catalog_name), output_file)\n"
+)
 
-    Restores ``sys.path`` and evicts modules imported during the block
-    on exit, so a second invocation in the same process re-imports
-    fresh sources rather than reusing stale module objects.
+
+def require_subprocess_success(result: subprocess.CompletedProcess[str], failure_message: str) -> None:
+    """Exit with the subprocess stderr when a tool invocation fails.
 
     Args:
-        provider_dir: Provider source tree root (the directory that
-            contains ``pyproject.toml`` and ``src/``).
+        result: Completed subprocess whose return code to check.
+        failure_message: Human-readable description of the failed step.
 
-    Yields:
-        None.
+    Raises:
+        typer.Exit: If the subprocess exited non-zero.
     """
-    candidates = [provider_dir / "src", provider_dir]
-    added: list[str] = []
-
-    for candidate in candidates:
-        if candidate.is_dir():
-            entry = str(candidate.resolve())
-
-            if entry not in sys.path:
-                sys.path.insert(0, entry)
-                added.append(entry)
-
-    pre_modules = set(sys.modules)
-
-    try:
-        yield
-    finally:
-        for entry in added:
-            if entry in sys.path:
-                sys.path.remove(entry)
-
-        for name in set(sys.modules) - pre_modules:
-            sys.modules.pop(name, None)
+    if result.returncode != 0:
+        console.print(f"[red]Error:[/red] {failure_message}:\n{result.stderr}")
+        raise typer.Exit(1)
 
 
 def _extract_schemas_dict(
-    provider_dir: Path,
+    provider_directory: Path,
     package_name: str,
     catalog_name: str,
 ) -> dict[str, dict[str, Any]]:
-    """Run schema extraction and reshape the result for the API.
+    """Extract resource schemas in the provider's own environment and reshape for the API.
+
+    Runs schema extraction as a subprocess under the provider project's
+    uv-managed environment (``uv run`` with the provider directory as working
+    directory), so the CLI never needs the provider's runtime dependencies
+    installed. The subprocess writes JSON to a temporary file rather than
+    stdout, keeping the payload free of any output the provider or SDK might
+    print while importing.
 
     Args:
-        provider_dir: Provider source tree root.
+        provider_directory: Provider project root containing pyproject.toml.
         package_name: Importable package name (e.g. ``postgres_provider``).
         catalog_name: Namespaced provider name (``org/short``).
 
     Returns:
         Mapping of resource name to ``ResourceSchemaResponse``-shaped dict.
+    """
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        output_path = Path(temporary_directory) / "schemas.json"
 
-    Raises:
-        ImportError: If the provider package cannot be imported.
-        ValueError: If a resource is missing required fields or has
-            invalid type annotations.
-        TypeError: If ``[tool.pragma]`` fields have wrong types.
-    """  # noqa: DOC502
-    with _provider_on_sys_path(provider_dir):
-        entries = load_provider_schemas(package_name, catalog_name)
+        result = subprocess.run(
+            [
+                "uv",
+                "run",
+                "python",
+                "-c",
+                _SCHEMA_EXTRACTION_SCRIPT,
+                package_name,
+                catalog_name,
+                str(output_path),
+            ],
+            cwd=provider_directory,
+            capture_output=True,
+            text=True,
+        )
+
+        require_subprocess_success(result, f"Schema extraction failed for package '{package_name}'")
+        entries = json.loads(output_path.read_text(encoding="utf-8"))
 
     return {
         entry["resource"]: {
@@ -302,9 +305,7 @@ def _build_wheel(project_dir: Path) -> Path:
 
     result = subprocess.run(["uv", "build", "--wheel"], cwd=project_dir, capture_output=True, text=True)
 
-    if result.returncode != 0:
-        console.print(f"[red]Error:[/red] uv build failed:\n{result.stderr}")
-        raise typer.Exit(1)
+    require_subprocess_success(result, "uv build failed")
 
     wheels = sorted((project_dir / "dist").glob("*.whl"), key=lambda path: path.stat().st_mtime)
 
@@ -675,16 +676,7 @@ def publish(
     console.print(f"[dim]Wheel:[/dim] {wheel_path}")
     console.print()
 
-    try:
-        schemas = _extract_schemas_dict(pyproject_path.parent, package_name, catalog_name)
-    except ImportError as e:
-        console.print(
-            f"[red]Error:[/red] Could not import provider package '{package_name}' from {pyproject_path.parent}: {e}"
-        )
-        raise typer.Exit(1) from e
-    except (ValueError, TypeError, KeyError, AttributeError, RuntimeError) as e:
-        console.print(f"[red]Error:[/red] Failed to extract schemas from package '{package_name}': {e}")
-        raise typer.Exit(1) from e
+    schemas = _extract_schemas_dict(pyproject_path.parent, package_name, catalog_name)
 
     changelog_text = _read_changelog(changelog)
 
