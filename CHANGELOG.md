@@ -1,5 +1,11 @@
 # Changelog
 
+## v6.0.2 (2026-07-22)
+
+### Fix
+
+- **ci**: release on automated sdk updates
+
 ## v6.0.1 (2026-07-22)
 
 ### Fix
