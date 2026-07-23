@@ -1,5 +1,11 @@
 # Changelog
 
+## v7.0.1 (2026-07-23)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v10.0.0 (#72)
+
 ## v7.0.0 (2026-07-22)
 
 ### BREAKING CHANGE
