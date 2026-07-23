@@ -118,19 +118,18 @@ Always use `task` commands:
 
 ## Evidence-based development
 
-Use MCPs to fact-check before writing code. The cost of a query is far less than a debugging cycle on stale assumptions.
+Fact-check with live lookups before writing code. The cost of a query is far less than a debugging cycle on stale assumptions.
 
 **Use internal knowledge for**: programming skill, language fluency, algorithms, design patterns, general engineering judgment, code comprehension.
 
-**Always query MCPs for**: library API details, framework feature lists, version-specific behavior, current best practice, recent changes — anything where being wrong costs time.
+**Always look up**: library API details, framework feature lists, version-specific behavior, current best practice, recent changes — anything where being wrong costs time.
 
 If you find yourself thinking "I'm pretty sure this library does X" or "the API was Y last time I used it" — STOP and query. Training data is months to years out of date; library APIs change.
 
-### MCP routing
+### Lookup routing
 
-- **context7** (`mcp__context7__resolve-library-id`, `mcp__context7__query-docs`) — authoritative current docs for a specific library / framework / SDK / CLI. Use whenever you need to know how to call something correctly.
-- **deepwiki** (`mcp__deepwiki__ask_question`, `mcp__deepwiki__read_wiki_contents`, `mcp__deepwiki__read_wiki_structure`) — conversational Q&A over an entire OSS GitHub repository. Use for architecture / pattern questions. Pragmatiks repos are indexed at `pragmatiks/{sdk,cli,providers}`.
-- **exa** (`mcp__exa__web_search_exa`, `mcp__exa__get_code_context_exa`, `mcp__exa__crawling_exa`) — live web search (release notes, blog posts, GitHub issues) and direct code extraction from a GitHub URL. Use when context7 / deepwiki cannot answer. Skip `deep_researcher_*` unless multi-source synthesis is explicitly requested.
+- **exa-search** (skill, `~/.claude/skills/exa-search`) — live web search via the Exa Search API over raw HTTP. Use for library / framework / SDK docs, release notes, blog posts, GitHub issues — any external fact-check. Requires `EXA_API_KEY` in the environment.
+- **exa-contents** (skill, `~/.claude/skills/exa-contents`) — extract text, highlights, or summaries from known URLs via the Exa Contents API over raw HTTP. Invoke the `exa-contents` skill when you already have the URL and need its content. Requires `EXA_API_KEY` in the environment.
 - **claude-mem** (`mcp__plugin_claude-mem_mcp-search__smart_search`, `mcp__plugin_claude-mem_mcp-search__search`, `mcp__plugin_claude-mem_mcp-search__get_observations`) — search prior session memory. Use when working in an area that has prior session decisions. Cite observation IDs.
 
 ## Solution preference order
@@ -332,8 +331,8 @@ Every reviewer dispatch must:
    Severities: 🚨 blocker · ⚠️ important · 💡 nit.
 
 4. Final verdict: `APPROVE` / `APPROVE_WITH_NITS` / `REQUEST_CHANGES`.
-5. **Evidence-check the diff.** If the diff cites library behavior, version-specific features, or external API shapes you cannot fully verify from the code alone, query context7 / deepwiki / exa to confirm. Flag claims grounded in stale training data.
-6. **Dependency scrutiny.** If the diff adds a new top-level dependency, confirm the PR description includes the new-dependency proposal (research, alternatives, maintainer signals). Missing proposal = blocker. Spot-check the proposal's claims via exa or deepwiki. Confirm no existing project dependency could have solved the problem.
+5. **Evidence-check the diff.** If the diff cites library behavior, version-specific features, or external API shapes you cannot fully verify from the code alone, query exa to confirm. Flag claims grounded in stale training data.
+6. **Dependency scrutiny.** If the diff adds a new top-level dependency, confirm the PR description includes the new-dependency proposal (research, alternatives, maintainer signals). Missing proposal = blocker. Spot-check the proposal's claims via exa. Confirm no existing project dependency could have solved the problem.
 
 A reviewer who fails to invoke programmatic tooling but only eyeballs the diff is incomplete and should be re-run.
 
