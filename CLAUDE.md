@@ -292,18 +292,38 @@ Forbidden: block comments restating what the code does; section dividers; commen
 
 ### 11. Semantic Names — No Abbreviations
 
-Identifiers must use full words. No `k8s`, `cfg`, `db`, `req`, `res`, `ctx`, `tmp`, `pkg`, `svc`, `mgr`, `repo`, `usr`, `pwd`, `idx`, `cnt`, `msg`, `err`, etc. Use `kubernetes`, `config`, `database`, `request`, `response`, `context`, `temporary`, `package`, `service`, `manager`, `repository`, `user`, `password`, `index`, `count`, `message`, `error`.
+Identifiers use full words. No `k8s`, `cfg`, `db`, `req`, `res`, `ctx`, `tmp`, `pkg`, `svc`, `mgr`, `repo`, `usr`, `pwd`, `idx`, `cnt`, `msg`, `err`, etc. Use `kubernetes`, `config`, `database`, `request`, `response`, `context`, `temporary`, `package`, `service`, `manager`, `repository`, `user`, `password`, `index`, `count`, `message`, `error`.
 
 **Allowlist** (industry-standard exceptions):
 - `id`, `url`, `uri`, `api`, `cli`, `sdk`, `os`, `io`, `ip`, `tls`, `ssl`, `jwt`, `json`, `yaml`, `html`, `css`, `dom`, `ast`, `gpu`, `cpu`, `ram`, `vm`.
 - React-specific: `props`, `ref`, `e` (event handler param).
 - Python-specific: `cls`, `self`, `kwargs`, `args`.
 
-**Programmatic check**:
-- `eslint-plugin-unicorn/prevent-abbreviations` (TS) — direct fit, with allowlist config.
-- `pra-no-abbreviations` semgrep rule (Python) — regex matching forbidden short identifiers, with allowlist.
+**Vocabulary**: one concept, one term, at every layer (CLI, SDK, HTTP, service, errors, log markers, states, UI copy). New name for concept that already has a term = violation. Before coining a word, grep for it: already carries a meaning here → pick another; absent from codebase while an established phrasing exists → use the established phrasing. Established terms:
 
-**Reviewer hint**: `db`, `cfg`, `k8s` in any new code = blocker.
+| Concept | Term | Banned synonyms / misuse |
+|---|---|---|
+| Delete the row (runs provider teardown first when provisioned), ends `DELETED` | `delete` | `remove` |
+| Run provider teardown, keep the row, back to `DRAFT` | `deactivate` | — |
+| Resource provider (package reconciling external infrastructure) | `provider` | generic dependency-injection suffix (`SupervisorProvider`); use `Accessor` for the callable type, `current_<thing>` for the argument |
+| Platform function provider code calls back into (`apply_resource`) | `callback` | `handler` |
+| Function the platform invokes to process an event or message: provider lifecycle methods (`on_create` … `on_observe`) and runtime-side message handlers | `handler` | `callback` |
+| Worker converging resources toward desired state | `Reconciler` | `StuckReconciler`, qualifiers describing one behavior |
+| Moving a dependent to `WAITING` | "set to waiting" (`set_dependent_waiting`) | `park` |
+
+Provider event `on_delete` stays (provider deletes external object).
+
+**User-facing surfaces** (HTTP API, OpenAPI, SDK, CLI, web UI, docs):
+- API mirrors CLI: route noun + verb match CLI command (`pragma providers publish` ↔ `POST /providers/publish`), and reverse. Mismatch = finding, not REST-purist path.
+- No internal infrastructure terms (Kubernetes, pod, namespace, NATS, JetStream, SurrealDB internals) or vendor names (Clerk) in route summaries, descriptions, schema field docs, error strings, UI copy. OpenAPI spec feeds public docs verbatim — fix at source.
+- Failure reasons written to a resource's terminal `FAILED` state: no blame ("provider failed to…"), no internal jargon (queue, outbox, dispatch, event id), end with shared `RECOVERY_GUIDANCE` constant — reuse existing reason constants, never per-path prose. Other failures (publication, install) end with the recovery wording their decision doc defines.
+
+**Programmatic check**:
+- `eslint-plugin-unicorn/prevent-abbreviations` (TS) — direct fit, allowlist config.
+- `pra-no-abbreviations` semgrep rule (Python) — regex matching forbidden short identifiers, allowlist.
+- `packages/api/scripts/check_openapi_spec.py` (`task api:check`) — flags infrastructure terms in generated OpenAPI spec. Kubernetes, pod, namespace, and vendor names not in term list yet — reviewer scans for them.
+
+**Reviewer hint**: `db`, `cfg`, `k8s` in any new code = blocker. Banned synonym from vocabulary table on any surface = blocker.
 
 ### 12. Compound Names Violate SRP
 
