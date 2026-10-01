@@ -1,5 +1,12 @@
 # Changelog
 
+## v10.0.1 (2026-10-01)
+
+### Fix
+
+- **providers**: drop test-suite hints from providers init
+- **deps**: update pragmatiks-sdk to v14.0.0 (#77)
+
 ## v10.0.0 (2026-09-01)
 
 ### BREAKING CHANGE
