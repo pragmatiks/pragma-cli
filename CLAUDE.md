@@ -276,19 +276,20 @@ When unsure, follow Clean Code: meaningful names, small functions, single level 
 
 ### 10. No Comments
 
-The code must be self-explanatory. Do not write comments. Exceptions:
+The code must be self-explanatory. Do not write comments — none at all, WHY comments included (amended 2026-08-31; they metastasized). Docstrings are documentation, not comments; this rule does not restrict them.
 
-- Public docstrings on library APIs (`pragma-sdk` public surface).
-- A single-line WHY comment for a non-obvious workaround, hidden constraint, or subtle invariant. Removing it would confuse a future reader.
+- Google-style docstrings are **required** on every module, class, function, and method (not only the `pragma-sdk` public surface). Describe purpose, arguments, returns, and raised exceptions; no noise padding.
+- Docstrings address the **caller**: contract, constraints, how to use. Not implementation narration, not change history, not a log of what the function used to do. A workaround, hidden constraint, or subtle invariant worth recording goes in the owning function's docstring (a `Note:` section when it needs a home), or the code gets restructured until it needs no explanation.
+- Tool directives that must sit on the flagged line (`# noqa`, `eslint-disable`, `# type: ignore`) stay, bare — the justification lives in the docstring, not in appended prose.
 
-Forbidden: block comments restating what the code does; section dividers; commented-out code; "added for X" / "used by Y" trail comments; multi-line docstrings on private internals; planning comments left in source (`# TODO: refactor later`).
+Forbidden: ALL non-docstring comments — WHY comments, block comments restating what the code does, section dividers, commented-out code, "added for X" / "used by Y" trail comments, planning comments (`# TODO: refactor later`).
 
 **Programmatic check**:
 - `pra-no-block-comments` semgrep rule: flags multi-line `#` blocks in Python and `/* ... */` blocks in TS that are not docstrings.
 - `pra-no-todo-comments` semgrep rule: flags `# TODO` / `// TODO` / `/* TODO */`.
-- Existing custom script for comment ban (to migrate to semgrep).
+- Existing custom script for comment ban (to migrate to semgrep). Needs extension: flag single-line comments too (WHY ban).
 
-**Reviewer hint**: every comment in the diff must be justifiable as WHY. Otherwise: delete and rename code instead.
+**Reviewer hint**: every non-directive comment in the diff is a finding. Rationale that matters moves to the nearest docstring; rationale that does not matter dies. Docstrings that read like implementation walkthroughs or changelogs are findings too.
 
 ### 11. Semantic Names — No Abbreviations
 
@@ -333,6 +334,20 @@ If a function or method name contains `and`, `or`, `then`, or describes multiple
 - `pra-srp-and-or-name` semgrep rule (cross-language).
 
 **Reviewer hint**: blocker — propose the split inline.
+
+### 13. Leading Underscores Are Deliberate, Not Habitual
+
+Default every attribute, method, function, and variable to a plain public name. Encapsulation comes from module boundaries and clear naming, not reflexive underscore prefixes. A leading underscore is allowed only where it does real work:
+
+- A backing field paired with a same-named public property or accessor (`self._jetstream` behind a `jetstream` property).
+- Language-mandated names: dunders (`__init__`, `__enter__`, etc.), `self`, `cls`, the throwaway `_` in unpacking.
+
+Everything else is public. If no same-named public accessor mediates the identifier, drop the underscore. Applies to Python; TS/React keep their own conventions.
+
+**Programmatic check**:
+- `pra-no-underscore-members` semgrep rule (Python), warning severity: flags identifiers matching `^_[a-z]` in assignments, `def`, and attribute targets. A match paired with a same-named property in the same class is allowlisted; every other match needs reviewer judgment.
+
+**Reviewer hint**: a new `_name` with no same-named public accessor is a blocker. Propose the plain public name inline.
 
 ---
 
