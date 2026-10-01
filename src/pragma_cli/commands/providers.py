@@ -473,8 +473,6 @@ def init(
     - pyproject.toml for packaging
     - README.md with documentation
     - src/{name}_provider/ with example resources
-    - tests/ with example tests
-    - mise.toml for tool management
 
     Example:
         pragma providers init mycompany
@@ -528,8 +526,7 @@ def init(
     typer.echo("")
     typer.echo("Next steps:")
     typer.echo(f"  cd {project_dir}")
-    typer.echo("  uv sync --dev")
-    typer.echo("  uv run pytest tests/")
+    typer.echo("  uv sync")
     typer.echo("")
     typer.echo(f"Edit src/{package_name}/resources/ to add your resources.")
     typer.echo("")
