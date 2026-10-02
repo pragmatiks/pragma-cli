@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.13"
 
 [[package]]
@@ -847,7 +847,7 @@ requires-dist = [
     { name = "copier", specifier = ">=9.0.0" },
     { name = "jsonschema", specifier = ">=4.25.1" },
     { name = "pragmatiks-lint", specifier = ">=0.3.1" },
-    { name = "pragmatiks-sdk", specifier = ">=14.0.0" },
+    { name = "pragmatiks-sdk", specifier = ">=15.0.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=13.9.0" },
     { name = "typer", specifier = ">=0.15.3" },
@@ -877,17 +877,18 @@ wheels = [
 
 [[package]]
 name = "pragmatiks-sdk"
-version = "14.0.0"
+version = "15.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "structlog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/85/ba/c6b78e00757098a34863c540c097e2020ce370ba9c88fb5b51909bc16af0/pragmatiks_sdk-14.0.0.tar.gz", hash = "sha256:fe219775005049bb4fce13225ca99a3febd0360ed7941e465ce773d4c284d295", size = 46122, upload-time = "2026-10-01T18:43:29.967Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/07/85b6e9f11c80cc4fedb9226e2d12b6b07a2b732adfa92300199ad21c447d/pragmatiks_sdk-15.0.0.tar.gz", hash = "sha256:fcf0b687262078a133cf5deb5aea024cbbeb4e03a4c825ba4e4fe23fa20ece4b", size = 76257, upload-time = "2026-10-02T18:22:11.098Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/8f/66ae4155a7dc77e6e278e3c3fe756ebb103d798f101eab69a5dadaa3877f/pragmatiks_sdk-14.0.0-py3-none-any.whl", hash = "sha256:35c8d459303eda082a0ae4f28a48017af9e4bb819b160c5852f0a9d04c3ac8d1", size = 56021, upload-time = "2026-10-01T18:43:28.731Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/5a/116bae2bcb627949290018fbd4d8a443d675b668cceb7f80b6a079e5c375/pragmatiks_sdk-15.0.0-py3-none-any.whl", hash = "sha256:da5b4456fdab893aa6fddb8235b727fa7a974ec6ba777cfea16e317987d047c9", size = 97117, upload-time = "2026-10-02T18:22:09.836Z" },
 ]
 
 [[package]]
