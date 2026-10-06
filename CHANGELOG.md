@@ -1,5 +1,24 @@
 # Changelog
 
+## v11.0.0 (2026-10-06)
+
+### BREAKING CHANGE
+
+- pragma providers publish drops --version and no longer
+reads [tool.pragma] from pyproject.toml; the version comes from the
+wheel, and the catalog description and tags from [project].description
+and [project].keywords. It needs a Pragmatiks API that admits published
+wheels.
+
+### Feat
+
+- **providers**: wait for admission on publish and list a provider's versions
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v16.0.0 (#80)
+- **deps**: update pragmatiks-sdk to v15.0.0 (#79)
+
 ## v10.0.1 (2026-10-01)
 
 ### Fix
