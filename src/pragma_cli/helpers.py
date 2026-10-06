@@ -1,4 +1,4 @@
-"""CLI helper functions for parsing resource identifiers and output formatting."""
+"""CLI helper functions for parsing resource identifiers and API errors, and for output formatting."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ import yaml
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    import httpx
 
 
 class OutputFormat(StrEnum):
@@ -64,3 +66,33 @@ def parse_resource_id(resource_id: str) -> tuple[str, str, str]:
     name = parts[3]
 
     return provider, resource, name
+
+
+def parse_api_error_message(response: httpx.Response) -> str | None:
+    """Read the human-readable message from an API error body.
+
+    Args:
+        response: The API's error response.
+
+    Returns:
+        A string ``detail``, ``detail.message``, or a top-level ``message``,
+        or ``None`` when the body carries none of them.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+
+    if not isinstance(body, dict):
+        return None
+
+    detail = body.get("detail")
+
+    if isinstance(detail, str):
+        return detail
+
+    if isinstance(detail, dict) and isinstance(detail.get("message"), str):
+        return detail["message"]
+
+    message = body.get("message")
+    return message if isinstance(message, str) else None

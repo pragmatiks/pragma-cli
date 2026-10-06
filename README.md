@@ -59,10 +59,11 @@ pragma resources get gcp/storage my-bucket
 | `pragma providers list` | List deployed providers |
 | `pragma providers init <name>` | Initialize a new provider project |
 | `pragma providers update` | Update project from template |
-| `pragma providers publish [dir] [--wheel <path>] [--changelog <file>]` | Build wheel via `uv build` (or take a prebuilt one) and upload it to the Pragmatiks API, which hosts it and computes its digest |
+| `pragma providers publish [dir] [--wheel <path>] [--changelog <file>]` | Build the wheel via `uv build` (or take a prebuilt one), upload it, and wait until your organization's provider host admits it (`published`) or refuses it (`failed`) |
+| `pragma providers versions <name>` | List a provider's versions with their status; a version still being admitted shows `admitting` |
 | `pragma providers deploy <id> [version]` | Deploy a specific version |
 | `pragma providers status <id>` | Check deployment status |
-| `pragma providers delete <id> [--cascade]` | Delete a provider |
+| `pragma providers delete <id> [--yes]` | Delete a provider from the catalog (admins of the owning organization only); a provider that is still installed is refused |
 
 ### Configuration
 
