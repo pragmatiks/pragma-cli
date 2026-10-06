@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from importlib.metadata import version as get_version
 from typing import Annotated, Any
 
@@ -18,6 +17,7 @@ from pragma_cli import set_client
 from pragma_cli.bootstrap_errors import check_bootstrap_error
 from pragma_cli.commands import auth, config, ops, organizations, projects, providers, resources
 from pragma_cli.config import CONFIG_PATH, MalformedConfigError, get_current_context
+from pragma_cli.helpers import parse_api_error_message
 from pragma_cli.plugins import load_plugins
 
 
@@ -38,36 +38,6 @@ def _extract_base_url(error: httpx.RequestError) -> str:
         return f"{url.scheme}://{url.host}:{url.port}" if url.port else f"{url.scheme}://{url.host}"
     except Exception:
         return "unknown"
-
-
-def _extract_api_detail_message(response: httpx.Response) -> str | None:
-    """Extract a human-readable detail message from a structured API error body.
-
-    Args:
-        response: The httpx response with a potentially structured error body.
-
-    Returns:
-        The detail message string if the body contains one, or None if the
-        body is not JSON, not a dict, or has no extractable detail message.
-    """
-    try:
-        body = response.json()
-    except (ValueError, json.JSONDecodeError):
-        return None
-
-    if not isinstance(body, dict):
-        return None
-
-    detail = body.get("detail")
-    if isinstance(detail, str):
-        return detail
-
-    if isinstance(detail, dict):
-        message = detail.get("message")
-        if isinstance(message, str):
-            return message
-
-    return None
 
 
 def _handle_httpx_error(error: httpx.ConnectError | httpx.TimeoutException | httpx.HTTPStatusError) -> None:
@@ -97,7 +67,7 @@ def _handle_httpx_error(error: httpx.ConnectError | httpx.TimeoutException | htt
             console.print("[red]Error:[/red] Not authenticated. Run 'pragma auth login' to authenticate.")
             raise typer.Exit(1) from error
 
-        detail_message = _extract_api_detail_message(error.response)
+        detail_message = parse_api_error_message(error.response)
         if detail_message:
             console.print(f"[red]Error:[/red] {detail_message}")
             raise typer.Exit(1) from error
