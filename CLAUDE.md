@@ -157,18 +157,11 @@ This applies to any new top-level dependency. It does NOT apply to transitive de
 
 Package: `pragmatiks-cli` on [PyPI](https://pypi.org/project/pragmatiks-cli/)
 
-**Versioning** (commitizen):
-```bash
-cz bump              # Bump version based on conventional commits
-```
+Releases are CI-owned. Pushing to `main` runs `.github/workflows/publish.yaml`, which runs `cz bump` (version and `CHANGELOG.md` from conventional commits), tags `v{version}`, builds, creates the GitHub release, publishes to PyPI through trusted publishing, and triggers the pragma-providers re-publish. A push whose commits carry no bump type (`chore`, `docs`, …) releases nothing.
 
-**Publishing**:
-```bash
-uv build             # Build wheel and sdist
-uv publish           # Publish to PyPI (requires PYPI_TOKEN)
-```
+Never run `cz bump`, `uv build` or `uv publish` locally, and never hand-edit the version or changelog.
 
-**Tag format**: `v{version}` (e.g., `v0.12.2`)
+**Tag format**: `v{version}` (e.g., `v11.0.0`)
 
 ## Engineering Principles
 
@@ -178,7 +171,7 @@ Canonical engineering rules for all Pragmatiks code in this repository. Workers 
 
 Applies to all code in this repository. Some principles only apply to one language or stack — flagged where relevant.
 
-This section is the ground truth for engineering principles in this repository. The same text is embedded in every Pragmatiks subrepo's `CLAUDE.md`. When a principle changes, every embed must be updated in lockstep and the corresponding `pragmatiks-lint` / `@pragmatiks/lint` rule versions bumped.
+This section is an embedded copy of the pragma-os repo's `docs/engineering-principles.md`, the canonical source. The same text is embedded in every Pragmatiks subrepo's `CLAUDE.md`. When a principle changes, every embed must be updated in lockstep and the corresponding `pragmatiks-lint` / `@pragmatiks/lint` rule versions bumped.
 
 ### Enforcement layers
 
@@ -277,20 +270,20 @@ When unsure, follow Clean Code: meaningful names, small functions, single level 
 
 ### 10. No Comments
 
-The code must be self-explanatory. Do not write comments — none at all, WHY comments included (amended 2026-08-31; they metastasized). Docstrings are documentation, not comments; this rule does not restrict them.
+Code must self-explain. No comments — none, WHY comments included (amended 2026-08-31; they metastasized). Docstrings = documentation, not comments — rule not restrict them. Requirements:
 
-- Google-style docstrings are **required** on every module, class, function, and method (not only the `pragma-sdk` public surface). Describe purpose, arguments, returns, and raised exceptions; no noise padding.
+- Google-style docstrings **required** on every module, class, function, method (not only `pragma-sdk` public surface). Describe purpose, arguments, returns, raised exceptions; no noise padding.
 - Docstrings address the **caller**: contract, constraints, how to use. Not implementation narration, not change history, not a log of what the function used to do. A workaround, hidden constraint, or subtle invariant worth recording goes in the owning function's docstring (a `Note:` section when it needs a home), or the code gets restructured until it needs no explanation.
-- Tool directives that must sit on the flagged line (`# noqa`, `eslint-disable`, `# type: ignore`) stay, bare — the justification lives in the docstring, not in appended prose.
+- Tool directives that must sit on the flagged line (`# noqa`, `eslint-disable`, `# type: ignore`) stay, bare — justification lives in the docstring, not appended prose.
 
-Forbidden: ALL non-docstring comments — WHY comments, block comments restating what the code does, section dividers, commented-out code, "added for X" / "used by Y" trail comments, planning comments (`# TODO: refactor later`).
+Forbidden: ALL non-docstring comments — WHY comments, block comments restating code, section dividers, commented-out code, "added for X" / "used by Y" trail comments, planning comments (`# TODO: refactor later`).
 
 **Programmatic check**:
-- `pra-no-block-comments` semgrep rule: flags multi-line `#` blocks in Python and `/* ... */` blocks in TS that are not docstrings.
-- `pra-no-todo-comments` semgrep rule: flags `# TODO` / `// TODO` / `/* TODO */`.
-- Existing custom script for comment ban (to migrate to semgrep). Needs extension: flag single-line comments too (WHY ban).
+- `check-comments` pre-commit hook (`python -m pragmatiks_lint.comments` from `pragmatiks-lint`, pinned via `additional_dependencies`): flags every comment in every Python file, trailing included; only a line-1 shebang and exact bare tool directives pass (`# noqa`, `# ruff: noqa`, `# type: ignore`, `# ty: ignore`, each with optional codes; `# fmt: off|on|skip`); a directive with prose fails.
+- `pra-no-block-comments-js` semgrep rule: flags every `/* ... */` comment in TS/JS except JSDoc `/** ... */`.
+- `pra-no-todo-comments-js` semgrep rule: flags a `//` or `/* */` comment in TS/JS that opens with `TODO`, `FIXME` or `XXX` (any case), except `TODO(PRA-n)`.
 
-**Reviewer hint**: every non-directive comment in the diff is a finding. Rationale that matters moves to the nearest docstring; rationale that does not matter dies. Docstrings that read like implementation walkthroughs or changelogs are findings too.
+**Reviewer hint**: every non-directive comment in diff = finding. Rationale that matters moves to the nearest docstring; rationale that does not matter dies. Docstrings reading like implementation walkthroughs or changelogs = finding too.
 
 ### 11. Semantic Names — No Abbreviations
 
@@ -322,7 +315,7 @@ Provider event `on_delete` stays (provider deletes external object).
 
 **Programmatic check**:
 - `eslint-plugin-unicorn/prevent-abbreviations` (TS) — direct fit, allowlist config.
-- `pra-no-abbreviations` semgrep rule (Python) — regex matching forbidden short identifiers, allowlist.
+- `pra-no-abbreviations-python` semgrep rule (Python) — regex matching forbidden short identifiers, allowlist.
 - `packages/api/scripts/check_openapi_spec.py` (`task api:check`) — flags infrastructure terms in generated OpenAPI spec. Kubernetes, pod, namespace, and vendor names not in term list yet — reviewer scans for them.
 
 **Reviewer hint**: `db`, `cfg`, `k8s` in any new code = blocker. Banned synonym from vocabulary table on any surface = blocker.
@@ -356,7 +349,7 @@ Everything else is public. If no same-named public accessor mediates the identif
 
 Every reviewer dispatch must:
 
-1. Run `pragmatiks-lint check` (programmatic findings) before reading the diff.
+1. Run `pragma lint check <paths>` (programmatic findings) before reading the diff.
 2. Read the diff.
 3. For each principle, produce findings as:
 
@@ -377,6 +370,6 @@ A reviewer who fails to invoke programmatic tooling but only eyeballs the diff i
 Every developer dispatch must:
 
 1. Read this `## Engineering Principles` section before starting.
-2. Run `pragmatiks-lint check` locally before opening a PR.
+2. Run `pragma lint check <paths>` locally before opening a PR.
 3. Resolve all 🚨 blockers from the lint pack. ⚠️ findings: address or justify in PR body.
 4. State principle compliance in the callback to the supervisor.

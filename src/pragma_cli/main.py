@@ -277,5 +277,5 @@ app.add_typer(projects.app, name="projects")
 
 load_plugins(app)
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     app()

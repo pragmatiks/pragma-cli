@@ -10,8 +10,10 @@ repos:
     hooks:
       - id: check-comments
         name: Enforce NO COMMENTS policy
-        entry: scripts/check_comments.sh
-        language: system
+        entry: python -m pragmatiks_lint.comments
+        language: python
+        language_version: python3.13
+        additional_dependencies: ["pragmatiks-lint==0.6.0"]
         types: [python]
         pass_filenames: true
         stages: [pre-commit]
