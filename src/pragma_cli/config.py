@@ -6,17 +6,33 @@ import fcntl
 import os
 import stat
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
+import httpx
 import yaml
 from pydantic import BaseModel, ValidationError
 
 
 class MalformedConfigError(RuntimeError):
     """Raised when the config file exists but cannot be parsed or validated."""
+
+
+class UnknownContextError(ValueError):
+    """Raised when a context name is not in the configuration."""
+
+    def __init__(self, context_name: str, available_context_names: Iterable[str]) -> None:
+        """Name the unknown context and the contexts that exist.
+
+        Args:
+            context_name: Context name the caller asked for.
+            available_context_names: Names of the contexts in the configuration.
+        """
+        super().__init__(
+            f"Context '{context_name}' not found. Available contexts: {', '.join(available_context_names)}"
+        )
 
 
 def _get_config_dir() -> Path:
@@ -363,14 +379,60 @@ def get_current_context(context_name: str | None = None) -> tuple[str, ContextCo
         Tuple of (context_name, context_config).
 
     Raises:
-        ValueError: If context not found in configuration.
-    """
+        UnknownContextError: If the context is not in the configuration.
+    """  # noqa: DOC502
     config = load_config()
 
     if context_name is None:
         context_name = config.current_context
 
-    if context_name not in config.contexts:
-        raise ValueError(f"Context '{context_name}' not found in configuration")
+    return context_name, select_context(config, context_name)
 
-    return context_name, config.contexts[context_name]
+
+def select_context(config: PragmaConfig, context_name: str) -> ContextConfig:
+    """Select a context from a loaded configuration.
+
+    Args:
+        config: Loaded configuration.
+        context_name: Name of the context to select.
+
+    Returns:
+        The context's configuration, the same object ``config`` holds.
+
+    Raises:
+        UnknownContextError: If the context is not in the configuration.
+    """  # noqa: DOC502
+    check_context_exists(config, context_name)
+    return config.contexts[context_name]
+
+
+def check_context_exists(config: PragmaConfig, context_name: str) -> None:
+    """Check that a context is in a loaded configuration.
+
+    Args:
+        config: Loaded configuration.
+        context_name: Name of the context to check.
+
+    Raises:
+        UnknownContextError: If the context is not in the configuration.
+    """
+    if context_name not in config.contexts:
+        raise UnknownContextError(context_name, config.contexts)
+
+
+def is_valid_api_url(url: str) -> bool:
+    """Tell whether a URL can serve as a context's API URL.
+
+    Args:
+        url: URL to check.
+
+    Returns:
+        ``True`` if it is an ``http://`` or ``https://`` URL with a host.
+    """
+    try:
+        parsed = httpx.URL(url)
+        host = parsed.host
+    except (httpx.InvalidURL, UnicodeError):
+        return False
+
+    return parsed.scheme in ("http", "https") and bool(host)

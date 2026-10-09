@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Annotated
 
+import click
 import typer
 from pragma_sdk import (
     CreateProjectRequest,
@@ -14,11 +15,13 @@ from pragma_sdk import (
     UpdateProjectRequest,
 )
 from rich.console import Console
-from rich.markup import escape as rich_escape
+from rich.markup import escape
 from rich.table import Table
 
 from pragma_cli import get_client
-from pragma_cli.config import ContextConfig, load_config, update_config
+from pragma_cli.config import ContextConfig, load_config, select_context, update_config
+from pragma_cli.errors import error_console
+from pragma_cli.exit_codes import FAILURE_EXIT_CODE, INPUT_ERROR_EXIT_CODE
 from pragma_cli.helpers import OutputFormat, output_data
 
 
@@ -45,7 +48,7 @@ def _sanitize_display(value: str) -> str:
     Returns:
         A string safe to pass to ``console.print`` inside an f-string.
     """
-    return rich_escape(_CONTROL_CHARS_RE.sub("", value))
+    return escape(_CONTROL_CHARS_RE.sub("", value))
 
 
 def _print_projects_table(projects: list[dict]) -> None:
@@ -62,10 +65,10 @@ def _print_projects_table(projects: list[dict]) -> None:
 
     for project in projects:
         table.add_row(
-            project["project_id"],
-            project["name"],
-            project["organization_id"],
-            project["updated_at"],
+            escape(project["project_id"]),
+            escape(project["name"]),
+            escape(project["organization_id"]),
+            escape(project["updated_at"]),
         )
 
     console.print(table)
@@ -83,11 +86,11 @@ def _print_project_detail(projects: list[dict]) -> None:
     table.add_column("Field", style="bold")
     table.add_column("Value")
 
-    table.add_row("ID", project["project_id"])
-    table.add_row("Name", project["name"])
-    table.add_row("Organization ID", project["organization_id"])
-    table.add_row("Created", project["created_at"])
-    table.add_row("Updated", project["updated_at"])
+    table.add_row("ID", escape(project["project_id"]))
+    table.add_row("Name", escape(project["name"]))
+    table.add_row("Organization ID", escape(project["organization_id"]))
+    table.add_row("Created", escape(project["created_at"]))
+    table.add_row("Updated", escape(project["updated_at"]))
 
     console.print(table)
 
@@ -134,11 +137,12 @@ def _current_context_config(ctx: typer.Context) -> tuple[str, ContextConfig]:
 
     Returns:
         Tuple of context name and mutable context config.
-    """
-    config = load_config()
+
+    Raises:
+        UnknownContextError: If the context is not in the configuration.
+    """  # noqa: DOC502
     context_name = _active_context_name(ctx)
-    context_config = config.contexts[context_name]
-    return context_name, context_config
+    return context_name, select_context(load_config(), context_name)
 
 
 @app.command("list")
@@ -148,7 +152,7 @@ def list_projects(
     """List projects visible to the current caller."""
     projects = get_client().list_projects()
 
-    if not projects:
+    if not projects and output == OutputFormat.TABLE:
         console.print("[dim]No projects found.[/dim]")
         return
 
@@ -171,7 +175,7 @@ def create_project(
 ) -> None:
     """Create a project."""
     project = get_client().create_project(CreateProjectRequest(name=name))
-    console.print(f"[green]Created project:[/green] {project.name} ({project.project_id})")
+    console.print(f"[green]Created project:[/green] {escape(project.name)} ({escape(project.project_id)})")
 
 
 @app.command("update")
@@ -181,7 +185,7 @@ def update_project(
 ) -> None:
     """Update project metadata."""
     project = get_client().update_project(project_id, UpdateProjectRequest(name=name))
-    console.print(f"[green]Updated project:[/green] {project.name} ({project.project_id})")
+    console.print(f"[green]Updated project:[/green] {escape(project.name)} ({escape(project.project_id)})")
 
 
 def _print_orphan_warning(name: str) -> None:
@@ -190,17 +194,18 @@ def _print_orphan_warning(name: str) -> None:
     Args:
         name: Name of the project about to be deleted.
     """
-    console.print(
-        f"[yellow]Warning:[/yellow] --orphan-resources will delete project [bold]{name}[/bold] from Pragma only."
+    error_console.print(
+        f"[yellow]Warning:[/yellow] --orphan-resources will delete project [bold]{escape(name)}[/bold] "
+        "from Pragmatiks only."
     )
-    console.print(
+    error_console.print(
         "[dim]The underlying infrastructure (kubernetes pods, Supabase projects, "
         "GCP resources, etc.) will keep running[/dim]"
     )
-    console.print(
-        "[dim]without Pragma managing it. You are exiting tracking, not cleaning up — billing will continue.[/dim]"
+    error_console.print(
+        "[dim]without Pragmatiks managing it. You are exiting tracking, not cleaning up — billing will continue.[/dim]"
     )
-    console.print()
+    error_console.print()
 
 
 def _print_project_has_resources(error: ProjectHasResourcesError, *, orphan_already_requested: bool) -> None:
@@ -218,7 +223,7 @@ def _print_project_has_resources(error: ProjectHasResourcesError, *, orphan_alre
             ``--orphan-resources``. Suppresses the flag suggestion when True.
     """
     safe_project_id = _sanitize_display(error.project_id)
-    console.print(
+    error_console.print(
         f"[red]Error:[/red] Project [bold]{safe_project_id}[/bold] still contains {error.resource_count} resource(s)."
     )
 
@@ -227,55 +232,49 @@ def _print_project_has_resources(error: ProjectHasResourcesError, *, orphan_alre
         sample_size = len(display_resources)
         truncated = sample_size < len(error.resources) or sample_size < error.resource_count
         if truncated:
-            console.print(f"[dim]Showing {sample_size} of {error.resource_count}:[/dim]")
+            error_console.print(f"[dim]Showing {sample_size} of {error.resource_count}:[/dim]")
         else:
-            console.print("[dim]Resources:[/dim]")
+            error_console.print("[dim]Resources:[/dim]")
 
         for resource_id in display_resources:
-            console.print(f"  [cyan]{_sanitize_display(resource_id)}[/cyan]")
+            error_console.print(f"  [cyan]{_sanitize_display(resource_id)}[/cyan]")
 
-    console.print()
+    error_console.print()
 
     if orphan_already_requested:
-        console.print(
+        error_console.print(
             "[dim]The server refused the request even though --orphan-resources was set. "
             "Delete the resources first with[/dim] "
-            "[bold]pragma resources delete <type> <name>[/bold][dim].[/dim]"
+            "[bold]pragma resources delete <org/provider/resource/name>[/bold][dim].[/dim]"
         )
         return
 
-    console.print("[dim]Choose one of:[/dim]")
-    console.print("  [dim]1. Delete the resources first with[/dim] [bold]pragma resources delete <type> <name>[/bold]")
-    console.print(
+    error_console.print("[dim]Choose one of:[/dim]")
+    error_console.print(
+        "  [dim]1. Delete the resources first with[/dim] "
+        "[bold]pragma resources delete <org/provider/resource/name>[/bold]"
+    )
+    error_console.print(
         "  [dim]2. Re-run with[/dim] [bold]--orphan-resources[/bold] "
-        "[dim]to leave the resources running without Pragma tracking[/dim]"
+        "[dim]to leave the resources running without Pragmatiks tracking[/dim]"
     )
 
 
-def _resolve_confirmation(yes: bool, confirm: str | None) -> str:
-    """Resolve the typed confirmation value from flags or an interactive prompt.
+def check_confirmation_flags(yes: bool, confirm: str | None) -> None:
+    """Check that ``--yes`` and ``--confirm`` are given together or not at all.
 
     Args:
         yes: Whether the caller passed ``--yes`` to skip interactive confirmation.
         confirm: Value passed via ``--confirm``, required when ``yes`` is set.
 
-    Returns:
-        Typed confirmation string the caller supplied.
-
     Raises:
-        typer.Exit: If ``--yes``/``--confirm`` are combined incorrectly.
+        click.UsageError: If only one of ``--yes`` and ``--confirm`` is given.
     """
-    if yes:
-        if confirm is None:
-            console.print("[red]Error:[/red] --confirm <name> is required with --yes.")
-            raise typer.Exit(2)
-        return confirm
+    if yes and confirm is None:
+        raise click.UsageError("--confirm <name> is required with --yes.")
 
-    if confirm is not None:
-        console.print("[red]Error:[/red] --confirm can only be used together with --yes.")
-        raise typer.Exit(2)
-
-    return typer.prompt("Type the project name to confirm deletion: ")
+    if not yes and confirm is not None:
+        raise click.UsageError("--confirm can only be used together with --yes.")
 
 
 @app.command("delete")
@@ -288,31 +287,39 @@ def delete_project(
         typer.Option(
             "--orphan-resources",
             help="Delete the project but leave its resources running. "
-            "The infrastructure will keep billing — you are exiting Pragma tracking, not cleaning up.",
+            "The infrastructure will keep billing — you are exiting Pragmatiks tracking, not cleaning up.",
         ),
     ] = False,
 ) -> None:
     """Delete a project with typed confirmation of its name.
 
     By default the server refuses to delete a project that still contains
-    resources. Pass ``--orphan-resources`` to remove Pragma's tracking
+    resources. Pass ``--orphan-resources`` to remove Pragmatiks' tracking
     without touching the underlying infrastructure.
 
+    \f
+
     Raises:
-        typer.Exit: If confirmation flags are invalid, confirmation does not
-            match, or the server refuses the delete because resources remain.
-    """
+        typer.Exit: If confirmation does not match, or the server refuses the
+            delete because resources remain.
+        click.UsageError: If ``--yes`` and ``--confirm`` are combined incorrectly.
+    """  # noqa: DOC502
+    check_confirmation_flags(yes, confirm)
+
     client = get_client()
     project = client.get_project(project_id)
 
     if orphan_resources and not yes:
         _print_orphan_warning(project.name)
 
-    confirmation = _resolve_confirmation(yes, confirm)
+    confirmation = confirm if confirm is not None else typer.prompt("Type the project name to confirm deletion: ")
 
     if confirmation != project.name:
-        console.print("[red]Error:[/red] Confirmation did not match project name.")
-        raise typer.Exit(1)
+        error_console.print(
+            f"[red]Error:[/red] Confirmation did not match the project name '{escape(project.name)}'. "
+            "Type the name exactly, or pass --yes --confirm <name>."
+        )
+        raise typer.Exit(INPUT_ERROR_EXIT_CODE)
 
     try:
         client.delete_project(
@@ -321,13 +328,13 @@ def delete_project(
         )
     except ProjectHasResourcesError as error:
         _print_project_has_resources(error, orphan_already_requested=orphan_resources)
-        raise typer.Exit(1) from error
+        raise typer.Exit(FAILURE_EXIT_CODE) from error
 
     if orphan_resources:
-        console.print(f"[green]Deleted project tracking:[/green] {project.name}")
-        console.print("[dim]Resources were not touched and continue to run outside Pragma.[/dim]")
+        console.print(f"[green]Deleted project tracking:[/green] {escape(project.name)}")
+        console.print("[dim]Resources were not touched and continue to run outside Pragmatiks.[/dim]")
     else:
-        console.print(f"[green]Deleted project:[/green] {project.name}")
+        console.print(f"[green]Deleted project:[/green] {escape(project.name)}")
 
 
 @app.command("use")
@@ -341,19 +348,17 @@ def use_project(
     ``pragma -c staging projects use <project-id>`` writes to the staging
     context instead of the persistent current context.
 
+    \f
+
     Raises:
-        typer.Exit: If the active context does not exist in the config.
-    """
+        UnknownContextError: If the active context is not in the configuration.
+    """  # noqa: DOC502
     context_name = _active_context_name(ctx)
 
     with update_config() as config:
-        if context_name not in config.contexts:
-            console.print(f"[red]Error:[/red] Context '{context_name}' not found in configuration.")
-            raise typer.Exit(2)
+        select_context(config, context_name).project = project_id
 
-        config.contexts[context_name].project = project_id
-
-    console.print(f"[green]Current project for context '{context_name}':[/green] {project_id}")
+    console.print(f"[green]Current project for context '{escape(context_name)}':[/green] {escape(project_id)}")
 
 
 @app.command("current")
@@ -364,4 +369,4 @@ def current_project(ctx: typer.Context) -> None:
     reflects the context the rest of the CLI is operating on.
     """
     _, context_config = _current_context_config(ctx)
-    console.print(context_config.project or "none set")
+    console.print(escape(context_config.project or "none set"))

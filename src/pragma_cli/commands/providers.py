@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
+import click
 import copier
 import httpx
 import typer
@@ -22,6 +23,7 @@ from pragma_sdk import (
     DeploymentStatus,
     PragmaClient,
     ProviderVersion,
+    UpgradePolicy,
     VersionStatus,
 )
 from rich.console import Console
@@ -31,9 +33,23 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from pragma_cli import get_client
-from pragma_cli.bootstrap_errors import check_bootstrap_error
 from pragma_cli.commands.completions import completion_provider_ids
-from pragma_cli.helpers import OutputFormat, output_data, parse_api_error_message
+from pragma_cli.errors import (
+    check_bootstrap_error,
+    error_console,
+    format_api_error,
+    format_request_failure,
+    is_request_unsent,
+    print_api_error,
+    report_not_found,
+    require_auth,
+)
+from pragma_cli.exit_codes import (
+    ADMISSION_UNCONFIRMED_EXIT_CODE,
+    FAILURE_EXIT_CODE,
+    INPUT_ERROR_EXIT_CODE,
+)
+from pragma_cli.helpers import OutputFormat, format_optional_value, output_data, parse_api_error_message
 
 
 app = typer.Typer(help="Provider management commands")
@@ -79,80 +95,125 @@ def get_template_source() -> str:
     return DEFAULT_TEMPLATE_URL
 
 
-def _build_wheel(project_dir: Path) -> Path:
-    """Build the provider wheel with ``uv build`` and return its path.
+def run_wheel_build(project_directory: Path) -> Path:
+    """Build the provider wheel with ``uv build`` into ``project_directory/dist/``.
 
     Args:
-        project_dir: Provider project directory containing pyproject.toml.
+        project_directory: Provider project directory containing pyproject.toml.
 
     Returns:
-        Path to the freshly built wheel in ``dist/``.
+        Path to the newest wheel in ``project_directory/dist/``.
 
     Raises:
-        typer.Exit: If the build fails or produces no wheel.
+        typer.Exit: With ``INPUT_ERROR_EXIT_CODE`` if the directory has no
+            pyproject.toml, uv is not installed, or the build fails or
+            produces no wheel.
     """
+    if not (project_directory / "pyproject.toml").is_file():
+        error_console.print(
+            f"[red]Error:[/red] {escape(str(project_directory))} has no pyproject.toml; "
+            "pass a provider project directory or --wheel <path>."
+        )
+        raise typer.Exit(INPUT_ERROR_EXIT_CODE)
+
     console.print("[dim]Building wheel with 'uv build'...[/dim]")
 
-    result = subprocess.run(["uv", "build", "--wheel"], cwd=project_dir, capture_output=True, text=True)
+    wheel_output_directory = (project_directory / "dist").resolve()
+
+    try:
+        result = subprocess.run(
+            ["uv", "build", "--wheel", "--out-dir", str(wheel_output_directory)],
+            cwd=project_directory,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as e:
+        error_console.print("[red]Error:[/red] uv is not installed; install it or pass --wheel <path>.")
+        raise typer.Exit(INPUT_ERROR_EXIT_CODE) from e
 
     if result.returncode != 0:
-        console.print(f"[red]Error:[/red] uv build failed:\n{result.stderr}")
-        raise typer.Exit(1)
+        error_console.print(f"[red]Error:[/red] uv build failed:\n{escape(result.stderr)}")
+        raise typer.Exit(INPUT_ERROR_EXIT_CODE)
 
-    wheels = sorted((project_dir / "dist").glob("*.whl"), key=lambda path: path.stat().st_mtime)
+    wheels = sorted(wheel_output_directory.glob("*.whl"), key=lambda path: path.stat().st_mtime)
 
     if not wheels:
-        console.print("[red]Error:[/red] uv build produced no wheel in dist/.")
-        raise typer.Exit(1)
+        error_console.print(f"[red]Error:[/red] uv build produced no wheel in {escape(str(wheel_output_directory))}.")
+        raise typer.Exit(INPUT_ERROR_EXIT_CODE)
 
-    return wheels[-1].resolve()
+    return wheels[-1]
 
 
 def _read_changelog(path: Path | None) -> str | None:
     """Read changelog text from a file path, returning ``None`` when not supplied.
 
     Args:
-        path: Path to a UTF-8 text file, or ``None``.
+        path: Path to an existing UTF-8 text file, or ``None``.
 
     Returns:
         The file's text content, or ``None`` if no path was given.
 
     Raises:
-        typer.Exit: If the file is missing or cannot be read.
+        typer.Exit: With ``INPUT_ERROR_EXIT_CODE`` if the file cannot be read.
     """
     if path is None:
         return None
 
-    if not path.exists():
-        console.print(f"[red]Error:[/red] Changelog file not found: {path}")
-        raise typer.Exit(1)
-
     try:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as e:
-        console.print(f"[red]Error:[/red] Could not read changelog '{path}': {e}")
-        raise typer.Exit(1) from e
+        error_console.print(f"[red]Error:[/red] Could not read changelog '{escape(str(path))}': {escape(str(e))}")
+        raise typer.Exit(INPUT_ERROR_EXIT_CODE) from e
 
 
-def _require_auth(client: PragmaClient) -> None:
-    """Verify the client is authenticated, exit with error if not.
+def validate_provider_name(context: typer.Context, name: str) -> str:
+    """Check a provider name is namespaced as ``org/name``, for use as a Typer argument callback.
 
     Args:
-        client: SDK client instance.
+        context: Click context of the command being parsed.
+        name: Provider name as typed.
+
+    Returns:
+        The name unchanged.
 
     Raises:
-        typer.Exit: If authentication is missing.
+        typer.BadParameter: Exiting with ``INPUT_ERROR_EXIT_CODE``, if the
+            name is not ``org/name``.
     """
-    if client._auth is None:
-        console.print("[red]Error:[/red] Authentication required. Run 'pragma auth login' first.")
-        raise typer.Exit(1)
+    if context.resilient_parsing:
+        return name
+
+    organization, _, provider = name.partition("/")
+
+    if not organization or not provider or "/" in provider:
+        raise typer.BadParameter(f"must be 'org/name', got '{name}'.")
+
+    return name
+
+
+ProviderNameArgument = Annotated[
+    str,
+    typer.Argument(help="Provider name (org/name format)", callback=validate_provider_name),
+]
+"""Positional ``org/name`` provider argument, checked by ``validate_provider_name``."""
+
+CompletedProviderNameArgument = Annotated[
+    str,
+    typer.Argument(
+        help="Provider name (org/name format)",
+        autocompletion=completion_provider_ids,
+        callback=validate_provider_name,
+    ),
+]
+"""``ProviderNameArgument`` that shell completion fills from the provider catalog."""
 
 
 def _fetch_with_spinner(description: str, fetch_fn) -> Any:
-    """Execute a function with a spinner progress indicator.
+    """Execute a function with a spinner progress indicator on stderr, keeping stdout for output.
 
     Args:
-        description: Text to display next to the spinner.
+        description: Text to display next to the spinner, printed verbatim
+            with Rich markup escaped.
         fetch_fn: Zero-argument callable to execute.
 
     Returns:
@@ -161,25 +222,11 @@ def _fetch_with_spinner(description: str, fetch_fn) -> Any:
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
-        console=console,
+        console=error_console,
         transient=True,
     ) as progress:
-        progress.add_task(description, total=None)
+        progress.add_task(escape(description), total=None)
         return fetch_fn()
-
-
-def _format_api_error(error: httpx.HTTPStatusError) -> str:
-    """Format the API's message for an HTTP error, escaped for Rich markup.
-
-    Args:
-        error: The HTTP status error from httpx.
-
-    Returns:
-        The API's message, the raw response text, or the error itself,
-        with Rich markup escaped so bracketed text prints verbatim.
-    """
-    message = parse_api_error_message(error.response) or error.response.text or str(error)
-    return escape(message)
 
 
 def format_upload_refusal(error: httpx.HTTPStatusError) -> str:
@@ -190,41 +237,12 @@ def format_upload_refusal(error: httpx.HTTPStatusError) -> str:
 
     Returns:
         The upload-failed message for a 503 whose body carries no message,
-        or else the API's message escaped for Rich markup.
+        or else ``format_api_error``'s text, escaped for Rich markup.
     """
     if error.response.status_code == 503 and parse_api_error_message(error.response) is None:
         return UPLOAD_FAILED_MESSAGE
 
-    return _format_api_error(error)
-
-
-def format_transport_failure(error: httpx.TransportError) -> str:
-    """Format what interrupted an exchange with the API, in plain words.
-
-    Args:
-        error: The transport error the request raised.
-
-    Returns:
-        A lowercase phrase naming the cause, such as ``the API did not
-        answer in time``, without a trailing period. A cause without a
-        phrase of its own, such as a proxy failure, is named by its error
-        type: ``the connection to the API failed (ProxyError)``.
-    """
-    match error:
-        case httpx.ConnectError() | httpx.ConnectTimeout():
-            return "the API could not be reached"
-        case httpx.WriteTimeout():
-            return "sending to the API timed out"
-        case httpx.ReadTimeout():
-            return "the API did not answer in time"
-        case httpx.TimeoutException():
-            return "the connection to the API timed out"
-        case httpx.NetworkError():
-            return "the connection to the API broke off"
-        case httpx.ProtocolError():
-            return "the connection closed before the API answered"
-        case _:
-            return f"the connection to the API failed ({type(error).__name__})"
+    return escape(format_api_error(error))
 
 
 def format_upload_interruption(error: httpx.TransportError) -> str:
@@ -234,30 +252,10 @@ def format_upload_interruption(error: httpx.TransportError) -> str:
         error: The transport error the upload raised.
 
     Returns:
-        The upload-failed message naming what interrupted the upload.
+        The upload-failed message naming what interrupted the upload,
+        escaped for Rich markup.
     """
-    return f"Could not upload the wheel: {format_transport_failure(error)}. Publish the version again."
-
-
-def report_lookup_failure(error: httpx.HTTPStatusError, subject: str) -> NoReturn:
-    """Print why reading a provider or version failed and exit.
-
-    Args:
-        error: The HTTP status error the read raised.
-        subject: What was looked up, such as ``Provider 'acme/x'``; a 404
-            prints it as not found in the store.
-
-    Raises:
-        typer.Exit: Always, with code 1.
-    """
-    check_bootstrap_error(error)
-
-    if error.response.status_code == 404:
-        console.print(f"[red]Error:[/red] {escape(subject)} not found in the store.")
-        raise typer.Exit(1) from error
-
-    console.print(f"[red]Error:[/red] {_format_api_error(error)}")
-    raise typer.Exit(1) from error
+    return f"Could not upload the wheel: {escape(format_request_failure(error))}. Publish the version again."
 
 
 def _format_deployment_status(status: DeploymentStatus | None) -> str:
@@ -349,14 +347,16 @@ def init(
         pragma providers init postgres --output ./providers/postgres
         pragma providers init mycompany --defaults --description "My provider"
 
+    \f
+
     Raises:
         typer.Exit: If directory already exists or template copy fails.
     """
-    project_dir = output_dir or Path(f"./{name}-provider")
+    project_directory = output_dir or Path(f"./{name}-provider")
 
-    if project_dir.exists():
-        typer.echo(f"Error: Directory {project_dir} already exists", err=True)
-        raise typer.Exit(1)
+    if project_directory.exists():
+        error_console.print(f"[red]Error:[/red] Directory {escape(str(project_directory))} already exists.")
+        raise typer.Exit(INPUT_ERROR_EXIT_CODE)
 
     template_source = get_template_source()
 
@@ -371,7 +371,7 @@ def init(
     if author_email:
         data["author_email"] = author_email
 
-    typer.echo(f"Creating provider project: {project_dir}")
+    typer.echo(f"Creating provider project: {project_directory}")
     typer.echo(f"  Template: {template_source}")
     typer.echo("")
 
@@ -379,23 +379,23 @@ def init(
         vcs_ref = "HEAD" if not template_source.startswith("gh:") else None
         copier.run_copy(
             src_path=template_source,
-            dst_path=project_dir,
+            dst_path=project_directory,
             data=data,
             defaults=defaults,
             unsafe=True,
             vcs_ref=vcs_ref,
         )
     except Exception as e:
-        typer.echo(f"Error creating provider: {e}", err=True)
-        raise typer.Exit(1) from e
+        error_console.print(f"[red]Error:[/red] Could not create the provider project: {escape(str(e))}")
+        raise typer.Exit(FAILURE_EXIT_CODE) from e
 
     package_name = name.lower().replace("-", "_").replace(" ", "_") + "_provider"
 
     typer.echo("")
-    typer.echo(f"Created provider project: {project_dir}")
+    typer.echo(f"Created provider project: {project_directory}")
     typer.echo("")
     typer.echo("Next steps:")
-    typer.echo(f"  cd {project_dir}")
+    typer.echo(f"  cd {project_directory}")
     typer.echo("  uv sync")
     typer.echo("")
     typer.echo(f"Edit src/{package_name}/resources/ to add your resources.")
@@ -409,7 +409,7 @@ def init(
 
 @app.command()
 def update(
-    project_dir: Annotated[
+    project_directory: Annotated[
         Path,
         typer.Argument(help="Provider project directory"),
     ] = Path("."),
@@ -423,24 +423,28 @@ def update(
         pragma providers update
         pragma providers update ./my-provider
 
+    \f
+
     Raises:
         typer.Exit: If directory is not a Copier project or update fails.
     """
-    answers_file = project_dir / ".copier-answers.yml"
+    answers_file = project_directory / ".copier-answers.yml"
 
     if not answers_file.exists():
-        typer.echo(f"Error: {project_dir} is not a Copier-generated project", err=True)
-        typer.echo("(missing .copier-answers.yml)", err=True)
-        raise typer.Exit(1)
+        error_console.print(
+            f"[red]Error:[/red] {escape(str(project_directory))} is not a Copier-generated project "
+            "(missing .copier-answers.yml)."
+        )
+        raise typer.Exit(INPUT_ERROR_EXIT_CODE)
 
-    typer.echo(f"Updating provider project: {project_dir}")
+    typer.echo(f"Updating provider project: {project_directory}")
     typer.echo("")
 
     try:
-        copier.run_update(dst_path=project_dir, unsafe=True)
+        copier.run_update(dst_path=project_directory, unsafe=True)
     except Exception as e:
-        typer.echo(f"Error updating provider: {e}", err=True)
-        raise typer.Exit(1) from e
+        error_console.print(f"[red]Error:[/red] Could not update the provider project: {escape(str(e))}")
+        raise typer.Exit(FAILURE_EXIT_CODE) from e
 
     typer.echo("")
     typer.echo("Provider project updated successfully.")
@@ -458,26 +462,30 @@ def upload_wheel(client: PragmaClient, wheel_path: Path, changelog: str | None) 
         The ``pending`` version the organization's provider host now admits.
 
     Raises:
-        typer.Exit: If the upload is interrupted, the API cannot take it, or
-            the API refuses the wheel; an interruption prints what broke the
-            upload off and a refusal prints the API's reason.
-        httpx.ConnectError: If the API cannot be reached at all.
-        httpx.ConnectTimeout: If connecting to the API times out.
-    """
+        typer.Exit: With ``FAILURE_EXIT_CODE`` if the upload is interrupted,
+            the API cannot take it, or the API refuses the wheel, a 404
+            included; an interruption prints what broke the upload off and a
+            refusal prints the API's reason.
+        httpx.TransportError: If the API received none of the upload, as
+            ``errors.is_request_unsent`` tells: the request is invalid, or
+            connecting failed or timed out.
+    """  # noqa: DOC502
     try:
         return _fetch_with_spinner(
             f"Uploading {wheel_path.name}...",
             lambda: client.publish_provider_version(wheel_path, changelog=changelog),
         )
-    except (httpx.ConnectError, httpx.ConnectTimeout):
-        raise
     except httpx.TransportError as e:
-        console.print(f"[red]Error:[/red] {format_upload_interruption(e)}")
-        raise typer.Exit(1) from e
+        if is_request_unsent(e):
+            raise
+
+        error_console.print(f"[red]Error:[/red] {format_upload_interruption(e)}")
+        raise typer.Exit(FAILURE_EXIT_CODE) from e
     except httpx.HTTPStatusError as e:
         check_bootstrap_error(e)
-        console.print(f"[red]Error:[/red] {format_upload_refusal(e)}")
-        raise typer.Exit(1) from e
+
+        error_console.print(f"[red]Error:[/red] {format_upload_refusal(e)}")
+        raise typer.Exit(FAILURE_EXIT_CODE) from e
 
 
 def compute_watch_end(version: ProviderVersion, accepted_at: float) -> float:
@@ -551,18 +559,20 @@ def print_admission_outcome(version: ProviderVersion) -> None:
         version: The version as the watch last read it.
 
     Raises:
-        typer.Exit: If the version failed admission or is still pending.
+        typer.Exit: With ``FAILURE_EXIT_CODE`` if the version failed admission,
+            or with ``ADMISSION_UNCONFIRMED_EXIT_CODE`` if it is still pending.
     """
     match version.status:
         case VersionStatus.PUBLISHED:
             resource_types = format_resource_type_count(len(version.schemas or []))
             console.print(
-                f"[green]Published[/green] {version.canonical} {version.version} — "
-                f"Python {version.python_version}, SDK {version.sdk_version}, {resource_types}"
+                f"[green]Published[/green] {escape(version.canonical)} {escape(version.version)} — "
+                f"Python {escape(str(version.python_version))}, SDK {escape(str(version.sdk_version))}, "
+                f"{resource_types}"
             )
         case VersionStatus.FAILED:
-            console.print(f"[red]Error:[/red] {escape(version.error_message or '')}")
-            raise typer.Exit(1)
+            error_console.print(f"[red]Error:[/red] {escape(version.error_message or '')}")
+            raise typer.Exit(FAILURE_EXIT_CODE)
         case VersionStatus.PENDING:
             report_unfinished_admission(version)
 
@@ -571,17 +581,18 @@ def report_watch_failure(reason: str, version: ProviderVersion) -> NoReturn:
     """Print why the publish watch stopped reading a version, with how to follow the version, then exit.
 
     Args:
-        reason: Why the watch stopped, already escaped for Rich markup.
+        reason: Why the watch stopped, not escaped for Rich markup.
         version: The version being watched.
 
     Raises:
-        typer.Exit: Always, with code 1.
+        typer.Exit: Always, with ``ADMISSION_UNCONFIRMED_EXIT_CODE``.
     """
-    console.print(f"[red]Error:[/red] {reason}")
-    console.print(
-        f"Check admission of {version.canonical} {version.version} with: pragma providers versions {version.canonical}"
+    canonical = escape(version.canonical)
+    error_console.print(f"[red]Error:[/red] Stopped waiting for admission: {escape(reason.rstrip('.'))}.")
+    error_console.print(
+        f"Check admission of {canonical} {escape(version.version)} with: pragma providers versions {canonical}"
     )
-    raise typer.Exit(1)
+    raise typer.Exit(ADMISSION_UNCONFIRMED_EXIT_CODE)
 
 
 def report_unfinished_admission(version: ProviderVersion) -> NoReturn:
@@ -591,61 +602,88 @@ def report_unfinished_admission(version: ProviderVersion) -> NoReturn:
         version: The version still being admitted.
 
     Raises:
-        typer.Exit: Always, with code 1.
+        typer.Exit: Always, with ``ADMISSION_UNCONFIRMED_EXIT_CODE``.
     """
-    console.print(
-        f"[yellow]Admission of {version.canonical} {version.version} has not finished. "
-        f"Check it with: pragma providers versions {version.canonical}[/yellow]"
+    canonical = escape(version.canonical)
+    error_console.print(
+        f"[yellow]Admission of {canonical} {escape(version.version)} has not finished. "
+        f"Check it with: pragma providers versions {canonical}[/yellow]"
     )
-    raise typer.Exit(1)
+    raise typer.Exit(ADMISSION_UNCONFIRMED_EXIT_CODE)
 
 
 @app.command()
 def publish(
-    project_dir: Annotated[
-        Path,
-        typer.Argument(help="Provider project directory"),
-    ] = Path("."),
+    project_directory: Annotated[
+        Path | None,
+        typer.Argument(
+            help="Provider project directory (default: current directory); the wheel is built into its dist/",
+            show_default=False,
+            exists=True,
+            file_okay=False,
+        ),
+    ] = None,
     wheel: Annotated[
         Path | None,
-        typer.Option("--wheel", help="Prebuilt .whl to upload (skips 'uv build')"),
+        typer.Option(
+            "--wheel",
+            help="Prebuilt .whl to upload instead of building one; not combined with PROJECT_DIRECTORY",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
     ] = None,
     changelog: Annotated[
         Path | None,
-        typer.Option("--changelog", help="Path to a UTF-8 text file with release notes"),
+        typer.Option(
+            "--changelog",
+            help="Path to a UTF-8 text file with release notes",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
     ] = None,
 ):
     """Publish a new provider version and wait for its admission.
 
-    Builds the wheel with 'uv build --wheel' (or takes a prebuilt one via
-    '--wheel') and uploads it. The wheel alone identifies the version:
-    its 'pragma.provider' entry point names the provider, its metadata
-    carries the version, and the publishing organization comes from the
+    Builds the wheel with 'uv build --wheel' into PROJECT_DIRECTORY/dist/
+    (the current directory by default), or takes a prebuilt one via '--wheel',
+    and uploads it. The wheel alone identifies the version: its
+    'pragma.provider' entry point names the provider, its metadata carries
+    the version, and the publishing organization comes from the
     authenticated user. Your organization's provider host then admits the
     version; the command waits for that and exits non-zero when admission
     fails or has not finished shortly after its admission deadline. A failed
     version can be published again.
 
+    Exit code 3: the upload was accepted but admission is not confirmed,
+    because the watch ended with the version still admitting or stopped for
+    any other reason. A refused upload, a 404 included, exits 1.
+
     Examples:
         pragma providers publish
         pragma providers publish ./my-provider --changelog NOTES.md
         pragma providers publish --wheel dist/my_provider-1.0.0-py3-none-any.whl
-    """  # noqa: DOC501
-    wheel_path = wheel.resolve() if wheel else _build_wheel(project_dir)
 
-    if not wheel_path.exists():
-        console.print(f"[red]Error:[/red] Wheel not found: {wheel_path}")
-        raise typer.Exit(1)
+    \f
+
+    Raises:
+        click.UsageError: If both PROJECT_DIRECTORY and --wheel are given.
+    """
+    if wheel is not None and project_directory is not None:
+        raise click.UsageError("Pass either PROJECT_DIRECTORY or --wheel, not both.")
 
     changelog_text = _read_changelog(changelog)
 
     client = get_client()
-    _require_auth(client)
+    require_auth(client)
+
+    wheel_path = wheel or run_wheel_build(project_directory or Path("."))
 
     pending_version = upload_wheel(client, wheel_path, changelog_text)
     accepted_at = time.monotonic()
 
-    console.print(f"[bold]Publishing[/bold] {pending_version.canonical} {pending_version.version}")
+    console.print(f"[bold]Publishing[/bold] {escape(pending_version.canonical)} {escape(pending_version.version)}")
     console.print(f"Uploaded {format_wheel_size(wheel_path.stat().st_size)}")
     console.print("Admitting on your organization's provider host")
 
@@ -655,49 +693,60 @@ def publish(
             lambda: watch_admission(client, pending_version, accepted_at),
         )
     except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        report_watch_failure(_format_api_error(e), pending_version)
+        report_watch_failure(format_api_error(e), pending_version)
     except httpx.TransportError as e:
-        report_watch_failure(f"Stopped waiting for admission: {format_transport_failure(e)}.", pending_version)
+        report_watch_failure(format_request_failure(e), pending_version)
+    except Exception as e:
+        report_watch_failure(str(e) or type(e).__name__, pending_version)
 
     print_admission_outcome(version)
 
 
 def _merge_install_config(
     config_flags: list[str] | None,
-    config_file_path: str | None,
+    config_file_path: Path | None,
 ) -> dict[str, str] | None:
     """Merge config from --config-file and --config flags.
 
-    File values are loaded first, then individual flags override.
-    Returns None if no config is provided.
-    """  # noqa: DOC201, DOC501
+    File values are loaded first, then individual flags override them.
+
+    Args:
+        config_flags: ``KEY=VALUE`` entries from repeated ``--config`` flags,
+            or ``None``.
+        config_file_path: Existing YAML file holding a mapping of strings,
+            numbers and booleans, or ``None``.
+
+    Returns:
+        The merged config as strings, booleans written ``true`` or
+        ``false``, or ``None`` if neither source gives any value.
+
+    Raises:
+        typer.Exit: With ``INPUT_ERROR_EXIT_CODE`` if the file cannot be read
+            or parsed, is empty, is not a mapping, or holds a value of
+            another type, or a flag is not ``KEY=VALUE`` with a non-empty key.
+    """
     result: dict[str, str] = {}
 
     if config_file_path is not None:
-        path = Path(config_file_path)
-
-        if not path.exists():
-            console.print(f"[red]Error:[/red] Config file not found: {config_file_path}")
-            raise typer.Exit(1)
+        shown_path = escape(str(config_file_path))
 
         try:
-            with path.open(encoding="utf-8") as f:
-                data = yaml.safe_load(f)
+            with config_file_path.open(encoding="utf-8") as file:
+                data = yaml.safe_load(file)
         except yaml.YAMLError as e:
-            console.print(f"[red]Error:[/red] Failed to parse config file '{config_file_path}': {e}")
-            raise typer.Exit(1) from e
+            error_console.print(f"[red]Error:[/red] Failed to parse config file '{shown_path}': {escape(str(e))}")
+            raise typer.Exit(INPUT_ERROR_EXIT_CODE) from e
         except (OSError, UnicodeError) as e:
-            console.print(f"[red]Error:[/red] Could not read config file '{config_file_path}': {e}")
-            raise typer.Exit(1) from e
+            error_console.print(f"[red]Error:[/red] Could not read config file '{shown_path}': {escape(str(e))}")
+            raise typer.Exit(INPUT_ERROR_EXIT_CODE) from e
 
         if data is None:
-            console.print(f"[red]Error:[/red] Config file is empty: {config_file_path}")
-            raise typer.Exit(1)
+            error_console.print(f"[red]Error:[/red] Config file is empty: {shown_path}")
+            raise typer.Exit(INPUT_ERROR_EXIT_CODE)
 
         if not isinstance(data, dict):
-            console.print(f"[red]Error:[/red] Config file must contain a YAML mapping, got {type(data).__name__}")
-            raise typer.Exit(1)
+            error_console.print(f"[red]Error:[/red] Config file must contain a YAML mapping, got {type(data).__name__}")
+            raise typer.Exit(INPUT_ERROR_EXIT_CODE)
 
         for key, value in data.items():
             if isinstance(value, bool):
@@ -705,23 +754,23 @@ def _merge_install_config(
             elif isinstance(value, (str, int, float)):
                 result[str(key)] = str(value)
             else:
-                console.print(
-                    f"[red]Error:[/red] Config key '{key}' has unsupported type {type(value).__name__}. "
+                error_console.print(
+                    f"[red]Error:[/red] Config key '{escape(str(key))}' has unsupported type {type(value).__name__}. "
                     "Only strings, numbers, and booleans are allowed."
                 )
-                raise typer.Exit(1)
+                raise typer.Exit(INPUT_ERROR_EXIT_CODE)
 
     if config_flags is not None:
         for entry in config_flags:
             if "=" not in entry:
-                console.print(f"[red]Error:[/red] Invalid config format '{entry}'. Expected KEY=VALUE.")
-                raise typer.Exit(1)
+                error_console.print(f"[red]Error:[/red] Invalid config format '{escape(entry)}'. Expected KEY=VALUE.")
+                raise typer.Exit(INPUT_ERROR_EXIT_CODE)
 
             key, _, value = entry.partition("=")
 
             if not key:
-                console.print(f"[red]Error:[/red] Config key cannot be empty in '{entry}'.")
-                raise typer.Exit(1)
+                error_console.print(f"[red]Error:[/red] Config key cannot be empty in '{escape(entry)}'.")
+                raise typer.Exit(INPUT_ERROR_EXIT_CODE)
 
             result[key] = value
 
@@ -746,7 +795,9 @@ def fetch_install_preview(client: PragmaClient, name: str, version: str | None) 
         name, or ``name`` when ``version`` is given or the catalog has none.
 
     Raises:
-        typer.Exit: If the provider or version is not found or the request fails.
+        typer.Exit: With ``NOT_FOUND_EXIT_CODE`` if the provider or version
+            is not found.
+        httpx.HTTPStatusError: If the read fails with any other status.
     """  # noqa: DOC502
     try:
         if version is None:
@@ -762,24 +813,36 @@ def fetch_install_preview(client: PragmaClient, name: str, version: str | None) 
         return name, provider_version.version
     except httpx.HTTPStatusError as e:
         subject = f"Provider '{name}'" if version is None else f"Version {version} of '{name}'"
-        report_lookup_failure(e, subject)
+        report_not_found(e, f"{subject} not found in the store.")
 
 
 @app.command()
 def install(
-    name: Annotated[str, typer.Argument(help="Provider name (org/name format)")],
+    name: ProviderNameArgument,
     version: Annotated[str | None, typer.Option("--version", "-v", help="Version to install (default: latest)")] = None,
     upgrade_policy: Annotated[
-        str,
-        typer.Option("--upgrade-policy", help="Upgrade policy (manual, auto-minor, auto-patch)"),
-    ] = "manual",
+        UpgradePolicy,
+        typer.Option(
+            "--upgrade-policy",
+            help=(
+                "auto: upgrade to each newer published version automatically; "
+                "manual: stay on the installed version until you run 'pragma providers upgrade'"
+            ),
+        ),
+    ] = UpgradePolicy.MANUAL,
     config: Annotated[
         list[str] | None,
         typer.Option("--config", "-c", help="Configuration key=value pair (repeatable)"),
     ] = None,
     config_file: Annotated[
-        str | None,
-        typer.Option("--config-file", help="Path to YAML file with configuration key-value pairs"),
+        Path | None,
+        typer.Option(
+            "--config-file",
+            help="Path to YAML file with configuration key-value pairs",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
     ] = None,
     yes: Annotated[
         bool,
@@ -791,21 +854,21 @@ def install(
     Examples:
         pragma providers install pragmatiks/qdrant
         pragma providers install pragmatiks/postgres --version 1.2.0
-        pragma providers install pragmatiks/redis --upgrade-policy auto-minor
+        pragma providers install pragmatiks/redis --upgrade-policy auto
         pragma providers install pragmatiks/qdrant --config SOME_KEY=some_value
         pragma providers install pragmatiks/qdrant --config-file config.yaml --config OVERRIDE_KEY=value
         pragma providers install pragmatiks/qdrant -y
     """  # noqa: DOC501
-    client = get_client()
-    _require_auth(client)
-
     merged_config = _merge_install_config(config, config_file)
+
+    client = get_client()
+    require_auth(client)
 
     display, install_version = fetch_install_preview(client, name, version)
 
     provider_label = name if display == name else f"{display} ({name})"
-    console.print(f"[bold]Provider:[/bold] {provider_label}")
-    console.print(f"[bold]Version:[/bold]  {install_version}")
+    console.print(f"[bold]Provider:[/bold] {escape(provider_label)}")
+    console.print(f"[bold]Version:[/bold]  {escape(install_version)}")
 
     if merged_config:
         console.print("[bold]Config:[/bold]")
@@ -821,27 +884,22 @@ def install(
             console.print("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
 
-    try:
-        result = _fetch_with_spinner(
-            "Installing provider...",
-            lambda: client.install_provider(
-                name,
-                version=version,
-                upgrade_policy=upgrade_policy,
-                config=merged_config,
-            ),
-        )
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
+    result = _fetch_with_spinner(
+        "Installing provider...",
+        lambda: client.install_provider(
+            name,
+            version=version,
+            upgrade_policy=upgrade_policy,
+            config=merged_config,
+        ),
+    )
 
-    console.print(f"[green]Installed:[/green] {name} v{result.installed_version}")
+    console.print(f"[green]Installed:[/green] {escape(name)} v{escape(result.installed_version)}")
 
 
 @app.command()
 def uninstall(
-    name: Annotated[str, typer.Argument(help="Provider name (org/name format)")],
+    name: ProviderNameArgument,
     cascade: Annotated[
         bool,
         typer.Option("--cascade", help="Delete all resources created by this provider"),
@@ -857,14 +915,23 @@ def uninstall(
         pragma providers uninstall pragmatiks/qdrant
         pragma providers uninstall pragmatiks/postgres --cascade
         pragma providers uninstall pragmatiks/redis --yes
-    """  # noqa: DOC501
-    client = get_client()
-    _require_auth(client)
 
-    console.print(f"[bold]Provider:[/bold] {name}")
+    \f
+
+    Raises:
+        typer.Exit: With ``FAILURE_EXIT_CODE`` if the provider still has
+            resources and --cascade is not set, with ``NOT_FOUND_EXIT_CODE``
+            if it is not installed, or with code 0 if the user cancels.
+        httpx.HTTPStatusError: If the API refuses the uninstall for any
+            other reason.
+    """  # noqa: DOC502
+    client = get_client()
+    require_auth(client)
+
+    console.print(f"[bold]Provider:[/bold] {escape(name)}")
 
     if cascade:
-        console.print("[yellow]Warning:[/yellow] --cascade will delete all resources for this provider")
+        error_console.print("[yellow]Warning:[/yellow] --cascade will delete all resources for this provider")
 
     console.print()
 
@@ -882,26 +949,19 @@ def uninstall(
             lambda: client.uninstall_provider(name, cascade=cascade),
         )
     except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-
-        if e.response.status_code == 404:
-            console.print(f"[red]Error:[/red] Provider '{name}' is not installed.")
-            raise typer.Exit(1) from e
-
         if e.response.status_code == 409:
-            console.print(f"[red]Error:[/red] Provider '{name}' has active resources.")
-            console.print("[dim]Use --cascade to delete all resources with the provider.[/dim]")
-            raise typer.Exit(1) from e
+            error_console.print(f"[red]Error:[/red] Provider '{escape(name)}' has active resources.")
+            error_console.print("[dim]Use --cascade to delete all resources with the provider.[/dim]")
+            raise typer.Exit(FAILURE_EXIT_CODE) from e
 
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
+        report_not_found(e, f"Provider '{name}' is not installed.")
 
-    console.print(f"[green]Uninstalled:[/green] {name}")
+    console.print(f"[green]Uninstalled:[/green] {escape(name)}")
 
 
 @app.command()
 def upgrade(
-    name: Annotated[str, typer.Argument(help="Provider name (org/name format)")],
+    name: ProviderNameArgument,
     version: Annotated[str | None, typer.Option("--version", "-v", help="Target version (default: latest)")] = None,
     yes: Annotated[
         bool,
@@ -916,35 +976,30 @@ def upgrade(
         pragma providers upgrade pragmatiks/redis -y
     """  # noqa: DOC501
     client = get_client()
-    _require_auth(client)
+    require_auth(client)
 
-    target = version or "latest"
-    console.print(f"[bold]Upgrading:[/bold] {name} -> {target}")
+    target = f"v{version}" if version else "latest"
+    console.print(f"[bold]Upgrading:[/bold] {escape(name)} -> {escape(target)}")
     console.print()
 
     if not yes:
-        confirm = typer.confirm(f"Upgrade {name} to v{target}?")
+        confirm = typer.confirm(f"Upgrade {name} to {target}?")
 
         if not confirm:
             console.print("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
 
-    try:
-        result = _fetch_with_spinner(
-            "Upgrading provider...",
-            lambda: client.upgrade_provider(name, target_version=version),
-        )
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
+    result = _fetch_with_spinner(
+        "Upgrading provider...",
+        lambda: client.upgrade_provider(name, target_version=version),
+    )
 
-    console.print(f"[green]Upgraded:[/green] {name} -> v{result.installed_version}")
+    console.print(f"[green]Upgraded:[/green] {escape(name)} -> v{escape(result.installed_version)}")
 
 
 @app.command()
 def downgrade(
-    name: Annotated[str, typer.Argument(help="Provider name (org/name format)")],
+    name: ProviderNameArgument,
     version: Annotated[str, typer.Option("--version", "-v", help="Target version to downgrade to")],
     yes: Annotated[
         bool,
@@ -959,11 +1014,20 @@ def downgrade(
     Examples:
         pragma providers downgrade pragmatiks/qdrant --version 1.0.0
         pragma providers downgrade pragmatiks/postgres -v 1.2.0 -y
-    """  # noqa: DOC501
-    client = get_client()
-    _require_auth(client)
 
-    console.print(f"[bold]Downgrading:[/bold] {name} -> v{version}")
+    \f
+
+    Raises:
+        typer.Exit: With ``FAILURE_EXIT_CODE`` after printing the API's
+            message and the version-chain hint on a 422, or with code 0 if
+            the user cancels.
+        httpx.HTTPStatusError: If the API refuses the downgrade with any
+            other status.
+    """
+    client = get_client()
+    require_auth(client)
+
+    console.print(f"[bold]Downgrading:[/bold] {escape(name)} -> v{escape(version)}")
     console.print()
 
     if not yes:
@@ -979,17 +1043,14 @@ def downgrade(
             lambda: client.downgrade_provider(name, target_version=version),
         )
     except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
+        if e.response.status_code != 422:
+            raise
 
-        if e.response.status_code == 422:
-            console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-            console.print("[dim]The version chain between current and target may be broken.[/dim]")
-            raise typer.Exit(1) from e
+        print_api_error(e)
+        error_console.print("[dim]The version chain between current and target may be broken.[/dim]")
+        raise typer.Exit(FAILURE_EXIT_CODE) from e
 
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
-
-    console.print(f"[green]Downgraded:[/green] {name} -> v{result.installed_version}")
+    console.print(f"[green]Downgraded:[/green] {escape(name)} -> v{escape(result.installed_version)}")
 
 
 @app.command("list")
@@ -1031,7 +1092,7 @@ def list_providers(
         pragma providers list --query postgres
         pragma providers list --scope public --tags ml,vector
         pragma providers list -o json
-    """  # noqa: DOC501
+    """
     client = get_client()
 
     if installed:
@@ -1040,34 +1101,29 @@ def list_providers(
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
 
-    try:
-        result = _fetch_with_spinner(
-            "Fetching providers...",
-            lambda: client.list_providers(
-                query=query,
-                scope=scope,
-                tags=tag_list,
-                limit=limit,
-                offset=offset,
-            ),
-        )
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
+    result = _fetch_with_spinner(
+        "Fetching providers...",
+        lambda: client.list_providers(
+            query=query,
+            scope=scope,
+            tags=tag_list,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+    if output != OutputFormat.TABLE:
+        output_data([_provider_summary_to_dict(p) for p in result.items], output)
+        return
 
     if not result.items:
         if query:
-            console.print(f"[dim]No providers found matching '{query}'.[/dim]")
+            console.print(f"[dim]No providers found matching '{escape(query)}'.[/dim]")
         else:
             console.print("[dim]No providers found.[/dim]")
         return
 
-    if output == OutputFormat.TABLE:
-        _print_store_list_table(result)
-    else:
-        data = [_provider_summary_to_dict(p) for p in result.items]
-        output_data(data, output)
+    _print_store_list_table(result)
 
 
 def _list_installations(client: PragmaClient, output: OutputFormat) -> None:
@@ -1075,34 +1131,30 @@ def _list_installations(client: PragmaClient, output: OutputFormat) -> None:
 
     Args:
         client: SDK client instance.
-        output: Output format for display.
-    """  # noqa: DOC501
-    _require_auth(client)
+        output: Output format for display; JSON and YAML print an empty
+            list when nothing is installed.
+    """
+    require_auth(client)
 
-    try:
-        providers = _fetch_with_spinner(
-            "Fetching installed providers...",
-            lambda: client.list_installations(),
-        )
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
+    providers = _fetch_with_spinner(
+        "Fetching installed providers...",
+        lambda: client.list_installations(),
+    )
+
+    if output != OutputFormat.TABLE:
+        output_data([_installed_provider_to_dict(p) for p in providers], output)
+        return
 
     if not providers:
         console.print("[dim]No providers installed.[/dim]")
         return
 
-    if output == OutputFormat.TABLE:
-        _print_installed_table(providers)
-    else:
-        data = [_installed_provider_to_dict(p) for p in providers]
-        output_data(data, output)
+    _print_installed_table(providers)
 
 
 @app.command()
 def info(
-    name: Annotated[str, typer.Argument(help="Provider name (org/name format)")],
+    name: ProviderNameArgument,
     output: Annotated[
         OutputFormat,
         typer.Option("--output", "-o", help="Output format"),
@@ -1110,12 +1162,18 @@ def info(
 ):
     """Show detailed information about a provider.
 
-    Displays provider metadata, version history, and installation status.
+    Displays provider metadata, install count, and version history.
 
     Examples:
         pragma providers info pragmatiks/qdrant
         pragma providers info pragmatiks/postgres -o json
-    """  # noqa: DOC501
+
+    \f
+
+    Raises:
+        httpx.HTTPStatusError: If reading the provider's versions fails with
+            any status but 404, which shows no versions.
+    """
     client = get_client()
 
     try:
@@ -1124,7 +1182,7 @@ def info(
             lambda: client.get_provider(name),
         )
     except httpx.HTTPStatusError as e:
-        report_lookup_failure(e, f"Provider '{name}'")
+        report_not_found(e, f"Provider '{name}' not found in the store.")
 
     try:
         versions = _fetch_with_spinner(
@@ -1132,19 +1190,21 @@ def info(
             lambda: client.list_provider_versions(name),
         )
     except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
+        if e.response.status_code != 404:
+            raise
+
         versions = []
 
-    if output == OutputFormat.TABLE:
-        _print_provider_info(provider, versions)
-    else:
-        data = _provider_detail_to_dict(provider, versions)
-        output_data(data, output)
+    if output != OutputFormat.TABLE:
+        output_data(_provider_detail_to_dict(provider, versions), output)
+        return
+
+    _print_provider_info(provider, versions)
 
 
 @app.command()
 def versions(
-    name: Annotated[str, typer.Argument(help="Provider name (org/name format)")],
+    name: ProviderNameArgument,
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
 ):
     """List the versions of a provider with their status.
@@ -1157,7 +1217,7 @@ def versions(
     Examples:
         pragma providers versions acme/pipeline
         pragma providers versions acme/pipeline -o json
-    """  # noqa: DOC501
+    """
     client = get_client()
 
     try:
@@ -1166,7 +1226,7 @@ def versions(
             lambda: client.list_provider_versions(name),
         )
     except httpx.HTTPStatusError as e:
-        report_lookup_failure(e, f"Provider '{name}'")
+        report_not_found(e, f"Provider '{name}' not found in the store.")
 
     if output != OutputFormat.TABLE:
         data = [provider_version.model_dump(mode="json") for provider_version in provider_versions]
@@ -1182,128 +1242,80 @@ def versions(
 
 @app.command()
 def deploy(
-    provider_id: Annotated[
-        str,
-        typer.Argument(
-            help="Provider ID (org/name format)",
-            autocompletion=completion_provider_ids,
-        ),
-    ],
+    name: CompletedProviderNameArgument,
     version: Annotated[
         str | None,
-        typer.Option("--version", "-v", help="Version to deploy (default: latest)"),
+        typer.Option(
+            "--version",
+            "-v",
+            help="Published version the API checks before restarting; it does not change the installed version",
+        ),
     ] = None,
 ):
-    """Deploy a provider to a specific version.
+    """Restart an installed provider at its installed version.
 
-    Deploys the provider to Kubernetes. If no version is specified, deploys
-    the latest successful build.
+    Restarts the provider on your organization's provider host, which
+    reloads it at the version installed in your organization. --version
+    must name a published version and never changes the installed
+    version; use 'pragma providers upgrade' or 'pragma providers downgrade'
+    to change it.
 
-    Deploy latest:
+    Examples:
         pragma providers deploy pragmatiks/postgres
-
-    Deploy specific version:
         pragma providers deploy pragmatiks/postgres --version 1.2.0
-
-    Raises:
-        typer.Exit: If deployment fails.
     """
-    console.print(f"[bold]Deploying provider:[/bold] {provider_id}")
+    client = get_client()
+    require_auth(client)
 
-    if version:
-        console.print(f"[dim]Version:[/dim] {version}")
-    else:
-        console.print("[dim]Version:[/dim] latest")
-
+    console.print(f"[bold]Restarting provider:[/bold] {escape(name)}")
     console.print()
 
-    client = get_client()
-    _require_auth(client)
+    deploy_result = _fetch_with_spinner(
+        "Restarting...",
+        lambda: client.deploy_provider(name, version),
+    )
 
-    try:
-        deploy_result = _fetch_with_spinner(
-            "Deploying...",
-            lambda: client.deploy_provider(provider_id, version),
-        )
-        console.print(f"[green]Deployment started:[/green] {provider_id}")
-        console.print(f"[dim]Deployment:[/dim] {deploy_result.deployment_name}")
-        console.print(f"[dim]Status:[/dim] {deploy_result.status.value}")
-        console.print(f"[dim]Replicas:[/dim] {deploy_result.ready_replicas}/{deploy_result.available_replicas}")
+    console.print(f"[green]Restart requested:[/green] {escape(name)}")
+    console.print(f"[dim]Deployment:[/dim] {escape(deploy_result.deployment_name)}")
+    console.print(f"[dim]Status:[/dim] {escape(deploy_result.status.value)}")
 
-        if deploy_result.image:
-            console.print(f"[dim]Image:[/dim] {deploy_result.image}")
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
-    except Exception as e:
-        if isinstance(e, typer.Exit):
-            raise
-
-        console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1) from e
+    if deploy_result.image:
+        console.print(f"[dim]Image:[/dim] {escape(deploy_result.image)}")
 
 
 @app.command()
 def status(
-    provider_id: Annotated[
-        str,
-        typer.Argument(
-            help="Provider ID (org/name format)",
-            autocompletion=completion_provider_ids,
-        ),
-    ],
+    name: CompletedProviderNameArgument,
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
 ):
-    """Check the deployment status of a provider.
+    """Check the deployment status of an installed provider.
 
-    Displays:
-    - Deployment status (pending/progressing/available/failed)
-    - Deployed version
-    - Health status
-    - Last updated timestamp
+    Shows the deployment name, status (pending, progressing, available or
+    failed), ready and available replicas, and, when known, the deployed
+    version, image, last update time and status message.
 
     Examples:
         pragma providers status pragmatiks/postgres
         pragma providers status pragmatiks/my-provider -o json
-
-    Raises:
-        typer.Exit: If deployment not found or status check fails.
-    """  # noqa: DOC501
+    """
     client = get_client()
-    _require_auth(client)
+    require_auth(client)
 
-    try:
-        result = client.get_deployment_status(provider_id)
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
+    result = _fetch_with_spinner(
+        "Fetching deployment status...",
+        lambda: client.get_deployment_status(name),
+    )
 
-        if e.response.status_code == 404:
-            console.print(f"[red]Error:[/red] Deployment not found for provider: {provider_id}")
-            raise typer.Exit(1) from e
+    if output != OutputFormat.TABLE:
+        output_data(result.model_dump(mode="json"), output)
+        return
 
-        raise
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1) from e
-
-    if output == OutputFormat.TABLE:
-        _print_deployment_status(provider_id, result)
-    else:
-        data = result.model_dump(mode="json")
-        data["provider_id"] = provider_id
-        output_data(data, output)
+    _print_deployment_status(name, result)
 
 
 @app.command()
 def delete(
-    name: Annotated[
-        str,
-        typer.Argument(
-            help="Provider name (org/name format)",
-            autocompletion=completion_provider_ids,
-        ),
-    ],
+    name: CompletedProviderNameArgument,
     yes: Annotated[
         bool,
         typer.Option("--yes", "-y", help="Skip confirmation prompt"),
@@ -1319,14 +1331,16 @@ def delete(
         pragma providers delete myorg/my-provider
         pragma providers delete myorg/my-provider --yes
 
+    \f
+
     Raises:
-        typer.Exit: If deletion fails or user cancels.
+        typer.Exit: If the user cancels.
     """
     client = get_client()
-    _require_auth(client)
+    require_auth(client)
 
-    console.print(f"[bold]Provider:[/bold] {name}")
-    console.print("[yellow]Warning:[/yellow] This will permanently delete the provider from the catalog.")
+    console.print(f"[bold]Provider:[/bold] {escape(name)}")
+    error_console.print("[yellow]Warning:[/yellow] This will permanently delete the provider from the catalog.")
     console.print()
 
     if not yes:
@@ -1336,29 +1350,19 @@ def delete(
             console.print("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
 
-    try:
-        _fetch_with_spinner(
-            "Deleting provider...",
-            lambda: client.delete_provider(name),
-        )
-        console.print(f"[green]✓[/green] Provider [bold]{name}[/bold] deleted successfully")
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
-    except Exception as e:
-        if isinstance(e, typer.Exit):
-            raise
+    _fetch_with_spinner(
+        "Deleting provider...",
+        lambda: client.delete_provider(name),
+    )
 
-        console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1) from e
+    console.print(f"[green]✓[/green] Provider [bold]{escape(name)}[/bold] deleted successfully")
 
 
-def _print_deployment_status(provider_id: str, result: DeploymentResult) -> None:
+def _print_deployment_status(name: str, result: DeploymentResult) -> None:
     """Print deployment status in a formatted table.
 
     Args:
-        provider_id: Provider identifier.
+        name: Provider name (``org/name``).
         result: DeploymentResult from the API.
     """
     status_colors = {
@@ -1370,28 +1374,28 @@ def _print_deployment_status(provider_id: str, result: DeploymentResult) -> None
     status_color = status_colors.get(result.status.value, "white")
 
     console.print()
-    console.print(f"[bold]Provider:[/bold] {provider_id}")
+    console.print(f"[bold]Provider:[/bold] {escape(name)}")
     console.print()
 
     table = Table(show_header=True, header_style="bold")
     table.add_column("Property")
     table.add_column("Value")
 
-    table.add_row("Deployment", result.deployment_name)
-    table.add_row("Status", f"[{status_color}]{result.status.value}[/{status_color}]")
+    table.add_row("Deployment", escape(result.deployment_name))
+    table.add_row("Status", f"[{status_color}]{escape(result.status.value)}[/{status_color}]")
     table.add_row("Replicas", f"{result.ready_replicas}/{result.available_replicas}")
 
     if result.version:
-        table.add_row("Version", result.version)
+        table.add_row("Version", escape(result.version))
 
     if result.image:
-        table.add_row("Image", result.image)
+        table.add_row("Image", escape(result.image))
 
     if result.updated_at:
         table.add_row("Updated", result.updated_at.strftime("%Y-%m-%d %H:%M:%S UTC"))
 
     if result.message:
-        table.add_row("Message", result.message)
+        table.add_row("Message", escape(result.message))
 
     console.print(table)
 
@@ -1414,15 +1418,14 @@ def _print_store_list_table(result) -> None:
         tags_display = ", ".join(getattr(provider, "tags", []) or [])
         install_count = getattr(provider, "install_count", 0) or 0
         author = getattr(provider, "author", None)
-        author_display = getattr(author, "display_name", None) or "[dim]-[/dim]"
 
         table.add_row(
-            provider.canonical,
-            getattr(provider, "display_name", None) or "[dim]-[/dim]",
-            author_display,
-            getattr(provider, "latest_version", None) or "[dim]-[/dim]",
+            escape(provider.canonical),
+            format_optional_value(getattr(provider, "display_name", None)),
+            format_optional_value(getattr(author, "display_name", None)),
+            format_optional_value(getattr(provider, "latest_version", None)),
             str(install_count),
-            tags_display or "[dim]-[/dim]",
+            format_optional_value(tags_display),
         )
 
     console.print(table)
@@ -1443,19 +1446,19 @@ def _print_provider_info(provider, versions: list | None = None) -> None:
     versions = versions or []
 
     author = getattr(provider, "author", None)
-    author_display = getattr(author, "display_name", None) or "[dim]-[/dim]"
-    tags = ", ".join(getattr(provider, "tags", []) or []) or "[dim]-[/dim]"
+    tags = ", ".join(getattr(provider, "tags", []) or [])
     install_count = getattr(provider, "install_count", 0) or 0
-    description = getattr(provider, "description", None) or "[dim]No description[/dim]"
+    description = getattr(provider, "description", None)
+    description_display = escape(description) if description else "[dim]No description[/dim]"
     created_at = getattr(provider, "created_at", None)
     updated_at = getattr(provider, "updated_at", None)
 
     info_lines = [
-        f"[bold]Name:[/bold]         {provider.canonical}",
-        f"[bold]Display Name:[/bold] {getattr(provider, 'display_name', None) or provider.canonical}",
-        f"[bold]Author:[/bold]       {author_display}",
-        f"[bold]Description:[/bold]  {description}",
-        f"[bold]Tags:[/bold]         {tags}",
+        f"[bold]Name:[/bold]         {escape(provider.canonical)}",
+        f"[bold]Display Name:[/bold] {escape(getattr(provider, 'display_name', None) or provider.canonical)}",
+        f"[bold]Author:[/bold]       {format_optional_value(getattr(author, 'display_name', None))}",
+        f"[bold]Description:[/bold]  {description_display}",
+        f"[bold]Tags:[/bold]         {format_optional_value(tags)}",
         f"[bold]Installs:[/bold]     {install_count}",
     ]
 
@@ -1465,7 +1468,7 @@ def _print_provider_info(provider, versions: list | None = None) -> None:
     if updated_at:
         info_lines.append(f"[bold]Updated:[/bold]      {str(updated_at)[:19]}")
 
-    panel = Panel("\n".join(info_lines), title=provider.canonical, border_style="blue")
+    panel = Panel("\n".join(info_lines), title=escape(provider.canonical), border_style="blue")
     console.print(panel)
 
     if versions:
@@ -1488,14 +1491,11 @@ def print_versions_table(versions: list[ProviderVersion]) -> None:
     for provider_version in versions:
         published_at = provider_version.published_at
         published = published_at.strftime("%Y-%m-%d %H:%M:%S") if published_at else "[dim]-[/dim]"
-        error_message = provider_version.error_message
-        message = escape(error_message) if error_message else "[dim]-[/dim]"
-
         table.add_row(
-            provider_version.version,
+            escape(provider_version.version),
             VERSION_STATUS_DISPLAY[provider_version.status],
             published,
-            message,
+            format_optional_value(provider_version.error_message),
         )
 
     console.print(table)
@@ -1520,15 +1520,15 @@ def _print_installed_table(providers) -> None:
         latest = getattr(p, "latest_version", None)
 
         if upgrade_available and latest:
-            upgrade_display = f"[green]yes[/green] ({latest})"
+            upgrade_display = f"[green]yes[/green] ({escape(latest)})"
         else:
             upgrade_display = "[dim]-[/dim]"
 
         table.add_row(
-            p.canonical,
-            p.installed_version,
-            getattr(p, "upgrade_policy", None) or "[dim]-[/dim]",
-            installed_at,
+            escape(p.canonical),
+            escape(p.installed_version),
+            format_optional_value(getattr(p, "upgrade_policy", None)),
+            escape(installed_at),
             upgrade_display,
         )
 

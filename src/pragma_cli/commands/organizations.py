@@ -11,14 +11,13 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-import httpx
 import typer
-from pragma_sdk import PragmaClient
 from pragma_sdk.models.api import Organization
 from rich.console import Console
+from rich.markup import escape
 
 from pragma_cli import get_client
-from pragma_cli.bootstrap_errors import check_bootstrap_error
+from pragma_cli.errors import require_auth
 from pragma_cli.helpers import OutputFormat, output_data
 
 
@@ -48,21 +47,7 @@ def _format_status(status: str) -> str:
         Status string wrapped in Rich color markup.
     """
     color = _STATUS_COLORS.get(status.lower(), "white")
-    return f"[{color}]{status}[/{color}]"
-
-
-def _require_auth(client: PragmaClient) -> None:
-    """Verify the client has credentials, exit with error if not.
-
-    Args:
-        client: SDK client instance.
-
-    Raises:
-        typer.Exit: If authentication is missing.
-    """
-    if client._auth is None:
-        console.print("[red]Error:[/red] Authentication required. Run 'pragma auth login' first.")
-        raise typer.Exit(1)
+    return f"[{color}]{escape(status)}[/{color}]"
 
 
 def _print_organization_panel(organization: Organization) -> None:
@@ -74,9 +59,9 @@ def _print_organization_panel(organization: Organization) -> None:
     console.print()
     console.print("[bold]Organization[/bold]")
     console.print()
-    console.print(f"  ID:      [cyan]{organization.organization_id}[/cyan]")
-    console.print(f"  Name:    [cyan]{organization.name}[/cyan]")
-    console.print(f"  Slug:    [cyan]{organization.slug}[/cyan]")
+    console.print(f"  ID:      [cyan]{escape(organization.organization_id)}[/cyan]")
+    console.print(f"  Name:    [cyan]{escape(organization.name)}[/cyan]")
+    console.print(f"  Slug:    [cyan]{escape(organization.slug)}[/cyan]")
     console.print(f"  Status:  {_format_status(organization.status.value)}")
     console.print(f"  Created: [dim]{organization.created_at.isoformat()}[/dim]")
     console.print(f"  Updated: [dim]{organization.updated_at.isoformat()}[/dim]")
@@ -98,20 +83,11 @@ def show_me(
     Examples:
         pragma organizations me
         pragma organizations me -o json
-    """  # noqa: DOC501
+    """
     client = get_client()
-    _require_auth(client)
+    require_auth(client)
 
-    try:
-        response = client._request("GET", "/organizations/me")
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-
-        if e.response.status_code == 401:
-            console.print("[red]Error:[/red] Not authenticated. Run 'pragma auth login' to authenticate.")
-            raise typer.Exit(1) from e
-
-        raise
+    response = client._request("GET", "/organizations/me")
 
     organization = Organization.model_validate(response)
 
@@ -139,20 +115,11 @@ def show_status(
     Examples:
         pragma organizations status
         pragma organizations status -o json
-    """  # noqa: DOC501
+    """
     client = get_client()
-    _require_auth(client)
+    require_auth(client)
 
-    try:
-        response: dict[str, Any] = client._request("GET", "/organizations/me/status")
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-
-        if e.response.status_code == 401:
-            console.print("[red]Error:[/red] Not authenticated. Run 'pragma auth login' to authenticate.")
-            raise typer.Exit(1) from e
-
-        raise
+    response: dict[str, Any] = client._request("GET", "/organizations/me/status")
 
     status_value = str(response.get("status", "unknown"))
 

@@ -8,14 +8,15 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
-import httpx
 import typer
 from rich import print
 from rich.console import Console
+from rich.markup import escape
 
 from pragma_cli import get_client
-from pragma_cli.bootstrap_errors import check_bootstrap_error
-from pragma_cli.config import CREDENTIALS_FILE, ContextConfig, load_config
+from pragma_cli.config import CREDENTIALS_FILE, ContextConfig, load_config, select_context
+from pragma_cli.errors import error_console, report_login_required
+from pragma_cli.exit_codes import FAILURE_EXIT_CODE
 
 
 console = Console()
@@ -226,39 +227,35 @@ def login(
         pragma auth login --context production
         pragma auth login --org ycombinator
 
+    \f
+
     Args:
         ctx: Typer context carrying the top-level resolved context name.
         context: Explicit context to authenticate for, overriding the resolved one.
         org: Organization slug to pre-select, skipping the org picker.
 
     Raises:
-        typer.Exit: If context not found, authentication fails/times out, or the
-            returned token is already expired.
-    """
-    config = load_config()
-
+        UnknownContextError: If the context is not in the configuration.
+        typer.Exit: If authentication fails/times out, or the returned token
+            is already expired.
+    """  # noqa: DOC502
     if context is None:
         context = ctx.obj["context"]
 
-    if context not in config.contexts:
-        print(f"[red]\u2717[/red] Context '{context}' not found")
-        print(f"Available contexts: {', '.join(config.contexts.keys())}")
-        raise typer.Exit(1)
-
-    context_config = config.contexts[context]
+    context_config = select_context(load_config(), context)
     auth_url = context_config.get_auth_url()
     login_url = _get_login_url(context_config, org=org)
 
-    print(f"[cyan]Authenticating for context:[/cyan] {context}")
-    print(f"[cyan]API URL:[/cyan] {context_config.api_url}")
+    print(f"[cyan]Authenticating for context:[/cyan] {escape(context)}")
+    print(f"[cyan]API URL:[/cyan] {escape(context_config.api_url)}")
     print()
 
     server = HTTPServer(("localhost", CALLBACK_PORT), CallbackHandler)
 
-    print(f"[yellow]Opening browser to:[/yellow] {auth_url}")
+    print(f"[yellow]Opening browser to:[/yellow] {escape(auth_url)}")
     print()
     print("[dim]If browser doesn't open automatically, visit:[/dim]")
-    print(f"[dim]{login_url}[/dim]")
+    print(f"[dim]{escape(login_url)}[/dim]")
     print()
     print("[yellow]Waiting for authentication...[/yellow]")
 
@@ -268,26 +265,26 @@ def login(
     server.handle_request()
 
     if CallbackHandler.token and _is_token_expired(CallbackHandler.token):
-        print()
-        print("[red]\u2717 Received an expired token[/red]")
-        print("[dim]Please run 'pragma auth login' again[/dim]")
-        raise typer.Exit(1)
+        error_console.print()
+        error_console.print("[red]✗ Received an expired token[/red]")
+        error_console.print("[dim]Please run 'pragma auth login' again[/dim]")
+        raise typer.Exit(FAILURE_EXIT_CODE)
 
     if CallbackHandler.token:
         save_credentials(CallbackHandler.token, context)
         print()
-        print("[green]\u2713 Successfully authenticated![/green]")
-        print(f"[dim]Credentials saved to {CREDENTIALS_FILE}[/dim]")
+        print("[green]✓ Successfully authenticated![/green]")
+        print(f"[dim]Credentials saved to {escape(str(CREDENTIALS_FILE))}[/dim]")
         print()
         print("[bold]You can now use pragma commands:[/bold]")
         print("  pragma resources list")
-        print("  pragma resources get <provider/resource> <name>")
+        print(escape("  pragma resources get <org/provider/resource[/name]>"))
         print("  pragma resources apply <file.yaml>")
     else:
-        print()
-        print("[red]\u2717 Authentication failed or timed out[/red]")
-        print("[dim]Please try again[/dim]")
-        raise typer.Exit(1)
+        error_console.print()
+        error_console.print("[red]✗ Authentication failed or timed out[/red]")
+        error_console.print("[dim]Please try again[/dim]")
+        raise typer.Exit(FAILURE_EXIT_CODE)
 
 
 @app.command()
@@ -307,6 +304,8 @@ def logout(
         pragma logout --all              # Clear all contexts
         pragma logout --context staging  # Clear specific context
 
+    \f
+
     Args:
         ctx: Typer context carrying the top-level resolved context name.
         context: Explicit context to clear, overriding the resolved one.
@@ -314,14 +313,14 @@ def logout(
     """
     if all:
         clear_credentials(None)
-        print("[green]\u2713[/green] Cleared all credentials")
+        print("[green]✓[/green] Cleared all credentials")
     elif context:
         clear_credentials(context)
-        print(f"[green]\u2713[/green] Cleared credentials for context '{context}'")
+        print(f"[green]✓[/green] Cleared credentials for context '{escape(context)}'")
     else:
         context_name = ctx.obj["context"]
         clear_credentials(context_name)
-        print(f"[green]\u2713[/green] Cleared credentials for current context '{context_name}'")
+        print(f"[green]✓[/green] Cleared credentials for current context '{escape(context_name)}'")
 
 
 @app.command()
@@ -331,18 +330,19 @@ def token():
     Emits only the raw token on stdout so it can be captured in a shell:
     ``TOKEN=$(pragma auth token)``. Resolves the token the same way as every
     other command (--token flag > PRAGMA_AUTH_TOKEN env var > stored
-    credentials). A missing or expired token prints guidance on stderr and
-    exits non-zero, leaving stdout empty.
+    credentials). A missing or expired token is an error: the login-required
+    message goes to stderr and stdout stays empty.
+
+    \f
 
     Raises:
         typer.Exit: If no token is stored or the stored token is expired.
-    """
+    """  # noqa: DOC502
     client = get_client()
     current_token = client._auth.token if client._auth else None
 
     if not current_token or _is_token_expired(current_token):
-        typer.echo("Error: No valid token for the current context. Run 'pragma auth login' first.", err=True)
-        raise typer.Exit(1)
+        report_login_required()
 
     typer.echo(current_token)
 
@@ -356,61 +356,58 @@ def whoami(ctx: typer.Context):
 
     Displays the resolved context (``--context`` / ``-c`` / ``PRAGMA_CONTEXT``),
     authentication state, and user details including email and organization
-    name from the API.
+    name from the API. No token or an expired one is a status report on
+    stdout, not an error; a token the API rejects, or an API that cannot be
+    reached, is an error on stderr.
+
+    \f
 
     Args:
         ctx: Typer context carrying the top-level resolved context name.
-    """  # noqa: DOC501
+    """
     current_context_name = ctx.obj["context"]
     client = get_client()
 
     token = client._auth.token if client._auth else None
 
-    console.print()
-    console.print("[bold]Authentication Status[/bold]")
-    console.print()
-
     if not token:
-        console.print(f"  Context: [cyan]{current_context_name}[/cyan]")
-        console.print("  Status:  [yellow]Not authenticated[/yellow]")
+        print_authentication_status(current_context_name, "[yellow]Not authenticated[/yellow]")
         console.print()
         console.print("[dim]Run 'pragma auth login' to authenticate[/dim]")
         return
 
     if _is_token_expired(token):
-        console.print(f"  Context: [cyan]{current_context_name}[/cyan]")
-        console.print("  Status:  [yellow]Token expired[/yellow]")
+        print_authentication_status(current_context_name, "[yellow]Token expired[/yellow]")
         console.print()
         console.print("[dim]Run 'pragma auth login' to re-authenticate.[/dim]")
         return
 
-    console.print(f"  Context: [cyan]{current_context_name}[/cyan]")
-    console.print("  Status:  [green]\u2713 Authenticated[/green]")
+    user_info = client.get_me()
 
-    try:
-        user_info = client.get_me()
+    print_authentication_status(current_context_name, "[green]✓ Authenticated[/green]")
 
-        console.print()
-        console.print("[bold]User Information[/bold]")
-        console.print()
-        console.print(f"  User ID:      [cyan]{user_info.user_id}[/cyan]")
+    console.print()
+    console.print("[bold]User Information[/bold]")
+    console.print()
+    console.print(f"  User ID:      [cyan]{escape(user_info.user_id)}[/cyan]")
 
-        if user_info.email:
-            console.print(f"  Email:        [cyan]{user_info.email}[/cyan]")
-        else:
-            console.print("  Email:        [dim]Not set[/dim]")
+    if user_info.email:
+        console.print(f"  Email:        [cyan]{escape(user_info.email)}[/cyan]")
+    else:
+        console.print("  Email:        [dim]Not set[/dim]")
 
-        console.print(f"  Organization: [cyan]{user_info.organization_name or user_info.organization_id}[/cyan]")
+    console.print(f"  Organization: [cyan]{escape(user_info.organization_name or user_info.organization_id)}[/cyan]")
 
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
 
-        if e.response.status_code == 401:
-            console.print()
-            console.print("[yellow]Token invalid. Run 'pragma auth login' to re-authenticate.[/yellow]")
-            return
+def print_authentication_status(context_name: str, status: str) -> None:
+    """Print the Authentication Status heading with the context name and a status line.
 
-        raise
-    except httpx.RequestError as e:
-        console.print()
-        console.print(f"[red]Connection error:[/red] {e}")
+    Args:
+        context_name: Resolved context name.
+        status: Status text, with Rich markup.
+    """
+    console.print()
+    console.print("[bold]Authentication Status[/bold]")
+    console.print()
+    console.print(f"  Context: [cyan]{escape(context_name)}[/cyan]")
+    console.print(f"  Status:  {status}")

@@ -35,21 +35,24 @@ pragma auth login
 pragma resources apply bucket.yaml
 
 # Check status
-pragma resources get gcp/storage my-bucket
+pragma resources get pragmatiks/gcp/secret/my-secret
 ```
 
 ## Commands
+
+Exit codes and output streams are listed in `pragma --help`: errors and warnings go to stderr, command output (including `-o json`) to stdout.
 
 ### Resources
 
 | Command | Description |
 |---------|-------------|
 | `pragma resources list` | List resources with optional filters |
-| `pragma resources types` | List available resource types |
-| `pragma resources get <type> [name]` | Get resource(s) by type |
-| `pragma resources describe <type> <name>` | Show detailed resource info |
+| `pragma resources schemas` | List available resource schemas |
+| `pragma resources get <org/provider/resource[/name]>` | Get resource(s) by type or full ID |
+| `pragma resources describe <org/provider/resource/name>` | Show detailed resource info |
 | `pragma resources apply <file>` | Apply resources from YAML |
-| `pragma resources delete <type> <name>` | Delete a resource |
+| `pragma resources delete <org/provider/resource/name> \| -f <file>` | Delete a resource |
+| `pragma resources deactivate <org/provider/resource/name> \| -f <file>` | Deactivate a resource |
 | `pragma resources tags list/add/remove` | Manage resource tags |
 
 ### Providers
@@ -58,12 +61,12 @@ pragma resources get gcp/storage my-bucket
 |---------|-------------|
 | `pragma providers list` | List deployed providers |
 | `pragma providers init <name>` | Initialize a new provider project |
-| `pragma providers update` | Update project from template |
-| `pragma providers publish [dir] [--wheel <path>] [--changelog <file>]` | Build the wheel via `uv build` (or take a prebuilt one), upload it, and wait until your organization's provider host admits it (`published`) or refuses it (`failed`) |
+| `pragma providers update [project-directory]` | Update project from template |
+| `pragma providers publish [project-directory \| --wheel <path>] [--changelog <file>]` | Build the wheel via `uv build` into `<project-directory>/dist` (or take a prebuilt one), upload it, and wait until your organization's provider host admits it (`published`) or refuses it (`failed`) |
 | `pragma providers versions <name>` | List a provider's versions with their status; a version still being admitted shows `admitting` |
-| `pragma providers deploy <id> [version]` | Deploy a specific version |
-| `pragma providers status <id>` | Check deployment status |
-| `pragma providers delete <id> [--yes]` | Delete a provider from the catalog (admins of the owning organization only); a provider that is still installed is refused |
+| `pragma providers deploy <name> [--version <v>]` | Restart an installed provider at its installed version; `--version` must name a published version and does not change the installed one (use `upgrade` or `downgrade`) |
+| `pragma providers status <name> [-o json\|yaml]` | Check deployment status |
+| `pragma providers delete <name> [--yes]` | Delete a provider from the catalog (admins of the owning organization only); a provider that is still installed is refused |
 
 ### Configuration
 
@@ -89,8 +92,8 @@ pragma resources get gcp/storage my-bucket
 |---------|-------------|
 | `pragma ops dead-letter list` | List failed events |
 | `pragma ops dead-letter show <id>` | Show event details |
-| `pragma ops dead-letter retry <id> [--all]` | Retry failed event(s) |
-| `pragma ops dead-letter delete <id> [--all]` | Delete failed event(s) |
+| `pragma ops dead-letter retry <id> \| --all` | Retry failed event(s) |
+| `pragma ops dead-letter delete <id> \| --all \| --provider <name>` | Delete failed event(s) |
 
 ## Environment Variables
 
