@@ -1,5 +1,11 @@
 # Changelog
 
+## v11.1.1 (2026-10-09)
+
+### Fix
+
+- **cli**: ignore a closed login callback connection (#83)
+
 ## v11.1.0 (2026-10-09)
 
 ### Feat
