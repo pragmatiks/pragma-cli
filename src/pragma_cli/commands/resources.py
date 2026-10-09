@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import os
 import stat
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, NoReturn, TypeVar, cast
 
+import click
 import httpx
 import jsonschema
 import typer
@@ -22,9 +21,10 @@ from rich.markup import escape
 from rich.table import Table
 
 from pragma_cli import get_client
-from pragma_cli.bootstrap_errors import check_bootstrap_error
 from pragma_cli.commands.completions import completion_resource_ids
-from pragma_cli.helpers import OutputFormat, output_data, parse_resource_id
+from pragma_cli.errors import check_bootstrap_error, error_console, format_request_failure, print_api_error
+from pragma_cli.exit_codes import FAILURE_EXIT_CODE, INPUT_ERROR_EXIT_CODE, compute_http_exit_code
+from pragma_cli.helpers import OutputFormat, format_optional_value, output_data, parse_resource_id
 from pragma_cli.project_context import resolve_project
 from pragma_cli.teardown import DEFAULT_WAIT_TIMEOUT_SECONDS, TeardownOptions, print_impact, watch_teardown
 
@@ -118,16 +118,6 @@ class _ApplyPlan:
     errors: list[_PlanError] = field(default_factory=list)
 
 
-class _SchemaFetchError(RuntimeError):
-    """Raised when a resource schema cannot be fetched for a known provider.
-
-    Signals that the planner's pre-validation guarantee is unsafe to
-    skip — the API is reachable but returned a non-404 error (5xx,
-    auth failure, transport error) that leaves the planner unable to
-    confirm the resource's config is well-formed before apply.
-    """
-
-
 class _SchemaCache:
     """Lazy per-provider resource schema cache for plan-time validation.
 
@@ -136,14 +126,13 @@ class _SchemaCache:
     ``(provider, resource)`` lookups from memory. A provider that
     returns a 404 is cached as ``None`` so unknown providers skip
     schema validation (the server remains the authority). Any other
-    fetch failure is cached as a ``_SchemaFetchError`` and re-raised
-    on every subsequent lookup so the planner aborts rather than
-    silently applying unvalidated resources.
+    fetch failure propagates as ``httpx.HTTPStatusError`` or
+    ``httpx.TransportError``.
     """
 
     def __init__(self) -> None:
         """Initialize an empty cache."""
-        self._by_provider: dict[str, dict[str, dict[str, Any]] | None | _SchemaFetchError] = {}
+        self._by_provider: dict[str, dict[str, dict[str, Any]] | None] = {}
 
     def config_schema(self, provider: str, resource_type: str) -> dict[str, Any] | None:
         """Return the JSON schema for ``(provider, resource_type)``, or None.
@@ -159,21 +148,14 @@ class _SchemaCache:
             the ultimate authority for unknown providers.
 
         Raises:
-            _SchemaFetchError: If the schema fetch for ``provider``
-                failed with any non-404 error on the first lookup.
-                Cached so subsequent calls for the same provider
-                re-raise without retrying the network call.
-        """
+            httpx.HTTPStatusError: If the schema fetch fails with any
+                status but 404.
+            httpx.TransportError: If the API cannot be reached.
+        """  # noqa: DOC502
         if provider not in self._by_provider:
-            try:
-                self._by_provider[provider] = self._fetch(provider)
-            except _SchemaFetchError as e:
-                self._by_provider[provider] = e
-                raise
+            self._by_provider[provider] = self._fetch(provider)
 
         cached = self._by_provider[provider]
-        if isinstance(cached, _SchemaFetchError):
-            raise cached
         if cached is None:
             return None
 
@@ -190,25 +172,17 @@ class _SchemaCache:
             the API returned 404 (unknown provider).
 
         Raises:
-            _SchemaFetchError: If the fetch failed with any non-404
-                HTTP error, transport error, or RuntimeError. The
-                planner surfaces this as a plan error so no unvalidated
-                resources are applied.
-        """
+            httpx.HTTPStatusError: If the fetch fails with any status
+                but 404.
+            httpx.TransportError: If the API cannot be reached.
+        """  # noqa: DOC502
         try:
             schemas = get_client().list_resource_schemas(provider=provider)
         except httpx.HTTPStatusError as e:
-            check_bootstrap_error(e)
-
             if e.response.status_code == 404:
                 return None
-            raise _SchemaFetchError(
-                f"schema fetch failed for {provider}: HTTP {e.response.status_code} {e.response.reason_phrase}"
-            ) from e
-        except httpx.HTTPError as e:
-            raise _SchemaFetchError(f"schema fetch failed for {provider}: {type(e).__name__}: {e}") from e
-        except RuntimeError as e:
-            raise _SchemaFetchError(f"schema fetch failed for {provider}: {e}") from e
+
+            raise
 
         indexed: dict[str, dict[str, Any]] = {}
         for schema in schemas:
@@ -228,99 +202,100 @@ def _validate_config_against_schema(config: Any, schema: dict[str, Any]) -> str 
 
     Returns:
         Error message string on validation failure, ``None`` on success.
-    """
+
+    Raises:
+        jsonschema.SchemaError: If the schema the API served is not a valid
+            JSON schema.
+    """  # noqa: DOC502
     try:
         jsonschema.validate(instance=config, schema=schema)
     except jsonschema.ValidationError as e:
         path = ".".join(str(part) for part in e.absolute_path) or "<root>"
         return f"config.{path}: {e.message}"
-    except jsonschema.SchemaError as e:
-        return f"schema for this resource is invalid: {e.message}"
 
     return None
 
 
-def _parse_resource_id(resource_id: str) -> tuple[str, str, str]:
-    """Parse and validate a resource identifier.
+def validate_resource_id(context: typer.Context, resource_id: str | None) -> str | None:
+    """Check a resource ID is ``org/provider/resource/name``, for use as a Typer argument callback.
 
     Args:
-        resource_id: Resource identifier in org/provider/resource/name format.
+        context: Click context of the command being parsed.
+        resource_id: Resource ID as typed, or ``None`` when the argument is
+            optional and was not given.
 
     Returns:
-        Tuple of (provider, resource, name) where provider is 'org/provider'.
+        The resource ID unchanged.
 
     Raises:
-        typer.Exit: If the format is invalid.
+        typer.BadParameter: Exiting with ``INPUT_ERROR_EXIT_CODE``, if the
+            ID does not have four non-empty segments.
     """
+    if context.resilient_parsing or resource_id is None:
+        return resource_id
+
     try:
-        return parse_resource_id(resource_id)
-    except ValueError:
-        console.print("[red]Error:[/red] Invalid resource ID. Expected 'org/provider/resource/name'.")
-        raise typer.Exit(1)
+        parse_resource_id(resource_id)
+    except ValueError as e:
+        raise typer.BadParameter(f"must be 'org/provider/resource/name', got '{resource_id}'.") from e
+
+    return resource_id
 
 
-def _format_api_error(error: httpx.HTTPStatusError) -> str:
-    """Format an API error response with structured details.
+def validate_resource_path(context: typer.Context, resource_path: str) -> str:
+    """Check a resource path names a resource type or one resource, for use as a Typer argument callback.
 
-    Returns:
-        Formatted error message with details extracted from JSON response.
-    """
-    try:
-        detail = error.response.json().get("detail", {})
-    except (json.JSONDecodeError, ValueError):
-        return error.response.text or str(error)
-
-    if isinstance(detail, str):
-        return detail
-
-    message = detail.get("message", str(error))
-    parts = [message]
-
-    if missing := detail.get("missing_dependencies"):
-        parts.append("\n  Missing dependencies:")
-        for dep_id in missing:
-            parts.append(f"    - {dep_id}")
-
-    if field := detail.get("field"):
-        ref_parts = [
-            detail.get("reference_provider", ""),
-            detail.get("reference_resource", ""),
-            detail.get("reference_name", ""),
-        ]
-        ref_id = "/".join(filter(None, ref_parts))
-        if ref_id:
-            parts.append(f"\n  Reference: {ref_id}#{field}")
-
-    if current_state := detail.get("current_state"):
-        target_state = detail.get("target_state", "unknown")
-        parts.append(f"\n  Current state: {current_state}")
-        parts.append(f"  Target state: {target_state}")
-
-    if resource_id := detail.get("resource_id"):
-        parts.append(f"\n  Resource: {resource_id}")
-
-    return "".join(parts)
-
-
-def _format_operation_error(error: Exception) -> str:
-    """Render any apply/upload failure into a single user-facing line.
-
-    Discriminates between HTTP-level errors (which get the detailed
-    response-body formatter), transport-level errors (timeouts,
-    connection failures, stream errors — exception type name helps
-    distinguish them), and project-scoping mismatches.
+    A path is ``org/provider/resource`` for a resource type or
+    ``org/provider/resource/name`` for one resource.
 
     Args:
-        error: Exception raised by a resource apply or file upload.
+        context: Click context of the command being parsed.
+        resource_path: Resource path as typed.
 
     Returns:
-        Single-line error message suitable for Rich-markup output.
-    """
-    if isinstance(error, httpx.HTTPStatusError):
-        return _format_api_error(error)
+        The argument unchanged.
 
-    if isinstance(error, httpx.HTTPError):
-        return f"{type(error).__name__}: {error}"
+    Raises:
+        typer.BadParameter: Exiting with ``INPUT_ERROR_EXIT_CODE``, if it
+            does not have three or four non-empty segments.
+    """
+    if context.resilient_parsing:
+        return resource_path
+
+    parts = resource_path.split("/")
+
+    if len(parts) not in (3, 4) or not all(parts):
+        raise typer.BadParameter(
+            f"must be 'org/provider/resource' or 'org/provider/resource/name', got '{resource_path}'."
+        )
+
+    return resource_path
+
+
+ResourceIdType = TypeVar("ResourceIdType", str, str | None)
+"""Type of a resource ID argument: ``str`` when required, ``str | None`` when optional."""
+
+ResourceIdArgument = Annotated[
+    ResourceIdType,
+    typer.Argument(autocompletion=completion_resource_ids, callback=validate_resource_id, show_default=False),
+]
+"""Positional ``org/provider/resource/name`` resource ID argument, checked by ``validate_resource_id``."""
+
+
+def _format_operation_error(error: httpx.HTTPError | ProjectMismatchError) -> str:
+    """Render an apply or upload failure that is not an API error response into one line.
+
+    Args:
+        error: Transport error, other httpx error, or project-scoping
+            mismatch raised by a resource apply or file upload.
+
+    Returns:
+        What interrupted the exchange for a transport error, the
+        mismatch for a project-scoping error, else the error type and
+        message. Not escaped for Rich markup.
+    """
+    if isinstance(error, httpx.TransportError):
+        return format_request_failure(error)
 
     if isinstance(error, ProjectMismatchError):
         return str(error)
@@ -625,11 +600,11 @@ def _print_resource_schemas_table(types: list[dict]) -> None:
     table.add_column("Description")
 
     for resource_type in types:
-        description = resource_type.get("description") or "[dim]—[/dim]"
+        description = resource_type.get("description")
         table.add_row(
-            resource_type["provider"],
-            resource_type["resource"],
-            description,
+            escape(resource_type["provider"]),
+            escape(resource_type["resource"]),
+            format_optional_value(description),
         )
 
     console.print(table)
@@ -650,23 +625,19 @@ def list_resource_schemas(
         pragma resources schemas
         pragma resources schemas --provider gcp
         pragma resources schemas -o json
-
-    Raises:
-        typer.Exit: If an error occurs while fetching resource schemas.
     """
-    client = get_client()
-    try:
-        types = client.list_resource_schemas(provider=provider)
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
+    types = get_client().list_resource_schemas(provider=provider)
+    data = [t.model_dump() for t in types]
+
+    if output != OutputFormat.TABLE:
+        output_data(data, output)
+        return
 
     if not types:
         console.print("[dim]No resource schemas found.[/dim]")
         return
 
-    output_data([t.model_dump() for t in types], output, table_renderer=_print_resource_schemas_table)
+    _print_resource_schemas_table(data)
 
 
 @app.command("list")
@@ -692,12 +663,26 @@ def list_resources(
     """
     project = _project_client(ctx)
     resources = project.list_resources(provider=provider, resource=resource, tags=tags)
+    print_resource_list(resources, output)
+
+
+def print_resource_list(resources: list[dict], output: OutputFormat) -> None:
+    """Print a list of resources in the requested format.
+
+    Args:
+        resources: Resource dictionaries the API returned.
+        output: Output format; JSON and YAML print an empty list when there
+            are no resources.
+    """
+    if output != OutputFormat.TABLE:
+        output_data(resources, output)
+        return
 
     if not resources:
         console.print("[dim]No resources found.[/dim]")
         return
 
-    output_data(resources, output, table_renderer=_print_resources_table)
+    _print_resources_table(resources)
 
 
 def _print_resources_table(resources: list[dict]) -> None:
@@ -720,15 +705,13 @@ def _print_resources_table(resources: list[dict]) -> None:
         updated = res.get("updated_at")
         if updated:
             updated = updated[:19].replace("T", " ")
-        else:
-            updated = "[dim]-[/dim]"
 
         table.add_row(
-            res["provider"],
-            res["resource"],
-            res["name"],
+            escape(res["provider"]),
+            escape(res["resource"]),
+            escape(res["name"]),
             state,
-            updated,
+            format_optional_value(updated),
         )
 
         if res.get("lifecycle_state") == "failed" and res.get("error"):
@@ -738,13 +721,15 @@ def _print_resources_table(resources: list[dict]) -> None:
     console.print(table)
 
     for resource_id, error in failed_resources:
-        console.print(f"  [red]{resource_id}:[/red] {escape(error)}")
+        console.print(f"  [red]{escape(resource_id)}:[/red] {escape(error)}")
 
 
 @app.command()
 def get(
     ctx: typer.Context,
-    resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
+    resource_id: Annotated[
+        str, typer.Argument(autocompletion=completion_resource_ids, callback=validate_resource_path)
+    ],
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
 ):
     """Get resources by type or specific resource by full ID.
@@ -760,40 +745,23 @@ def get(
         pragma resources get pragmatiks/pragma/secret/my-secret
         pragma resources get pragmatiks/pragma/secret/my-secret -o json
 
+    \f
+
     Raises:
-        typer.Exit: If the resource ID format is invalid.
-    """
+        httpx.HTTPStatusError: If the API refuses the read, a 404 for a
+            missing resource included.
+    """  # noqa: DOC502
     project = _project_client(ctx)
     parts = resource_id.split("/")
 
     if len(parts) == 3:
-        provider = f"{parts[0]}/{parts[1]}"
-        resource = parts[2]
-        resources = project.list_resources(provider=provider, resource=resource)
+        resources = project.list_resources(provider=f"{parts[0]}/{parts[1]}", resource=parts[2])
+        print_resource_list(resources, output)
+        return
 
-        if not resources:
-            console.print("[dim]No resources found.[/dim]")
-            return
-
-        output_data(resources, output, table_renderer=_print_resources_table)
-    elif len(parts) == 4:
-        provider = f"{parts[0]}/{parts[1]}"
-        resource = parts[2]
-        name = parts[3]
-
-        try:
-            res = project.get_resource(provider=provider, resource=resource, name=name)
-        except httpx.HTTPStatusError as e:
-            check_bootstrap_error(e)
-            console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-            raise typer.Exit(1) from e
-
-        output_data([res], output, table_renderer=_print_resources_table)
-    else:
-        console.print(
-            "[red]Error:[/red] Invalid resource ID. Expected 'org/provider/resource' or 'org/provider/resource/name'."
-        )
-        raise typer.Exit(1)
+    provider, resource, name = parse_resource_id(resource_id)
+    fetched_resource = project.get_resource(provider=provider, resource=resource, name=name)
+    output_data([fetched_resource], output, table_renderer=_print_resources_table)
 
 
 def _format_state_color(state: str) -> str:
@@ -813,7 +781,7 @@ def _format_state_color(state: str) -> str:
         "deleted": "dim",
     }
     color = state_colors.get(state.lower(), "white")
-    return f"[{color}]{state}[/{color}]"
+    return f"[{color}]{escape(state)}[/{color}]"
 
 
 def _format_config_value(value) -> str:
@@ -898,7 +866,7 @@ def _print_resource_details(res: dict) -> None:
     immutable_fields, sensitive_config_fields, sensitive_output_fields = _get_field_metadata(res)
 
     console.print()
-    console.print(f"[bold]Resource:[/bold] {resource_id}")
+    console.print(f"[bold]Resource:[/bold] {escape(resource_id)}")
     console.print()
 
     table = Table(show_header=True, header_style="bold")
@@ -911,9 +879,9 @@ def _print_resource_details(res: dict) -> None:
         table.add_row("Error", f"[red]{escape(res['error'])}[/red]")
 
     if res.get("created_at"):
-        table.add_row("Created", res["created_at"])
+        table.add_row("Created", escape(res["created_at"]))
     if res.get("updated_at"):
-        table.add_row("Updated", res["updated_at"])
+        table.add_row("Updated", escape(res["updated_at"]))
 
     console.print(table)
 
@@ -924,7 +892,7 @@ def _print_resource_details(res: dict) -> None:
         for key, value in config.items():
             formatted = _format_config_value(value)
             labels = _format_field_labels(key, immutable_fields, sensitive_config_fields)
-            console.print(f"  {key}: {formatted}{labels}")
+            console.print(f"  {escape(key)}: {escape(formatted)}{labels}")
 
     outputs = res.get("outputs", {})
     if outputs:
@@ -932,7 +900,7 @@ def _print_resource_details(res: dict) -> None:
         console.print("[bold]Outputs:[/bold]")
         for key, value in outputs.items():
             labels = _format_field_labels(key, set(), sensitive_output_fields)
-            console.print(f"  {key}: {value}{labels}")
+            console.print(f"  {escape(key)}: {escape(str(value))}{labels}")
 
     dependencies = res.get("dependencies", [])
     if dependencies:
@@ -940,13 +908,13 @@ def _print_resource_details(res: dict) -> None:
         console.print("[bold]Dependencies:[/bold]")
         for dep in dependencies:
             dep_id = f"{dep['provider']}/{dep['resource']}/{dep['name']}"
-            console.print(f"  - {dep_id}")
+            console.print(f"  - {escape(dep_id)}")
 
     tags = res.get("tags", [])
     if tags:
         console.print()
         console.print("[bold]Tags:[/bold]")
-        console.print(f"  {', '.join(tags)}")
+        console.print(f"  {escape(', '.join(tags))}")
 
     console.print()
 
@@ -954,7 +922,7 @@ def _print_resource_details(res: dict) -> None:
 @app.command()
 def describe(
     ctx: typer.Context,
-    resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
+    resource_id: ResourceIdArgument[str],
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
     reveal: Annotated[bool, typer.Option("--reveal", help="Show sensitive field values")] = False,
 ):
@@ -972,20 +940,17 @@ def describe(
         pragma resources describe pragmatiks/gcp/secret/my-secret -o json
         pragma resources describe pragmatiks/gcp/secret/my-secret --reveal
 
+    \f
+
     Raises:
-        typer.Exit: If the resource is not found or an error occurs.
-    """
+        httpx.HTTPStatusError: If the API refuses the read, a 404 for a
+            missing resource included.
+    """  # noqa: DOC502
     project = _project_client(ctx)
-    provider, resource, name = _parse_resource_id(resource_id)
+    provider, resource, name = parse_resource_id(resource_id)
 
-    try:
-        res = project.get_resource(provider=provider, resource=resource, name=name, reveal=reveal)
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
-
-    output_data(res, output, table_renderer=_print_resource_details)
+    fetched_resource = project.get_resource(provider=provider, resource=resource, name=name, reveal=reveal)
+    output_data(fetched_resource, output, table_renderer=_print_resource_details)
 
 
 def _plan_apply_batch(
@@ -1012,7 +977,16 @@ def _plan_apply_batch(
     Returns:
         Fully-planned batch with either a populated resource list or
         a populated error list.
-    """
+
+    Raises:
+        httpx.HTTPStatusError: If fetching a provider's schemas fails with
+            any status but 404; planning stops there, nothing has been
+            applied, and per-document errors found so far are not reported.
+        httpx.TransportError: If the API cannot be reached while fetching
+            schemas; planning stops as for an API error.
+        jsonschema.SchemaError: If a schema the API served is not a valid
+            JSON schema; planning stops as for an API error.
+    """  # noqa: DOC502
     plan = _ApplyPlan()
     schema_cache = _SchemaCache()
 
@@ -1024,6 +998,9 @@ def _plan_apply_batch(
             documents = list(yaml.safe_load_all(f.read()))
         except yaml.YAMLError as e:
             plan.errors.append(_PlanError(source=source, index=0, resource_id="<yaml>", message=f"Invalid YAML: {e}"))
+            continue
+        except UnicodeDecodeError as e:
+            plan.errors.append(_PlanError(source=source, index=0, resource_id="<yaml>", message=f"Not UTF-8 text: {e}"))
             continue
 
         for index, document in enumerate(documents):
@@ -1063,18 +1040,7 @@ def _plan_apply_batch(
             provider = prepared.get("provider")
             resource_type = prepared.get("resource")
             if isinstance(provider, str) and isinstance(resource_type, str):
-                try:
-                    schema = schema_cache.config_schema(provider, resource_type)
-                except _SchemaFetchError as e:
-                    plan.errors.append(
-                        _PlanError(
-                            source=source,
-                            index=index,
-                            resource_id=resource_id,
-                            message=f"schema validation unavailable for {provider}/{resource_type}: {e}",
-                        )
-                    )
-                    continue
+                schema = schema_cache.config_schema(provider, resource_type)
 
                 if schema is not None:
                     schema_error = _validate_config_against_schema(prepared.get("config"), schema)
@@ -1096,13 +1062,15 @@ def _report_plan_errors(plan: _ApplyPlan) -> None:
         plan: Failed plan containing one or more per-document errors.
 
     Raises:
-        typer.Exit: Always exits with code 2.
+        typer.Exit: Always, with ``INPUT_ERROR_EXIT_CODE``.
     """
-    console.print("[red]Error:[/red] Rejected batch before any resources were applied.")
+    error_console.print("[red]Error:[/red] Invalid resource documents; no resource was applied.")
+
     for err in plan.errors:
         location = f"{err.source} (document {err.index + 1}, {err.resource_id})"
-        console.print(f"  [red]-[/red] {location}: {err.message}")
-    raise typer.Exit(2)
+        error_console.print(f"  [red]-[/red] {escape(location)}: {escape(err.message)}")
+
+    raise typer.Exit(INPUT_ERROR_EXIT_CODE)
 
 
 @app.command()
@@ -1135,13 +1103,19 @@ def apply(
     are resolved before submission. Use '@path/to/file' syntax to inline
     file contents.
 
+    \f
+
     Raises:
-        typer.Exit: If planning fails or the apply operation fails.
-    """
+        click.UsageError: If no file is given, or files are given both with
+            -f and as positional paths.
+        typer.Exit: If planning finds invalid documents or the apply fails.
+    """  # noqa: DOC502
+    if file and positional_file:
+        raise click.UsageError("Pass files either with -f or as positional paths, not both.")
+
     files = file or positional_file
     if not files:
-        console.print("[red]Provide -f <file> or a positional file path.[/red]")
-        raise typer.Exit(1)
+        raise click.UsageError("Provide -f <file> or a positional file path.")
 
     project_id = resolve_project(ctx)
 
@@ -1173,10 +1147,11 @@ def _execute_plan(plan: _ApplyPlan, project_id: str) -> None:
         project_id: Resolved project ID.
 
     Raises:
-        typer.Exit: With code 1 on any apply or upload failure, after
-            reporting which resources were touched and which were left
-            in partial state.
-    """
+        typer.Exit: On any apply or upload failure, after reporting which
+            resources were touched and which were left in partial state;
+            with ``NOT_FOUND_EXIT_CODE`` when the API answered 404, else
+            with ``FAILURE_EXIT_CODE``.
+    """  # noqa: DOC502
     client = get_client()
     project = client.project(project_id)
 
@@ -1188,36 +1163,69 @@ def _execute_plan(plan: _ApplyPlan, project_id: str) -> None:
         try:
             result = project.apply_resource(cast(Any, planned.payload))
         except (httpx.HTTPError, ProjectMismatchError) as e:
-            if isinstance(e, httpx.HTTPStatusError):
-                check_bootstrap_error(e)
-
-            console.print(f"[red]Error applying {planned.resource_id}:[/red] {_format_operation_error(e)}")
-            _report_partial_apply_failure(plan, applied, uploaded, failed_resource=planned.resource_id)
-            raise typer.Exit(1) from e
+            heading = f"Error applying {planned.resource_id}"
+            report_apply_failure(e, heading, plan, applied, uploaded, failed_resource_id=planned.resource_id)
 
         applied_id = f"{result['provider']}/{result['resource']}/{result['name']}"
         applied.append((planned.resource_id, result["lifecycle_state"]))
-        print(f"Applied {applied_id} {format_state(result['lifecycle_state'])}")
+        print(f"Applied {escape(applied_id)} {format_state(result['lifecycle_state'])}")
 
         if planned.upload is not None:
             pending_uploads.append(planned)
 
     for planned in pending_uploads:
         upload = planned.upload
+
         if upload is None:
             continue
+
         try:
             client.upload_file(upload.name, upload.content, upload.content_type)
         except (httpx.HTTPError, ProjectMismatchError) as e:
-            if isinstance(e, httpx.HTTPStatusError):
-                check_bootstrap_error(e)
+            heading = f"Error uploading file for {planned.resource_id}"
+            report_apply_failure(e, heading, plan, applied, uploaded, failed_resource_id=planned.resource_id)
 
-            console.print(f"[red]Error uploading file for {planned.resource_id}:[/red] {_format_operation_error(e)}")
-            _report_partial_apply_failure(plan, applied, uploaded, failed_resource=planned.resource_id)
-            raise typer.Exit(1) from e
         uploaded.append(planned.resource_id)
 
-    console.print(f"[green]Applied {len(applied)} resource(s) to project '{project_id}'.[/green]")
+    console.print(f"[green]Applied {len(applied)} resource(s) to project '{escape(project_id)}'.[/green]")
+
+
+def report_apply_failure(
+    error: httpx.HTTPError | ProjectMismatchError,
+    heading: str,
+    plan: _ApplyPlan,
+    applied: list[tuple[str, str]],
+    uploaded: list[str],
+    *,
+    failed_resource_id: str,
+) -> NoReturn:
+    """Print why an apply or upload failed mid-batch, with what the batch left behind, then exit.
+
+    A 503 saying the caller's organization is not set up yet prints the
+    set-up message instead, without the batch report.
+
+    Args:
+        error: The error the apply or upload raised.
+        heading: What failed, such as ``Error applying acme/db/database/main``.
+        plan: Full plan that was being executed.
+        applied: ``(resource_id, lifecycle_state)`` pairs applied so far.
+        uploaded: Resource IDs whose file content was uploaded so far.
+        failed_resource_id: Resource ID whose apply or upload failed.
+
+    Raises:
+        typer.Exit: With the code ``compute_http_exit_code`` gives an API
+            error's status, else with ``FAILURE_EXIT_CODE``.
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        check_bootstrap_error(error)
+        print_resource_api_error(error, heading)
+        exit_code = compute_http_exit_code(error.response.status_code)
+    else:
+        error_console.print(f"[red]{escape(heading)}:[/red] {escape(_format_operation_error(error))}")
+        exit_code = FAILURE_EXIT_CODE
+
+    _report_partial_apply_failure(plan, applied, uploaded, failed_resource_id=failed_resource_id)
+    raise typer.Exit(exit_code) from error
 
 
 def _report_partial_apply_failure(
@@ -1225,7 +1233,7 @@ def _report_partial_apply_failure(
     applied: list[tuple[str, str]],
     uploaded: list[str],
     *,
-    failed_resource: str,
+    failed_resource_id: str,
 ) -> None:
     """Print a loud report when an apply batch fails mid-flight.
 
@@ -1241,51 +1249,51 @@ def _report_partial_apply_failure(
         applied: Resources that were successfully applied, as a list
             of ``(resource_id, lifecycle_state)`` tuples.
         uploaded: Resource IDs whose file bytes were uploaded.
-        failed_resource: Resource ID whose apply or upload failed.
+        failed_resource_id: Resource ID whose apply or upload failed.
     """
     all_ids = [p.resource_id for p in plan.resources]
     applied_ids = {rid for rid, _ in applied}
     uploaded_ids = set(uploaded)
 
-    not_attempted = [rid for rid in all_ids if rid not in applied_ids and rid != failed_resource]
+    not_attempted = [rid for rid in all_ids if rid not in applied_ids and rid != failed_resource_id]
     orphan_uploads = [rid for rid in applied_ids if rid not in uploaded_ids and _needs_upload(plan, rid)]
 
-    console.print()
-    console.print("[red bold]PARTIAL APPLY FAILURE[/red bold]")
-    console.print(
-        f"[red]The batch failed at [bold]{failed_resource}[/bold]. "
+    error_console.print()
+    error_console.print("[red bold]PARTIAL APPLY FAILURE[/red bold]")
+    error_console.print(
+        f"[red]The batch failed at [bold]{escape(failed_resource_id)}[/bold]. "
         "Some resources are already applied and may need manual reconciliation.[/red]"
     )
 
-    console.print()
-    console.print(f"[bold]Applied ({len(applied)}):[/bold]")
+    error_console.print()
+    error_console.print(f"[bold]Applied ({len(applied)}):[/bold]")
     if applied:
         for rid, state in applied:
-            console.print(f"  [green]+[/green] {rid} ({state})")
+            error_console.print(f"  [green]+[/green] {escape(rid)} ({escape(state)})")
     else:
-        console.print("  [dim](none)[/dim]")
+        error_console.print("  [dim](none)[/dim]")
 
-    console.print()
-    console.print("[bold]Failed (1):[/bold]")
-    console.print(f"  [red]x[/red] {failed_resource}")
+    error_console.print()
+    error_console.print("[bold]Failed (1):[/bold]")
+    error_console.print(f"  [red]x[/red] {escape(failed_resource_id)}")
 
-    console.print()
-    console.print(f"[bold]Not attempted ({len(not_attempted)}):[/bold]")
+    error_console.print()
+    error_console.print(f"[bold]Not attempted ({len(not_attempted)}):[/bold]")
     if not_attempted:
         for rid in not_attempted:
-            console.print(f"  [dim]-[/dim] {rid}")
+            error_console.print(f"  [dim]-[/dim] {escape(rid)}")
     else:
-        console.print("  [dim](none)[/dim]")
+        error_console.print("  [dim](none)[/dim]")
 
     if orphan_uploads:
-        console.print()
-        console.print("[yellow bold]Orphaned pragma/file applies without uploaded bytes:[/yellow bold]")
+        error_console.print()
+        error_console.print("[yellow bold]Orphaned pragma/file applies without uploaded bytes:[/yellow bold]")
         for rid in orphan_uploads:
-            console.print(f"  [yellow]![/yellow] {rid}")
-        console.print("  [yellow]These resources reference file content that was never uploaded.[/yellow]")
-        console.print("  [yellow]Re-run apply once the underlying issue is resolved.[/yellow]")
+            error_console.print(f"  [yellow]![/yellow] {escape(rid)}")
+        error_console.print("  [yellow]These resources reference file content that was never uploaded.[/yellow]")
+        error_console.print("  [yellow]Re-run apply once the underlying issue is resolved.[/yellow]")
 
-    console.print()
+    error_console.print()
 
 
 def _needs_upload(plan: _ApplyPlan, resource_id: str) -> bool:
@@ -1304,6 +1312,85 @@ def _needs_upload(plan: _ApplyPlan, resource_id: str) -> bool:
     return False
 
 
+def report_resource_api_error(error: httpx.HTTPStatusError, heading: str) -> NoReturn:
+    """Print an API error about a resource request under a heading naming the request, then exit.
+
+    A 503 saying the caller's organization is not set up yet prints the
+    set-up message instead of the API's.
+
+    Args:
+        error: The HTTP status error the request raised.
+        heading: What failed, such as ``Error deleting acme/db/database/main``.
+
+    Raises:
+        typer.Exit: With the code ``compute_http_exit_code`` gives the status.
+    """
+    check_bootstrap_error(error)
+    print_resource_api_error(error, heading)
+    raise typer.Exit(compute_http_exit_code(error.response.status_code)) from error
+
+
+def print_resource_api_error(error: httpx.HTTPStatusError, heading: str) -> None:
+    """Print an API error about a resource request, followed by the resource details its body carries.
+
+    Args:
+        error: The HTTP status error the request raised.
+        heading: What failed, such as ``Error applying acme/db/database/main``.
+    """
+    print_api_error(error, heading)
+
+    for line in build_resource_error_details(error.response):
+        error_console.print(escape(line))
+
+
+def build_resource_error_details(response: httpx.Response) -> list[str]:
+    """Build the indented lines describing the resources an API error body names.
+
+    Args:
+        response: The API's error response.
+
+    Returns:
+        Lines for the missing dependencies, the referenced field, the
+        current and target lifecycle states, and the resource an object
+        ``detail`` names; empty when the body has no object ``detail``.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return []
+
+    detail = body.get("detail") if isinstance(body, dict) else None
+
+    if not isinstance(detail, dict):
+        return []
+
+    lines: list[str] = []
+
+    if missing := detail.get("missing_dependencies"):
+        lines.append("  Missing dependencies:")
+        lines.extend(f"    - {dependency_id}" for dependency_id in missing)
+
+    if field := detail.get("field"):
+        reference_parts = [
+            detail.get("reference_provider", ""),
+            detail.get("reference_resource", ""),
+            detail.get("reference_name", ""),
+        ]
+        reference_id = "/".join(filter(None, reference_parts))
+
+        if reference_id:
+            lines.append(f"  Reference: {reference_id}#{field}")
+
+    if current_state := detail.get("current_state"):
+        lines.append(f"  Current state: {current_state}")
+        lines.append(f"  Target state: {detail.get('target_state', 'unknown')}")
+
+    if resource_id := detail.get("resource_id"):
+        lines.append(f"  Resource: {resource_id}")
+
+    return lines
+
+
 DEACTIVATION_STARTED = "Deactivating {} — teardown is in progress; the resource returns to draft when it completes."
 DELETION_STARTED = "Deleting {} — the resource and everything it owns are removed when this completes."
 
@@ -1312,53 +1399,10 @@ WAIT_TIMEOUT_HELP = "Seconds to wait when --wait is passed; 0 waits forever."
 DRY_RUN_HELP = "Preview the teardown and the resources it reaches without changing anything."
 
 
-def _iter_resource_documents(files: list[typer.FileText]) -> Iterator[tuple[str, str, str]]:
-    """Yield the addressing fields of every resource document across the supplied files.
-
-    Args:
-        files: YAML files supplied on the command line.
-
-    Yields:
-        Tuple of (provider, resource, name) where provider is 'org/provider'.
-
-    Raises:
-        typer.Exit: If a file contains invalid YAML.
-    """
-    for f in files:
-        try:
-            documents = list(yaml.safe_load_all(f.read()))
-        except yaml.YAMLError as e:
-            console.print(f"[red]Error:[/red] Invalid YAML in {f.name}: {e}")
-            raise typer.Exit(1) from e
-
-        for document in documents:
-            if not isinstance(document, dict):
-                continue
-
-            provider = document.get("provider")
-            resource_type = document.get("resource")
-            name = document.get("name")
-
-            if not (
-                isinstance(provider, str)
-                and isinstance(resource_type, str)
-                and isinstance(name, str)
-                and provider
-                and resource_type
-                and name
-            ):
-                console.print(f"[red]Skipping invalid resource (missing provider, resource, or name):[/red] {document}")
-                continue
-
-            yield provider, resource_type, name
-
-
 @app.command()
 def delete(
     ctx: typer.Context,
-    resource_id: Annotated[
-        str | None, typer.Argument(autocompletion=completion_resource_ids, show_default=False)
-    ] = None,
+    resource_id: ResourceIdArgument[str | None] = None,
     file: Annotated[
         list[typer.FileText] | None,
         typer.Option("--file", "-f", help="YAML file(s) defining resources to delete."),
@@ -1385,21 +1429,21 @@ def delete(
         pragma resources delete --wait --wait-timeout 900 <org/provider/resource/name>
         pragma resources delete --dry-run <org/provider/resource/name>
 
-    Raises:
-        typer.Exit: If arguments are invalid or deletion fails.
-    """
-    options = TeardownOptions(wait=wait, wait_timeout=wait_timeout, dry_run=dry_run)
+    \f
 
-    if file:
-        project = _project_client(ctx)
-        for provider, resource, name in _iter_resource_documents(file):
-            _delete_one(project, provider, resource, name, options)
-    elif resource_id:
-        provider, resource, name = _parse_resource_id(resource_id)
-        _delete_one(_project_client(ctx), provider, resource, name, options)
-    else:
-        console.print("[red]Provide either -f <file> or <org/provider/resource/name>.[/red]")
-        raise typer.Exit(1)
+    Raises:
+        click.UsageError: If both or neither of a resource ID and -f are given.
+        typer.Exit: With ``INPUT_ERROR_EXIT_CODE`` for invalid YAML or an
+            invalid resource document in -f, ``NOT_FOUND_EXIT_CODE`` if the
+            resource does not exist, else ``FAILURE_EXIT_CODE`` if deletion
+            fails.
+    """  # noqa: DOC502
+    options = TeardownOptions(wait=wait, wait_timeout=wait_timeout, dry_run=dry_run)
+    targets = read_teardown_targets(ctx, resource_id, file)
+    project = _project_client(ctx)
+
+    for provider, resource, name in targets:
+        _delete_one(project, provider, resource, name, options)
 
 
 def _delete_one(project: ProjectResources, provider: str, resource: str, name: str, options: TeardownOptions) -> None:
@@ -1413,24 +1457,23 @@ def _delete_one(project: ProjectResources, provider: str, resource: str, name: s
         options: Wait and dry-run behaviour for this command.
 
     Raises:
-        typer.Exit: With code 1 if the removal is rejected, fails, or does
-            not finish within the wait timeout.
-    """
+        typer.Exit: With ``NOT_FOUND_EXIT_CODE`` if the resource does not
+            exist, or with ``FAILURE_EXIT_CODE`` if the removal is rejected,
+            fails, or does not finish within the wait timeout.
+    """  # noqa: DOC502
     resource_id = f"{provider}/{resource}/{name}"
 
     try:
         response = project.delete_resource(provider=provider, resource=resource, name=name, dry_run=options.dry_run)
     except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        console.print(f"[red]Error deleting {resource_id}:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
+        report_resource_api_error(e, f"Error deleting {resource_id}")
 
     if options.dry_run:
-        print(f"Dry run — {resource_id} was not removed.")
+        print(f"Dry run — {escape(resource_id)} was not removed.")
         print_impact(response.impact)
         return
 
-    print(DELETION_STARTED.format(resource_id))
+    print(DELETION_STARTED.format(escape(resource_id)))
     print_impact(response.impact)
 
     if options.wait:
@@ -1447,32 +1490,30 @@ def _wait_removed(project: ProjectResources, impact: list[TeardownImpact], resou
         timeout: Seconds to wait before giving up; ``0`` waits forever.
 
     Raises:
-        typer.Exit: With code 1 if teardown fails or does not finish in time.
+        typer.Exit: With ``FAILURE_EXIT_CODE`` if teardown fails or does not finish in time.
     """
     try:
         watch_teardown(project, impact, timeout=timeout, settled_state=LifecycleState.DELETED)
     except ResourceFailedError as e:
-        console.print(
-            f"[red]Error deleting {resource_id}:[/red] {e.error or e}. "
-            f"Run 'pragma resources describe {e.resource_id}' to see the current state, then try again."
+        error_console.print(
+            f"[red]Error deleting {escape(resource_id)}:[/red] {escape(str(e.error or e))}. "
+            f"Run 'pragma resources describe {escape(e.resource_id)}' to see the current state, then try again."
         )
-        raise typer.Exit(1) from e
+        raise typer.Exit(FAILURE_EXIT_CODE) from e
     except TimeoutError as e:
-        console.print(
-            f"[red]Error deleting {resource_id}:[/red] Removal is still running after {timeout}s. "
+        error_console.print(
+            f"[red]Error deleting {escape(resource_id)}:[/red] Removal is still running after {timeout}s. "
             "Run 'pragma resources list' to see what is left."
         )
-        raise typer.Exit(1) from e
+        raise typer.Exit(FAILURE_EXIT_CODE) from e
 
-    print(f"Deleted {resource_id}")
+    print(f"Deleted {escape(resource_id)}")
 
 
 @app.command()
 def deactivate(
     ctx: typer.Context,
-    resource_id: Annotated[
-        str | None, typer.Argument(autocompletion=completion_resource_ids, show_default=False)
-    ] = None,
+    resource_id: ResourceIdArgument[str | None] = None,
     file: Annotated[
         list[typer.FileText] | None,
         typer.Option("--file", "-f", help="YAML file(s) defining resources to deactivate."),
@@ -1503,21 +1544,21 @@ def deactivate(
         pragma resources deactivate --wait --wait-timeout 0 <org/provider/resource/name>
         pragma resources deactivate --dry-run <org/provider/resource/name>
 
-    Raises:
-        typer.Exit: If arguments are invalid or deactivation fails.
-    """
-    options = TeardownOptions(wait=wait, wait_timeout=wait_timeout, dry_run=dry_run)
+    \f
 
-    if file:
-        project = _project_client(ctx)
-        for provider, resource, name in _iter_resource_documents(file):
-            _deactivate_one(project, provider, resource, name, options)
-    elif resource_id:
-        provider, resource, name = _parse_resource_id(resource_id)
-        _deactivate_one(_project_client(ctx), provider, resource, name, options)
-    else:
-        console.print("[red]Provide either -f <file> or <org/provider/resource/name>.[/red]")
-        raise typer.Exit(1)
+    Raises:
+        click.UsageError: If both or neither of a resource ID and -f are given.
+        typer.Exit: With ``INPUT_ERROR_EXIT_CODE`` for invalid YAML or an
+            invalid resource document in -f, ``NOT_FOUND_EXIT_CODE`` if the
+            resource does not exist, else ``FAILURE_EXIT_CODE`` if
+            deactivation fails.
+    """  # noqa: DOC502
+    options = TeardownOptions(wait=wait, wait_timeout=wait_timeout, dry_run=dry_run)
+    targets = read_teardown_targets(ctx, resource_id, file)
+    project = _project_client(ctx)
+
+    for provider, resource, name in targets:
+        _deactivate_one(project, provider, resource, name, options)
 
 
 def _deactivate_one(
@@ -1533,24 +1574,23 @@ def _deactivate_one(
         options: Wait and dry-run behaviour for this command.
 
     Raises:
-        typer.Exit: With code 1 if the deactivation is rejected, fails, or
-            does not finish within the wait timeout.
-    """
+        typer.Exit: With ``NOT_FOUND_EXIT_CODE`` if the resource does not
+            exist, or with ``FAILURE_EXIT_CODE`` if the deactivation is
+            rejected, fails, or does not finish within the wait timeout.
+    """  # noqa: DOC502
     resource_id = f"{provider}/{resource}/{name}"
 
     try:
         response = project.deactivate_resource(provider=provider, resource=resource, name=name, dry_run=options.dry_run)
     except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        console.print(f"[red]Error deactivating {resource_id}:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
+        report_resource_api_error(e, f"Error deactivating {resource_id}")
 
     if options.dry_run:
-        print(f"Dry run — {resource_id} was not deactivated.")
+        print(f"Dry run — {escape(resource_id)} was not deactivated.")
         print_impact(response.impact)
         return
 
-    print(DEACTIVATION_STARTED.format(resource_id))
+    print(DEACTIVATION_STARTED.format(escape(resource_id)))
     print_impact(response.impact)
 
     if options.wait:
@@ -1569,25 +1609,137 @@ def _wait_deactivated(
         timeout: Seconds to wait before giving up; ``0`` waits forever.
 
     Raises:
-        typer.Exit: With code 1 if teardown fails or does not finish in time.
+        typer.Exit: With ``FAILURE_EXIT_CODE`` if teardown fails or does not finish in time.
     """
     try:
         watch_teardown(project, impact, timeout=timeout, settled_state=LifecycleState.DRAFT)
     except ResourceFailedError as e:
-        console.print(
-            f"[red]Error deactivating {resource_id}:[/red] {e.error or e}. "
-            f"Run 'pragma resources describe {e.resource_id}' to see the current state, then try again."
+        error_console.print(
+            f"[red]Error deactivating {escape(resource_id)}:[/red] {escape(str(e.error or e))}. "
+            f"Run 'pragma resources describe {escape(e.resource_id)}' to see the current state, then try again."
         )
-        raise typer.Exit(1) from e
+        raise typer.Exit(FAILURE_EXIT_CODE) from e
     except TimeoutError as e:
-        console.print(
-            f"[red]Error deactivating {resource_id}:[/red] Teardown is still running after {timeout}s. "
-            f"Run 'pragma resources describe {resource_id}' to follow it; "
+        error_console.print(
+            f"[red]Error deactivating {escape(resource_id)}:[/red] Teardown is still running after {timeout}s. "
+            f"Run 'pragma resources describe {escape(resource_id)}' to follow it; "
             "the resource returns to draft when teardown completes."
         )
-        raise typer.Exit(1) from e
+        raise typer.Exit(FAILURE_EXIT_CODE) from e
 
-    print(f"Deactivated {resource_id}")
+    print(f"Deactivated {escape(resource_id)}")
+
+
+def read_teardown_targets(
+    context: typer.Context, resource_id: str | None, files: list[typer.FileText] | None
+) -> list[tuple[str, str, str]]:
+    """Parse the target resources from a resource ID or from -f files.
+
+    Args:
+        context: Typer context of the command, resolving the active project
+            for -f documents.
+        resource_id: Resource ID argument, already checked to have four
+            segments, or ``None``.
+        files: Files given with -f, or ``None``.
+
+    Returns:
+        ``(provider, resource, name)`` of each target, where provider is
+        'org/provider'.
+
+    Raises:
+        click.UsageError: If both or neither of a resource ID and -f are given.
+        typer.Exit: With ``INPUT_ERROR_EXIT_CODE`` for invalid YAML or an
+            invalid resource document in -f.
+    """  # noqa: DOC502
+    if resource_id and files:
+        raise click.UsageError("Pass either a resource ID or -f, not both.")
+
+    if files:
+        return read_resource_documents(files, resolve_project(context))
+
+    if resource_id:
+        return [parse_resource_id(resource_id)]
+
+    raise click.UsageError("Provide either -f <file> or <org/provider/resource/name>.")
+
+
+def read_resource_documents(files: list[typer.FileText], project_id: str) -> list[tuple[str, str, str]]:
+    """Parse the addressing fields of every resource document across the supplied files.
+
+    Every file is read and checked before the caller acts on any document,
+    so an invalid document anywhere leaves every resource untouched. Empty
+    documents are skipped.
+
+    Args:
+        files: YAML files supplied on the command line.
+        project_id: Active project; a document declaring another
+            ``project_id`` is invalid.
+
+    Returns:
+        ``(provider, resource, name)`` of each document, in file order,
+        where provider is 'org/provider'.
+
+    Raises:
+        typer.Exit: With ``INPUT_ERROR_EXIT_CODE``, after listing every
+            problem, if a file is not UTF-8 text or valid YAML, or a document
+            is not a mapping with a provider, resource and name, or declares
+            a ``project_id`` other than the active project.
+    """
+    addresses: list[tuple[str, str, str]] = []
+    problems: list[str] = []
+
+    for f in files:
+        try:
+            documents = list(yaml.safe_load_all(f.read()))
+        except yaml.YAMLError as e:
+            problems.append(f"{f.name}: invalid YAML: {e}")
+            continue
+        except UnicodeDecodeError as e:
+            problems.append(f"{f.name}: not UTF-8 text: {e}")
+            continue
+
+        for index, document in enumerate(documents):
+            if document is None:
+                continue
+
+            location = f"{f.name} (document {index + 1})"
+
+            if not isinstance(document, dict):
+                problems.append(f"{location}: expected a mapping at the document root")
+                continue
+
+            provider = document.get("provider")
+            resource_type = document.get("resource")
+            name = document.get("name")
+
+            if not (
+                isinstance(provider, str)
+                and provider
+                and isinstance(resource_type, str)
+                and resource_type
+                and isinstance(name, str)
+                and name
+            ):
+                problems.append(f"{location}: missing provider, resource, or name")
+                continue
+
+            declared_project_id = document.get("project_id")
+
+            if declared_project_id is not None and declared_project_id != project_id:
+                problems.append(f"{location}: {ProjectMismatchError(project_id, declared_project_id)}")
+                continue
+
+            addresses.append((provider, resource_type, name))
+
+    if problems:
+        error_console.print("[red]Error:[/red] Invalid resource documents; no resource was changed.")
+
+        for problem in problems:
+            error_console.print(f"  [red]-[/red] {escape(problem)}")
+
+        raise typer.Exit(INPUT_ERROR_EXIT_CODE)
+
+    return addresses
 
 
 tags_app = typer.Typer()
@@ -1605,18 +1757,14 @@ def _fetch_resource(ctx: typer.Context, resource_id: str) -> tuple[str, str, str
         Tuple of (provider, resource_type, name, resource_data).
 
     Raises:
-        typer.Exit: If the resource is not found.
-    """
+        httpx.HTTPStatusError: If the API refuses the read, a 404 for a
+            missing resource included.
+    """  # noqa: DOC502
     project = _project_client(ctx)
-    provider, resource, name = _parse_resource_id(resource_id)
+    provider, resource, name = parse_resource_id(resource_id)
 
-    try:
-        data = project.get_resource(provider=provider, resource=resource, name=name)
-        return provider, resource, name, data
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
+    data = project.get_resource(provider=provider, resource=resource, name=name)
+    return provider, resource, name, data
 
 
 def _apply_tags(ctx: typer.Context, provider: str, resource: str, name: str, tags: list[str] | None) -> None:
@@ -1633,32 +1781,27 @@ def _apply_tags(ctx: typer.Context, provider: str, resource: str, name: str, tag
         tags: Updated list of tags, or None to clear all tags.
 
     Raises:
-        typer.Exit: If the operation fails.
-    """
+        httpx.HTTPStatusError: If the API refuses the update.
+    """  # noqa: DOC502
     project_id = resolve_project(ctx)
     project = get_client().project(project_id)
 
-    try:
-        payload = _resource_payload(
-            {
-                "provider": provider,
-                "resource": resource,
-                "name": name,
-                "tags": tags,
-            },
-            project_id,
-        )
-        project.apply_resource(cast(Any, payload))
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
-        console.print(f"[red]Error:[/red] {_format_api_error(e)}")
-        raise typer.Exit(1) from e
+    payload = _resource_payload(
+        {
+            "provider": provider,
+            "resource": resource,
+            "name": name,
+            "tags": tags,
+        },
+        project_id,
+    )
+    project.apply_resource(cast(Any, payload))
 
 
 @tags_app.command("list")
 def tags_list(
     ctx: typer.Context,
-    resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
+    resource_id: ResourceIdArgument[str],
 ):
     """List tags for a resource.
 
@@ -1676,13 +1819,13 @@ def tags_list(
         return
 
     for tag in tags:
-        console.print(f"  {tag}")
+        console.print(f"  {escape(tag)}")
 
 
 @tags_app.command("add")
 def tags_add(
     ctx: typer.Context,
-    resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
+    resource_id: ResourceIdArgument[str],
     tags: Annotated[list[str], typer.Option("--tag", "-t", help="Tag to add (can be repeated)")],
 ):
     """Add tags to a resource.
@@ -1694,12 +1837,13 @@ def tags_add(
         pragma resources tags add pragmatiks/gcp/secret/my-secret --tag production
         pragma resources tags add pragmatiks/gcp/secret/my-secret -t prod -t api
 
+    \f
+
     Raises:
-        typer.Exit: If the resource is not found or the operation fails.
+        click.UsageError: If no --tag is given.
     """
     if not tags:
-        console.print("[red]Error:[/red] At least one --tag is required.")
-        raise typer.Exit(1)
+        raise click.UsageError("At least one --tag is required.")
 
     provider, resource, name, res = _fetch_resource(ctx, resource_id)
     current_tags = set(res.get("tags") or [])
@@ -1713,13 +1857,13 @@ def tags_add(
     _apply_tags(ctx, provider, resource, name, sorted(current_tags | new_tags))
 
     for tag in sorted(added):
-        console.print(f"[green]+[/green] {tag}")
+        console.print(f"[green]+[/green] {escape(tag)}")
 
 
 @tags_app.command("remove")
 def tags_remove(
     ctx: typer.Context,
-    resource_id: Annotated[str, typer.Argument(autocompletion=completion_resource_ids)],
+    resource_id: ResourceIdArgument[str],
     tags: Annotated[list[str], typer.Option("--tag", "-t", help="Tag to remove (can be repeated)")],
 ):
     """Remove tags from a resource.
@@ -1731,12 +1875,13 @@ def tags_remove(
         pragma resources tags remove pragmatiks/gcp/secret/my-secret --tag staging
         pragma resources tags remove pragmatiks/gcp/secret/my-secret -t old -t deprecated
 
+    \f
+
     Raises:
-        typer.Exit: If the resource is not found or the operation fails.
+        click.UsageError: If no --tag is given.
     """
     if not tags:
-        console.print("[red]Error:[/red] At least one --tag is required.")
-        raise typer.Exit(1)
+        raise click.UsageError("At least one --tag is required.")
 
     provider, resource, name, res = _fetch_resource(ctx, resource_id)
     current_tags = set(res.get("tags") or [])
@@ -1751,4 +1896,4 @@ def tags_remove(
     _apply_tags(ctx, provider, resource, name, updated or None)
 
     for tag in sorted(removed):
-        console.print(f"[red]-[/red] {tag}")
+        console.print(f"[red]-[/red] {escape(tag)}")

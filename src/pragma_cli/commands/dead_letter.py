@@ -7,16 +7,19 @@ operations that exceeded retry attempts.
 
 from __future__ import annotations
 
-import json
 from typing import Annotated
 
+import click
 import httpx
 import typer
 from rich import print
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from pragma_cli import get_client
+from pragma_cli.errors import report_not_found
+from pragma_cli.helpers import OutputFormat, output_data
 
 
 app = typer.Typer(help="Dead letter event management commands")
@@ -94,19 +97,19 @@ def show(
     Example:
         pragma ops dead-letter show evt_123abc
 
+    \f
+
     Raises:
-        typer.Exit: If event not found (code 1).
-    """  # noqa: DOC501
+        typer.Exit: With ``NOT_FOUND_EXIT_CODE`` if the event is not found.
+    """  # noqa: DOC502
     client = get_client()
+
     try:
         event = client.get_dead_letter_event(event_id)
     except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            print(f"[red]Event not found:[/red] {event_id}")
-            raise typer.Exit(1)
-        raise
+        report_not_found(e, f"Event '{event_id}' not found.")
 
-    print(json.dumps(event, indent=2, default=str))
+    output_data(event, OutputFormat.JSON)
 
 
 @app.command()
@@ -129,9 +132,19 @@ def retry(
         pragma ops dead-letter retry evt_123abc
         pragma ops dead-letter retry --all
 
+    \f
+
     Raises:
-        typer.Exit: If event not found (code 1) or user cancels (code 0).
-    """  # noqa: DOC501
+        typer.Exit: With ``NOT_FOUND_EXIT_CODE`` if the event is not found,
+            or with code 0 if the user cancels.
+        click.UsageError: If both or neither of EVENT_ID and --all are given.
+    """
+    if event_id and all_events:
+        raise click.UsageError("Pass either EVENT_ID or --all, not both.")
+
+    if not event_id and not all_events:
+        raise click.UsageError("Provide EVENT_ID or --all.")
+
     client = get_client()
 
     if all_events:
@@ -151,15 +164,9 @@ def retry(
         try:
             client.retry_dead_letter_event(event_id)
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                print(f"[red]Event not found:[/red] {event_id}")
-                raise typer.Exit(1)
-            raise
+            report_not_found(e, f"Event '{event_id}' not found.")
 
-        print(f"[green]Retried event:[/green] {event_id}")
-    else:
-        print("[red]Error:[/red] Provide an event_id or use --all")
-        raise typer.Exit(1)
+        print(f"[green]Retried event:[/green] {escape(event_id)}")
 
 
 @app.command()
@@ -187,9 +194,23 @@ def delete(
         pragma ops dead-letter delete --all
         pragma ops dead-letter delete --provider postgres
 
+    \f
+
     Raises:
-        typer.Exit: If event not found (code 1) or user cancels (code 0).
-    """  # noqa: DOC501
+        typer.Exit: With ``NOT_FOUND_EXIT_CODE`` if the event is not found,
+            or with code 0 if the user cancels.
+        click.UsageError: If EVENT_ID is combined with --all or --provider,
+            --all is combined with --provider, or none of them is given.
+    """
+    if event_id and (all_events or provider):
+        raise click.UsageError("Pass either EVENT_ID or --all/--provider, not both.")
+
+    if all_events and provider:
+        raise click.UsageError("Pass either --all or --provider, not both.")
+
+    if not (event_id or all_events or provider):
+        raise click.UsageError("Provide EVENT_ID, --provider, or --all.")
+
     client = get_client()
 
     if all_events:
@@ -210,24 +231,18 @@ def delete(
         count = len(events)
 
         if count == 0:
-            print(f"[dim]No dead letter events found for provider '{provider}'.[/dim]")
+            print(f"[dim]No dead letter events found for provider '{escape(provider)}'.[/dim]")
             return
 
         if not typer.confirm(f"Delete {count} event(s) for provider '{provider}'?"):
             raise typer.Exit(0)
 
         deleted = client.delete_dead_letter_events(provider=provider)
-        print(f"[green]Deleted {deleted} event(s) for provider '{provider}'[/green]")
+        print(f"[green]Deleted {deleted} event(s) for provider '{escape(provider)}'[/green]")
     elif event_id:
         try:
             client.delete_dead_letter_event(event_id)
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                print(f"[red]Event not found:[/red] {event_id}")
-                raise typer.Exit(1)
-            raise
+            report_not_found(e, f"Event '{event_id}' not found.")
 
-        print(f"[green]Deleted event:[/green] {event_id}")
-    else:
-        print("[red]Error:[/red] Provide an event_id, --provider, or --all")
-        raise typer.Exit(1)
+        print(f"[green]Deleted event:[/green] {escape(event_id)}")

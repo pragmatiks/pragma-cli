@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 import yaml
+from rich.markup import escape
 
 
 if TYPE_CHECKING:
@@ -54,11 +55,11 @@ def parse_resource_id(resource_id: str) -> tuple[str, str, str]:
         Tuple of (provider, resource, name) where provider is 'org/provider'.
 
     Raises:
-        ValueError: If resource_id does not have exactly 4 segments.
+        ValueError: If resource_id does not have exactly 4 non-empty segments.
     """
     parts = resource_id.split("/")
 
-    if len(parts) != 4:
+    if len(parts) != 4 or not all(parts):
         raise ValueError(f"Invalid resource ID: {resource_id}. Expected 'org/provider/resource/name'.")
 
     provider = f"{parts[0]}/{parts[1]}"
@@ -96,3 +97,15 @@ def parse_api_error_message(response: httpx.Response) -> str | None:
 
     message = body.get("message")
     return message if isinstance(message, str) else None
+
+
+def format_optional_value(value: str | None) -> str:
+    """Format an API-supplied table or panel value, with a dim dash when it is missing.
+
+    Args:
+        value: Value from the API, or ``None`` or empty when it has none.
+
+    Returns:
+        The value with Rich markup escaped, or ``[dim]-[/dim]``.
+    """
+    return escape(value) if value else "[dim]-[/dim]"
