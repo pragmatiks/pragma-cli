@@ -5,6 +5,7 @@ import json
 import os
 import time
 import webbrowser
+from contextlib import suppress
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -109,11 +110,8 @@ class CallbackHandler(BaseHTTPRequestHandler):
 
             if token:
                 CallbackHandler.token = token
-
-                self.send_response(200)
-                self.send_header("Content-type", "text/html")
-                self.end_headers()
-                self.wfile.write(
+                self.respond(
+                    200,
                     b"""
                     <html>
                         <body style="font-family: sans-serif; text-align: center; padding: 50px;">
@@ -121,13 +119,11 @@ class CallbackHandler(BaseHTTPRequestHandler):
                             <p>You can close this window and return to the terminal.</p>
                         </body>
                     </html>
-                """
+                """,
                 )
             else:
-                self.send_response(400)
-                self.send_header("Content-type", "text/html")
-                self.end_headers()
-                self.wfile.write(
+                self.respond(
+                    400,
                     b"""
                     <html>
                         <body style="font-family: sans-serif; text-align: center; padding: 50px;">
@@ -135,11 +131,28 @@ class CallbackHandler(BaseHTTPRequestHandler):
                             <p>No token received. Please try again.</p>
                         </body>
                     </html>
-                """
+                """,
                 )
         else:
-            self.send_response(404)
+            self.respond(404)
+
+    def respond(self, status: int, body: bytes = b""):
+        """Write a response to the browser, tolerating a closed connection.
+
+        The browser may close the callback connection before the page is
+        written. The login outcome is already decided by then, so a closed
+        connection is ignored instead of surfacing as a traceback.
+
+        Args:
+            status: HTTP status code of the response.
+            body: HTML page to send; empty sends headers only.
+        """
+        with suppress(ConnectionError):
+            self.send_response(status)
+            if body:
+                self.send_header("Content-type", "text/html")
             self.end_headers()
+            self.wfile.write(body)
 
     def log_message(self, format, *args):
         """Suppress server logs."""
