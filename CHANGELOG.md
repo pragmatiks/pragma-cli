@@ -1,5 +1,11 @@
 # Changelog
 
+## v11.1.0 (2026-10-09)
+
+### Feat
+
+- **cli**: consistent exit codes and stderr errors, workspace-aware provider publish (#82)
+
 ## v11.0.0 (2026-10-06)
 
 ### BREAKING CHANGE
