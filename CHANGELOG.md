@@ -1,5 +1,21 @@
 # Changelog
 
+## v12.0.0 (2026-10-15)
+
+### BREAKING CHANGE
+
+- progress output moved to stderr, the 'pending' version
+status is gone, and losing the admission watch exits 3 instead of 1.
+
+### Feat
+
+- **providers**: publish declares the version, then uploads the wheel
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v17.0.1 (#85)
+- **deps**: update pragmatiks-sdk to v17.0.0 (#84)
+
 ## v11.1.1 (2026-10-09)
 
 ### Fix
