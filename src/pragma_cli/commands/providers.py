@@ -7,9 +7,13 @@ Pragmatiks providers.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import time
+import zipfile
+from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
@@ -19,17 +23,21 @@ import httpx
 import typer
 import yaml
 from pragma_sdk import (
+    SETTLED_VERSION_STATUSES,
+    DeclaredProviderVersion,
     DeploymentResult,
     DeploymentStatus,
     PragmaClient,
     ProviderVersion,
+    ProviderVersionDeclaration,
     UpgradePolicy,
     VersionStatus,
+    read_wheel_declaration,
 )
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, TaskID, TextColumn
 from rich.table import Table
 
 from pragma_cli import get_client
@@ -60,17 +68,35 @@ TEMPLATE_PATH_ENV = "PRAGMA_PROVIDER_TEMPLATE"
 
 ADMISSION_POLL_INTERVAL_SECONDS = 2.0
 ADMISSION_MINIMUM_WATCH_SECONDS = 150.0
-"""Shortest time the publish watch waits from the upload, covering the provider host taking the version."""
+"""Shortest time the publish watch waits from the upload, or from the declaration when no upload was needed."""
 ADMISSION_DEADLINE_MARGIN_SECONDS = 30.0
 """Time the publish watch keeps waiting past a version's ``operation_deadline_at``, for settlement and clock skew."""
-UPLOAD_FAILED_MESSAGE = "Could not upload the wheel. Publish the version again."
 
-VERSION_STATUS_DISPLAY = {
-    VersionStatus.PENDING: "[yellow]admitting[/yellow]",
-    VersionStatus.PUBLISHED: "[green]published[/green]",
-    VersionStatus.FAILED: "[red]failed[/red]",
+PUBLISH_UNAVAILABLE_MESSAGE = "Pragmatiks cannot accept the publish right now. Try again later."
+"""Message for a 503 refusing a declaration or an upload whose body carries no message of its own."""
+
+UNREADABLE_WHEEL_ERRORS = (ValueError, zipfile.BadZipFile)
+"""Errors ``pragma_sdk.read_wheel_declaration`` raises when the file is not a readable wheel."""
+
+VERSION_STATUS_LABELS = {
+    VersionStatus.AWAITING_WHEEL: "waiting for the wheel",
+    VersionStatus.STAGED: "wheel received",
+    VersionStatus.QUEUED: "waiting for the provider host",
+    VersionStatus.ADMITTING: "admitting",
+    VersionStatus.PROMOTING: "publishing to the registry",
+    VersionStatus.PUBLISHED: "published",
+    VersionStatus.FAILED: "failed",
 }
-"""Rich display of each version status; ``pending`` reads ``admitting``, the word every surface uses."""
+"""Plain-words label of each version status, naming what an unsettled version waits on."""
+
+AWAITING_WHEEL_HINT = "If your publish stopped, run 'pragma providers publish' again."
+"""Message the versions table shows for an ``awaiting_wheel`` version, which has no message of its own."""
+
+VERSION_STATUS_COLORS = {
+    VersionStatus.PUBLISHED: "green",
+    VersionStatus.FAILED: "red",
+}
+"""Rich color of each settled version status; every unsettled status shows yellow."""
 
 
 def get_template_source() -> str:
@@ -116,7 +142,7 @@ def run_wheel_build(project_directory: Path) -> Path:
         )
         raise typer.Exit(INPUT_ERROR_EXIT_CODE)
 
-    console.print("[dim]Building wheel with 'uv build'...[/dim]")
+    error_console.print("[dim]Building wheel with 'uv build'...[/dim]")
 
     wheel_output_directory = (project_directory / "dist").resolve()
 
@@ -208,6 +234,21 @@ CompletedProviderNameArgument = Annotated[
 """``ProviderNameArgument`` that shell completion fills from the provider catalog."""
 
 
+def build_spinner_progress() -> Progress:
+    """Build a transient spinner display on stderr.
+
+    Returns:
+        A Rich progress display with a spinner and a task description,
+        drawn on stderr and cleared once it stops.
+    """
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=error_console,
+        transient=True,
+    )
+
+
 def _fetch_with_spinner(description: str, fetch_fn) -> Any:
     """Execute a function with a spinner progress indicator on stderr, keeping stdout for output.
 
@@ -219,43 +260,72 @@ def _fetch_with_spinner(description: str, fetch_fn) -> Any:
     Returns:
         Result from fetch_fn.
     """
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=error_console,
-        transient=True,
-    ) as progress:
+    with build_spinner_progress() as progress:
         progress.add_task(escape(description), total=None)
         return fetch_fn()
 
 
-def format_upload_refusal(error: httpx.HTTPStatusError) -> str:
-    """Format why the API refused or could not take an uploaded wheel.
+def format_publish_refusal(error: httpx.HTTPStatusError) -> str:
+    """Format why the API refused or could not take a declaration or an upload.
 
     Args:
-        error: The HTTP status error the upload raised.
+        error: The HTTP status error the declaration or the upload raised.
 
     Returns:
-        The upload-failed message for a 503 whose body carries no message,
-        or else ``format_api_error``'s text, escaped for Rich markup.
+        ``PUBLISH_UNAVAILABLE_MESSAGE`` for a 503 whose body carries no
+        message, or else ``format_api_error``'s text, escaped for Rich
+        markup.
     """
     if error.response.status_code == 503 and parse_api_error_message(error.response) is None:
-        return UPLOAD_FAILED_MESSAGE
+        return PUBLISH_UNAVAILABLE_MESSAGE
 
     return escape(format_api_error(error))
 
 
-def format_upload_interruption(error: httpx.TransportError) -> str:
-    """Format why an upload broke off after the connection to the API was made.
+def format_publish_interruption(error: httpx.TransportError) -> str:
+    """Format why a declaration or an upload broke off after the connection to the API was made.
 
     Args:
-        error: The transport error the upload raised.
+        error: The transport error the declaration or the upload raised.
 
     Returns:
-        The upload-failed message naming what interrupted the upload,
-        escaped for Rich markup.
+        A message naming what interrupted the publish and telling the user
+        to publish again, escaped for Rich markup.
     """
-    return f"Could not upload the wheel: {escape(format_request_failure(error))}. Publish the version again."
+    return (
+        f"Could not finish the publish: {escape(format_request_failure(error))}. Run 'pragma providers publish' again."
+    )
+
+
+def format_version_status(status: VersionStatus) -> str:
+    """Format a version status for the terminal.
+
+    Args:
+        status: The version's status.
+
+    Returns:
+        The status label from ``VERSION_STATUS_LABELS`` in Rich markup:
+        green when published, red when failed, yellow while unsettled.
+    """
+    color = VERSION_STATUS_COLORS.get(status, "yellow")
+    return f"[{color}]{escape(VERSION_STATUS_LABELS[status])}[/{color}]"
+
+
+def format_version_message(version: ProviderVersion) -> str:
+    """Format the message column of a version row.
+
+    Args:
+        version: The version to show.
+
+    Returns:
+        The version's own message, ``AWAITING_WHEEL_HINT`` for an
+        ``awaiting_wheel`` version without one, or a dim dash, with Rich
+        markup escaped.
+    """
+    if not version.error_message and version.status == VersionStatus.AWAITING_WHEEL:
+        return escape(AWAITING_WHEEL_HINT)
+
+    return format_optional_value(version.error_message)
 
 
 def _format_deployment_status(status: DeploymentStatus | None) -> str:
@@ -450,42 +520,127 @@ def update(
     typer.echo("Provider project updated successfully.")
 
 
-def upload_wheel(client: PragmaClient, wheel_path: Path, changelog: str | None) -> ProviderVersion:
-    """Upload a wheel and return the version the API accepted for admission.
+def read_declaration(wheel_path: Path, changelog: str | None) -> ProviderVersionDeclaration:
+    """Read what a built wheel declares about itself, before anything is sent to the API.
 
     Args:
-        client: Authenticated SDK client.
         wheel_path: Path to the built ``.whl``.
         changelog: Release notes for the version, or ``None``.
 
     Returns:
-        The ``pending`` version the organization's provider host now admits.
+        The wheel's declaration.
 
     Raises:
-        typer.Exit: With ``FAILURE_EXIT_CODE`` if the upload is interrupted,
-            the API cannot take it, or the API refuses the wheel, a 404
-            included; an interruption prints what broke the upload off and a
-            refusal prints the API's reason.
-        httpx.TransportError: If the API received none of the upload, as
+        typer.Exit: With ``INPUT_ERROR_EXIT_CODE`` if the file is not a zip
+            archive or has no single top-level ``.dist-info`` directory with
+            a ``METADATA`` file in it (see ``UNREADABLE_WHEEL_ERRORS``).
+    """
+    try:
+        return read_wheel_declaration(wheel_path, changelog=changelog)
+    except UNREADABLE_WHEEL_ERRORS as e:
+        error_console.print(f"[red]Error:[/red] {escape(str(e))}. Rebuild the wheel and publish it again.")
+        raise typer.Exit(INPUT_ERROR_EXIT_CODE) from e
+
+
+def report_publish_failure(error: httpx.TransportError | httpx.HTTPStatusError) -> NoReturn:
+    """Print why a declaration or an upload failed, and exit.
+
+    Args:
+        error: The error the declaration or the upload raised.
+
+    Raises:
+        typer.Exit: With ``FAILURE_EXIT_CODE`` if the request broke off after
+            the API received some of it, which prints what broke it off, or
+            if the API refused it or could not take it, which prints the
+            API's reason or the set-up message for an organization that is
+            not ready.
+        httpx.TransportError: If the API received none of the request, as
             ``errors.is_request_unsent`` tells: the request is invalid, or
             connecting failed or timed out.
+    """  # noqa: DOC502
+    if isinstance(error, httpx.HTTPStatusError):
+        check_bootstrap_error(error)
+        error_console.print(f"[red]Error:[/red] {format_publish_refusal(error)}")
+        raise typer.Exit(FAILURE_EXIT_CODE) from error
+
+    if is_request_unsent(error):
+        raise error
+
+    error_console.print(f"[red]Error:[/red] {format_publish_interruption(error)}")
+    raise typer.Exit(FAILURE_EXIT_CODE) from error
+
+
+def declare_version(client: PragmaClient, declaration: ProviderVersionDeclaration) -> DeclaredProviderVersion:
+    """Declare the version a wheel describes.
+
+    Args:
+        client: Authenticated SDK client.
+        declaration: The wheel's declaration.
+
+    Returns:
+        The declared version: ``awaiting_wheel`` for a new declaration, or
+        the version in flight, in whatever status it is in, for a
+        declaration identical to it.
+
+    Raises:
+        typer.Exit: With ``FAILURE_EXIT_CODE`` if the API refuses the
+            declaration, a 404 included, cannot take it, or the request
+            breaks off (see :func:`report_publish_failure`).
+        httpx.TransportError: If the API received none of the request.
+    """  # noqa: DOC502
+    try:
+        return _fetch_with_spinner(
+            f"Declaring {declaration.wheel_filename}...",
+            lambda: client.declare_provider_version(declaration),
+        )
+    except (httpx.TransportError, httpx.HTTPStatusError) as e:
+        report_publish_failure(e)
+
+
+def upload_declared_wheel(client: PragmaClient, operation_id: str, wheel_path: Path) -> ProviderVersion:
+    """Upload the wheel of a declared version.
+
+    Args:
+        client: Authenticated SDK client.
+        operation_id: The declared version's ``operation_id``.
+        wheel_path: Path to the declared ``.whl``.
+
+    Returns:
+        The version after the upload, ``staged`` or further along.
+
+    Raises:
+        typer.Exit: With ``FAILURE_EXIT_CODE`` if the API refuses the upload,
+            a 409 for a publish another one replaced or that has finished
+            included, cannot take it, or the request breaks off (see
+            :func:`report_publish_failure`).
+        httpx.TransportError: If the API received none of the request.
     """  # noqa: DOC502
     try:
         return _fetch_with_spinner(
             f"Uploading {wheel_path.name}...",
-            lambda: client.publish_provider_version(wheel_path, changelog=changelog),
+            lambda: client.upload_provider_wheel(operation_id, wheel_path),
         )
-    except httpx.TransportError as e:
-        if is_request_unsent(e):
-            raise
+    except (httpx.TransportError, httpx.HTTPStatusError) as e:
+        report_publish_failure(e)
 
-        error_console.print(f"[red]Error:[/red] {format_upload_interruption(e)}")
-        raise typer.Exit(FAILURE_EXIT_CODE) from e
-    except httpx.HTTPStatusError as e:
-        check_bootstrap_error(e)
 
-        error_console.print(f"[red]Error:[/red] {format_upload_refusal(e)}")
-        raise typer.Exit(FAILURE_EXIT_CODE) from e
+def is_replaced_publish(version: ProviderVersion, watched_version: ProviderVersion) -> bool:
+    """Tell whether another publish of the same version replaced the one being watched.
+
+    A replacing publish records its own wheel, or none until its upload, so
+    the version's ``wheel_sha256`` no longer matches the one it carried when
+    the watch started. A republish of the same wheel with only a new
+    changelog goes unnoticed.
+
+    Args:
+        version: The version as last read.
+        watched_version: The version the watch started from, which already
+            holds this publish's wheel.
+
+    Returns:
+        ``True`` if the two versions' ``wheel_sha256`` differ.
+    """
+    return version.wheel_sha256 != watched_version.wheel_sha256
 
 
 def compute_watch_end(version: ProviderVersion, accepted_at: float) -> float:
@@ -494,7 +649,7 @@ def compute_watch_end(version: ProviderVersion, accepted_at: float) -> float:
     Args:
         version: The version as last read.
         accepted_at: ``time.monotonic()`` reading taken when the API accepted
-            the upload.
+            the upload, or the declaration when no upload was needed.
 
     Returns:
         ``accepted_at`` plus ``ADMISSION_MINIMUM_WATCH_SECONDS``, or, once the
@@ -516,8 +671,13 @@ def compute_watch_end(version: ProviderVersion, accepted_at: float) -> float:
     return max(minimum_end, deadline_end)
 
 
-def watch_admission(client: PragmaClient, pending_version: ProviderVersion, accepted_at: float) -> ProviderVersion:
-    """Poll a pending version until admission ends it or the watch bound passes.
+def watch_admission(
+    client: PragmaClient,
+    watched_version: ProviderVersion,
+    accepted_at: float,
+    show_status: Callable[[VersionStatus], object],
+) -> ProviderVersion:
+    """Poll a version until it settles, another publish replaces it, or the watch bound passes.
 
     Reads the version every ``ADMISSION_POLL_INTERVAL_SECONDS``. The bound
     follows the version's own admission deadline once the provider host has
@@ -526,42 +686,101 @@ def watch_admission(client: PragmaClient, pending_version: ProviderVersion, acce
 
     Args:
         client: Authenticated SDK client.
-        pending_version: The version the publish returned.
+        watched_version: The version after the upload, or after the
+            declaration when the wheel was already received; the baseline
+            :func:`is_replaced_publish` compares against.
         accepted_at: ``time.monotonic()`` reading taken when the API accepted
-            the upload.
+            the upload, or the declaration when no upload was needed.
+        show_status: Called with the version's status each time it changes,
+            starting with the status of ``watched_version``; not called for
+            a read showing another publish replaced this one.
 
     Returns:
-        The version as last read: ``published``, ``failed``, or still
-        ``pending`` when the watch bound passed first.
+        The version as last read: ``published``, ``failed``, replaced, or
+        still unsettled when the watch bound passed first.
 
     Raises:
         httpx.HTTPStatusError: If reading the version fails.
         httpx.TransportError: If the API cannot be reached.
     """  # noqa: DOC502
-    version = pending_version
+    version = watched_version
+    show_status(version.status)
 
-    while version.status == VersionStatus.PENDING:
+    while version.status not in SETTLED_VERSION_STATUSES:
         remaining_seconds = compute_watch_end(version, accepted_at) - time.monotonic()
 
         if remaining_seconds <= 0:
             break
 
         time.sleep(min(ADMISSION_POLL_INTERVAL_SECONDS, remaining_seconds))
+        previous_status = version.status
         version = client.get_provider_version(version.canonical, version.version)
+
+        if is_replaced_publish(version, watched_version):
+            break
+
+        if version.status != previous_status:
+            show_status(version.status)
 
     return version
 
 
-def print_admission_outcome(version: ProviderVersion) -> None:
-    """Print how admission of a version ended, exiting non-zero unless it published.
+def show_version_status(progress: Progress, task: TaskID, status: VersionStatus) -> None:
+    """Print a version status as a line on stderr and show its label next to the spinner.
+
+    Args:
+        progress: The spinner the publish watch runs behind.
+        task: The spinner's task.
+        status: The version's new status.
+    """
+    label = VERSION_STATUS_LABELS[status]
+    capitalized_label = label[:1].upper() + label[1:]
+    progress.console.print(f"Status: {format_version_status(status)}")
+    progress.update(task, description=f"{escape(capitalized_label)}...")
+
+
+def watch_admission_with_progress(
+    client: PragmaClient,
+    watched_version: ProviderVersion,
+    accepted_at: float,
+) -> ProviderVersion:
+    """Run :func:`watch_admission` behind a spinner on stderr, printing each status the version reaches.
+
+    Args:
+        client: Authenticated SDK client.
+        watched_version: The version after the upload, or after the
+            declaration when the wheel was already received.
+        accepted_at: ``time.monotonic()`` reading taken when the API accepted
+            the upload, or the declaration when no upload was needed.
+
+    Returns:
+        The version as :func:`watch_admission` last read it.
+
+    Raises:
+        httpx.HTTPStatusError: If reading the version fails.
+        httpx.TransportError: If the API cannot be reached.
+    """  # noqa: DOC502
+    with build_spinner_progress() as progress:
+        task = progress.add_task("", total=None)
+        return watch_admission(client, watched_version, accepted_at, partial(show_version_status, progress, task))
+
+
+def print_admission_outcome(version: ProviderVersion, watched_version: ProviderVersion, resume_command: str) -> None:
+    """Print how the publish of a version ended, exiting non-zero unless it published.
 
     Args:
         version: The version as the watch last read it.
+        watched_version: The version the watch started from.
+        resume_command: Command that keeps waiting for the version, from ``build_resume_command``.
 
     Raises:
-        typer.Exit: With ``FAILURE_EXIT_CODE`` if the version failed admission,
-            or with ``ADMISSION_UNCONFIRMED_EXIT_CODE`` if it is still pending.
+        typer.Exit: With ``FAILURE_EXIT_CODE`` if another publish replaced
+            this one or the version failed admission, or with
+            ``ADMISSION_UNCONFIRMED_EXIT_CODE`` if it has not settled.
     """
+    if is_replaced_publish(version, watched_version):
+        report_replaced_publish(version)
+
     match version.status:
         case VersionStatus.PUBLISHED:
             resource_types = format_resource_type_count(len(version.schemas or []))
@@ -573,16 +792,34 @@ def print_admission_outcome(version: ProviderVersion) -> None:
         case VersionStatus.FAILED:
             error_console.print(f"[red]Error:[/red] {escape(version.error_message or '')}")
             raise typer.Exit(FAILURE_EXIT_CODE)
-        case VersionStatus.PENDING:
-            report_unfinished_admission(version)
+        case _:
+            report_unfinished_admission(version, resume_command)
 
 
-def report_watch_failure(reason: str, version: ProviderVersion) -> NoReturn:
+def report_replaced_publish(version: ProviderVersion) -> NoReturn:
+    """Print that another publish of the same version replaced this one, and exit.
+
+    Args:
+        version: The version as the watch last read it.
+
+    Raises:
+        typer.Exit: Always, with ``FAILURE_EXIT_CODE``.
+    """
+    canonical = escape(version.canonical)
+    error_console.print(
+        f"[red]Error:[/red] {canonical} {escape(version.version)} was replaced by another publish of this version."
+    )
+    error_console.print(f"Check it with: pragma providers versions {canonical}")
+    raise typer.Exit(FAILURE_EXIT_CODE)
+
+
+def report_watch_failure(reason: str, version: ProviderVersion, resume_command: str) -> NoReturn:
     """Print why the publish watch stopped reading a version, with how to follow the version, then exit.
 
     Args:
         reason: Why the watch stopped, not escaped for Rich markup.
         version: The version being watched.
+        resume_command: Command that keeps waiting for the version, from ``build_resume_command``.
 
     Raises:
         typer.Exit: Always, with ``ADMISSION_UNCONFIRMED_EXIT_CODE``.
@@ -592,24 +829,58 @@ def report_watch_failure(reason: str, version: ProviderVersion) -> NoReturn:
     error_console.print(
         f"Check admission of {canonical} {escape(version.version)} with: pragma providers versions {canonical}"
     )
+    print_resume_hint(resume_command)
     raise typer.Exit(ADMISSION_UNCONFIRMED_EXIT_CODE)
 
 
-def report_unfinished_admission(version: ProviderVersion) -> NoReturn:
-    """Print that admission of a version has not finished and how to follow it, then exit.
+def report_unfinished_admission(version: ProviderVersion, resume_command: str) -> NoReturn:
+    """Print that a version has not settled, what it waits on, and how to follow it, then exit.
 
     Args:
-        version: The version still being admitted.
+        version: The version as the watch last read it, still unsettled.
+        resume_command: Command that keeps waiting for the version, from ``build_resume_command``.
 
     Raises:
         typer.Exit: Always, with ``ADMISSION_UNCONFIRMED_EXIT_CODE``.
     """
     canonical = escape(version.canonical)
     error_console.print(
-        f"[yellow]Admission of {canonical} {escape(version.version)} has not finished. "
+        f"[yellow]Admission of {canonical} {escape(version.version)} has not finished: "
+        f"{escape(VERSION_STATUS_LABELS[version.status])}. "
         f"Check it with: pragma providers versions {canonical}[/yellow]"
     )
+    print_resume_hint(resume_command)
     raise typer.Exit(ADMISSION_UNCONFIRMED_EXIT_CODE)
+
+
+def print_resume_hint(resume_command: str) -> None:
+    """Print how to keep waiting for admission of the version just published.
+
+    Args:
+        resume_command: Command that keeps waiting for the version, from ``build_resume_command``.
+    """
+    error_console.print(f"To keep waiting, run: {escape(resume_command)}", soft_wrap=True)
+
+
+def build_resume_command(wheel_path: Path, changelog: Path | None) -> str:
+    """Build the publish command that sends the same declaration again.
+
+    The same declaration makes publish watch the version in flight instead
+    of replacing it: the wheel and the changelog are both part of it, so a
+    rebuilt wheel or a missing changelog would replace the version.
+
+    Args:
+        wheel_path: The published wheel.
+        changelog: The release notes file passed to this publish, if any.
+
+    Returns:
+        The command, quoted for a POSIX shell.
+    """
+    arguments = ["pragma", "providers", "publish", "--wheel", str(wheel_path)]
+    if changelog is not None:
+        arguments += ["--changelog", str(changelog)]
+
+    return shlex.join(arguments)
 
 
 @app.command()
@@ -648,17 +919,21 @@ def publish(
 
     Builds the wheel with 'uv build --wheel' into PROJECT_DIRECTORY/dist/
     (the current directory by default), or takes a prebuilt one via '--wheel',
-    and uploads it. The wheel alone identifies the version: its
-    'pragma.provider' entry point names the provider, its metadata carries
-    the version, and the publishing organization comes from the
-    authenticated user. Your organization's provider host then admits the
-    version; the command waits for that and exits non-zero when admission
-    fails or has not finished shortly after its admission deadline. A failed
-    version can be published again.
+    declares the version it describes and uploads it, unless the same
+    declaration is already in flight with its wheel received. The wheel
+    alone identifies the version: its 'pragma.provider' entry point names
+    the provider, its metadata carries the version, and the publishing
+    organization comes from the authenticated user. Your organization's
+    provider host then admits the version; the command waits for that and
+    exits non-zero when admission fails, another publish of the version
+    replaces this one, or the version has not settled shortly after its
+    admission deadline. A failed version can be published again.
 
-    Exit code 3: the upload was accepted but admission is not confirmed,
-    because the watch ended with the version still admitting or stopped for
-    any other reason. A refused upload, a 404 included, exits 1.
+    Exit code 3: the upload was accepted, or the wheel was already received,
+    but admission is not confirmed: the watch ended with the version still
+    unsettled, or could not read the version. Publishing the same wheel
+    again with '--wheel', and the same '--changelog' if one was given,
+    keeps waiting for it.
 
     Examples:
         pragma providers publish
@@ -679,27 +954,34 @@ def publish(
     require_auth(client)
 
     wheel_path = wheel or run_wheel_build(project_directory or Path("."))
+    declaration = read_declaration(wheel_path, changelog_text)
 
-    pending_version = upload_wheel(client, wheel_path, changelog_text)
+    declared_version = declare_version(client, declaration)
+    error_console.print(
+        f"[bold]Publishing[/bold] {escape(declared_version.canonical)} {escape(declared_version.version)}"
+    )
+    error_console.print(f"[dim]Operation {escape(declared_version.operation_id)}[/dim]")
+
+    if declared_version.status == VersionStatus.AWAITING_WHEEL:
+        watched_version = upload_declared_wheel(client, declared_version.operation_id, wheel_path)
+        error_console.print(f"Uploaded {format_wheel_size(declaration.wheel_size)}")
+    else:
+        watched_version = declared_version
+        error_console.print("Wheel already received")
+
     accepted_at = time.monotonic()
-
-    console.print(f"[bold]Publishing[/bold] {escape(pending_version.canonical)} {escape(pending_version.version)}")
-    console.print(f"Uploaded {format_wheel_size(wheel_path.stat().st_size)}")
-    console.print("Admitting on your organization's provider host")
+    resume_command = build_resume_command(wheel_path, changelog)
 
     try:
-        version = _fetch_with_spinner(
-            "Waiting for admission...",
-            lambda: watch_admission(client, pending_version, accepted_at),
-        )
+        last_read_version = watch_admission_with_progress(client, watched_version, accepted_at)
     except httpx.HTTPStatusError as e:
-        report_watch_failure(format_api_error(e), pending_version)
+        report_watch_failure(format_api_error(e), watched_version, resume_command)
     except httpx.TransportError as e:
-        report_watch_failure(format_request_failure(e), pending_version)
+        report_watch_failure(format_request_failure(e), watched_version, resume_command)
     except Exception as e:
-        report_watch_failure(str(e) or type(e).__name__, pending_version)
+        report_watch_failure(str(e) or type(e).__name__, watched_version, resume_command)
 
-    print_admission_outcome(version)
+    print_admission_outcome(last_read_version, watched_version, resume_command)
 
 
 def _merge_install_config(
@@ -1209,10 +1491,10 @@ def versions(
 ):
     """List the versions of a provider with their status.
 
-    A version your organization's provider host is still admitting shows
-    as "admitting"; a failed version shows why it failed. Versions that
-    are not published are visible only to the organization that published
-    them.
+    A version still being published shows where it is, from "waiting for
+    the wheel" to "publishing to the registry"; a failed version shows why
+    it failed. Versions that are not published are visible only to the
+    organization that published them.
 
     Examples:
         pragma providers versions acme/pipeline
@@ -1493,9 +1775,9 @@ def print_versions_table(versions: list[ProviderVersion]) -> None:
         published = published_at.strftime("%Y-%m-%d %H:%M:%S") if published_at else "[dim]-[/dim]"
         table.add_row(
             escape(provider_version.version),
-            VERSION_STATUS_DISPLAY[provider_version.status],
+            format_version_status(provider_version.status),
             published,
-            format_optional_value(provider_version.error_message),
+            format_version_message(provider_version),
         )
 
     console.print(table)
