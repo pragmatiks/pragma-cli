@@ -322,7 +322,7 @@ Identifiers use full words. No `k8s`, `cfg`, `db`, `req`, `res`, `ctx`, `tmp`, `
 Provider event `on_delete` stays (provider deletes external object).
 
 **User-facing surfaces** (HTTP API, OpenAPI, SDK, CLI, web UI, docs):
-- API mirrors CLI: route noun + verb match CLI command (`pragma providers publish` ↔ `POST /providers/publish`), and reverse. Mismatch = finding, not REST-purist path.
+- API mirrors CLI: route noun + verb match CLI command (`pragma providers publish` ↔ `POST /providers/publish`), and reverse. Mismatch = finding, not REST-purist path. A sub-route under a command's noun belongs to that command: `PUT /providers/publish/{operation_id}/wheel` is part of `pragma providers publish`.
 - No internal infrastructure terms (Kubernetes, pod, namespace, NATS, JetStream, SurrealDB internals) or vendor names (Clerk) in route summaries, descriptions, schema field docs, error strings, UI copy. OpenAPI spec feeds public docs verbatim — fix at source.
 - Failure reasons written to a resource's terminal `FAILED` state: no blame ("provider failed to…"), no internal jargon (queue, outbox, dispatch, event id), end with shared `RECOVERY_GUIDANCE` constant — reuse existing reason constants, never per-path prose. Other failures (publication, install) end with the recovery wording their decision doc defines.
 
@@ -348,6 +348,7 @@ Default every attribute, method, function, and variable to a plain public name. 
 
 - A backing field paired with a same-named public property or accessor (`self._jetstream` behind a `jetstream` property).
 - Language-mandated names: dunders (`__init__`, `__enter__`, etc.), `self`, `cls`, the throwaway `_` in unpacking.
+- A parameter a signature requires but the body never reads (`_request` in a FastAPI exception handler): the underscore tells the linter's unused-argument check it is intentional.
 
 Everything else is public. If no same-named public accessor mediates the identifier, drop the underscore. Applies to Python; TS/React keep their own conventions.
 
