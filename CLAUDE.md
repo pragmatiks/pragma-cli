@@ -142,8 +142,8 @@ If you find yourself thinking "I'm pretty sure this library does X" or "the API 
 
 ### Lookup routing
 
-- **exa-search** (skill, `~/.claude/skills/exa-search`) — live web search via the Exa Search API over raw HTTP. Use for library / framework / SDK docs, release notes, blog posts, GitHub issues — any external fact-check. Requires `EXA_API_KEY` in the environment.
-- **exa-contents** (skill, `~/.claude/skills/exa-contents`) — extract text, highlights, or summaries from known URLs via the Exa Contents API over raw HTTP. Invoke the `exa-contents` skill when you already have the URL and need its content. Requires `EXA_API_KEY` in the environment.
+- **WebSearch** — live web search. Use for library / framework / SDK docs, release notes, blog posts, GitHub issues — any external fact-check.
+- **WebFetch** (or the `web-fetch` agent) — read a known URL when you already have it and need its content.
 - **claude-mem** (`mcp__plugin_claude-mem_mcp-search__smart_search`, `mcp__plugin_claude-mem_mcp-search__search`, `mcp__plugin_claude-mem_mcp-search__get_observations`) — search prior session memory. Use when working in an area that has prior session decisions. Cite observation IDs.
 
 ## Solution preference order
