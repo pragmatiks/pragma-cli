@@ -1,5 +1,20 @@
 # Changelog
 
+## v13.0.0 (2026-10-18)
+
+### BREAKING CHANGE
+
+- publish needs a hub that answers declarations with
+wheel_upload; the API no longer accepts wheel uploads.
+
+### Feat
+
+- **providers**: publish uploads a renamed wheel straight to storage
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v18.0.0 (#88)
+
 ## v12.0.0 (2026-10-15)
 
 ### BREAKING CHANGE
