@@ -6,12 +6,16 @@ Pragmatiks providers.
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
+import shutil
 import subprocess
+import tempfile
 import time
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -30,10 +34,17 @@ from pragma_sdk import (
     PragmaClient,
     ProviderVersion,
     ProviderVersionDeclaration,
+    RenamedWheelWriteError,
     UpgradePolicy,
     VersionStatus,
+    WheelExpansionLimitError,
+    WheelUploadAddress,
+    WheelUploadError,
+    WheelUploadOutcome,
     read_wheel_declaration,
+    rename_provider_wheel,
 )
+from pydantic import ValidationError
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
@@ -46,9 +57,12 @@ from pragma_cli.errors import (
     check_bootstrap_error,
     error_console,
     format_api_error,
+    format_known_request_failure,
+    format_os_error_reason,
     format_request_failure,
     is_request_unsent,
     print_api_error,
+    print_unreadable_response,
     report_not_found,
     require_auth,
 )
@@ -72,11 +86,35 @@ ADMISSION_MINIMUM_WATCH_SECONDS = 150.0
 ADMISSION_DEADLINE_MARGIN_SECONDS = 30.0
 """Time the publish watch keeps waiting past a version's ``operation_deadline_at``, for settlement and clock skew."""
 
-PUBLISH_UNAVAILABLE_MESSAGE = "Pragmatiks cannot accept the publish right now. Try again later."
-"""Message for a 503 refusing a declaration or an upload whose body carries no message of its own."""
+DECLARATION_UNAVAILABLE_MESSAGE = "Pragmatiks cannot accept the publish right now. Try again later."
+"""Message for a 503 refusing a declaration whose body carries no message of its own."""
 
-UNREADABLE_WHEEL_ERRORS = (ValueError, zipfile.BadZipFile)
-"""Errors ``pragma_sdk.read_wheel_declaration`` raises when the file is not a readable wheel."""
+UNUSABLE_WHEEL_ERRORS = (ValueError, zipfile.BadZipFile, WheelExpansionLimitError)
+"""Errors ``rename_provider_wheel`` and ``read_wheel_declaration`` raise for a wheel that cannot be published.
+
+The file is not a readable wheel, or it expands past the size limit Pragmatiks sets.
+"""
+
+UPLOAD_FAILURE_ERRORS = (WheelUploadError, httpx.RequestError, OSError)
+"""Errors ``upload_provider_wheel`` raises when the wheel did not reach storage, or its outcome is unknown.
+
+Storage refused the upload, got no readable answer to it, or the wheel could not be read.
+"""
+
+RENAMED_WHEEL_DIRECTORY_PREFIX = "pragma-publish-"
+"""Prefix of the renamed wheel directory, the temporary directory the renamed copy of the wheel is written to.
+
+Lets a leftover one be recognized.
+"""
+
+WHEEL_READ_FAILURE_HINT = "Check the disk holding the wheel, then publish again."
+"""Next step printed when the built wheel fails to read with an operating system error."""
+
+TEMPORARY_DIRECTORY_HINT = "Free space in the temporary directory or point TMPDIR elsewhere, then publish again."
+"""Next step printed when the renamed copy of the wheel cannot be written."""
+
+UPLOADED_WHEEL_LABEL = "wheel uploaded, waiting for Pragmatiks to record it"
+"""Label of an ``awaiting_wheel`` version whose wheel this publish uploaded, until a read shows it ``staged``."""
 
 VERSION_STATUS_LABELS = {
     VersionStatus.AWAITING_WHEEL: "waiting for the wheel",
@@ -89,7 +127,10 @@ VERSION_STATUS_LABELS = {
 }
 """Plain-words label of each version status, naming what an unsettled version waits on."""
 
-AWAITING_WHEEL_HINT = "If your publish stopped, run 'pragma providers publish' again."
+AWAITING_WHEEL_HINT = (
+    "If your publish stopped before its upload finished, run 'pragma providers publish' again. "
+    "A finished upload shows as wheel received once Pragmatiks records it."
+)
 """Message the versions table shows for an ``awaiting_wheel`` version, which has no message of its own."""
 
 VERSION_STATUS_COLORS = {
@@ -265,50 +306,148 @@ def _fetch_with_spinner(description: str, fetch_fn) -> Any:
         return fetch_fn()
 
 
-def format_publish_refusal(error: httpx.HTTPStatusError) -> str:
-    """Format why the API refused or could not take a declaration or an upload.
+def format_declaration_refusal(error: httpx.HTTPStatusError) -> str:
+    """Format why the API refused or could not take a declaration.
 
     Args:
-        error: The HTTP status error the declaration or the upload raised.
+        error: The HTTP status error the declaration raised.
 
     Returns:
-        ``PUBLISH_UNAVAILABLE_MESSAGE`` for a 503 whose body carries no
+        ``DECLARATION_UNAVAILABLE_MESSAGE`` for a 503 whose body carries no
         message, or else ``format_api_error``'s text, escaped for Rich
         markup.
     """
     if error.response.status_code == 503 and parse_api_error_message(error.response) is None:
-        return PUBLISH_UNAVAILABLE_MESSAGE
+        return DECLARATION_UNAVAILABLE_MESSAGE
 
     return escape(format_api_error(error))
 
 
-def format_publish_interruption(error: httpx.TransportError) -> str:
-    """Format why a declaration or an upload broke off after the connection to the API was made.
+def format_declaration_interruption(error: httpx.TransportError) -> str:
+    """Format why a declaration broke off after the connection to the API was made.
 
     Args:
-        error: The transport error the declaration or the upload raised.
+        error: The transport error the declaration raised.
 
     Returns:
-        A message naming what interrupted the publish and telling the user
-        to publish again, escaped for Rich markup.
+        A message naming what interrupted the publish, escaped for Rich
+        markup.
     """
-    return (
-        f"Could not finish the publish: {escape(format_request_failure(error))}. Run 'pragma providers publish' again."
-    )
+    return f"Could not finish the publish: {escape(format_request_failure(error))}."
 
 
-def format_version_status(status: VersionStatus) -> str:
-    """Format a version status for the terminal.
+def format_storage_request_failure(error: httpx.RequestError) -> str:
+    """Format what kept a wheel upload from getting a readable answer from storage, in plain words.
+
+    Never includes the error's own text, so no part of the signed upload
+    address can reach the terminal.
+
+    Args:
+        error: The request error the upload raised.
+
+    Returns:
+        :func:`~pragma_cli.errors.format_known_request_failure`'s phrase for
+        ``storage``, such as ``storage did not answer in time``,
+        ``storage's answer could not be read`` for an answer that could not
+        be decoded, or ``the connection to storage broke off while sending``
+        for a connection that broke while the wheel was being sent. A cause
+        without a phrase of its own gives ``the connection to storage failed
+        (<ErrorType>)``.
+    """
+    if isinstance(error, httpx.DecodingError):
+        return "storage's answer could not be read"
+
+    if isinstance(error, httpx.WriteError):
+        return "the connection to storage broke off while sending"
+
+    if (phrase := format_known_request_failure(error, "storage")) is not None:
+        return phrase
+
+    return f"the connection to storage failed ({type(error).__name__})"
+
+
+def format_upload_failure(error: WheelUploadError | httpx.RequestError | OSError) -> str:
+    """Format why a wheel upload did not store the wheel, or why its outcome is unknown.
+
+    Never includes the signed upload address.
+
+    Args:
+        error: One of ``UPLOAD_FAILURE_ERRORS``.
+
+    Returns:
+        Storage's refusal as the SDK words it, an expired address and
+        storage's request id included; that the wheel could not be read for
+        an OS error; that the outcome is unknown when storage may have
+        received the wheel but no answer arrived (no answer in time, the
+        connection broke off or closed before an answer, or an undecodable
+        answer); else that the wheel could not be uploaded, with the
+        cause. Not escaped for Rich markup.
+    """
+    match error:
+        case WheelUploadError():
+            return str(error)
+        case OSError():
+            return f"Could not read the wheel to upload it: {format_os_error_reason(error)}."
+        case (
+            httpx.ReadTimeout()
+            | httpx.ReadError()
+            | httpx.CloseError()
+            | httpx.RemoteProtocolError()
+            | httpx.DecodingError()
+        ):
+            return f"The upload's outcome is unknown ({format_storage_request_failure(error)})."
+        case _:
+            return f"Could not upload the wheel: {format_storage_request_failure(error)}."
+
+
+def format_version_status(status: VersionStatus, label: str) -> str:
+    """Format a version status's label for the terminal, colored by the status.
 
     Args:
         status: The version's status.
+        label: The status's plain-words label, not escaped for Rich markup.
 
     Returns:
-        The status label from ``VERSION_STATUS_LABELS`` in Rich markup:
-        green when published, red when failed, yellow while unsettled.
+        The label in Rich markup: green when published, red when failed,
+        yellow while unsettled.
     """
     color = VERSION_STATUS_COLORS.get(status, "yellow")
-    return f"[{color}]{escape(VERSION_STATUS_LABELS[status])}[/{color}]"
+    return f"[{color}]{escape(label)}[/{color}]"
+
+
+def format_watched_status_label(declared_version: DeclaredProviderVersion, status: VersionStatus) -> str:
+    """Format the plain-words label of a status the publish watch shows.
+
+    Args:
+        declared_version: The version as this publish declared it; the
+            watch starts only after the upload its ``wheel_upload`` asked
+            for left the wheel in storage.
+        status: The watched version's status.
+
+    Returns:
+        ``UPLOADED_WHEEL_LABEL`` for ``awaiting_wheel`` when the declaration
+        returned an upload address, so this publish uploaded the wheel,
+        else the label from ``VERSION_STATUS_LABELS``. Not escaped for Rich
+        markup.
+    """
+    if declared_version.wheel_upload is not None and status == VersionStatus.AWAITING_WHEEL:
+        return UPLOADED_WHEEL_LABEL
+
+    return VERSION_STATUS_LABELS[status]
+
+
+def format_spinner_description(label: str) -> str:
+    """Format a version status label as the description beside the publish watch's spinner.
+
+    Args:
+        label: The status's plain-words label, not escaped for Rich markup.
+
+    Returns:
+        The capitalized label followed by an ellipsis, escaped for Rich
+        markup.
+    """
+    capitalized_label = label[:1].upper() + label[1:]
+    return f"{escape(capitalized_label)}..."
 
 
 def format_version_message(version: ProviderVersion) -> str:
@@ -520,62 +659,297 @@ def update(
     typer.echo("Provider project updated successfully.")
 
 
-def read_declaration(wheel_path: Path, changelog: str | None) -> ProviderVersionDeclaration:
-    """Read what a built wheel declares about itself, before anything is sent to the API.
+def report_unusable_wheel(error: Exception) -> NoReturn:
+    """Print why a wheel cannot be published, with what to do about it, and exit.
+
+    A wheel expanding past the size limit prints the SDK's message; any
+    other error prints its message followed by a request to rebuild the
+    wheel.
+
+    Args:
+        error: One of ``UNUSABLE_WHEEL_ERRORS``.
+
+    Raises:
+        typer.Exit: Always, with ``INPUT_ERROR_EXIT_CODE``.
+    """
+    if isinstance(error, WheelExpansionLimitError):
+        message = str(error)
+    else:
+        message = f"{str(error).rstrip('.')}. Rebuild the wheel and publish it again."
+
+    error_console.print(f"[red]Error:[/red] {escape(message)}")
+    raise typer.Exit(INPUT_ERROR_EXIT_CODE) from error
+
+
+def report_wheel_error(error: Exception, report_read_failure: Callable[[str, Exception], NoReturn]) -> NoReturn:
+    """Print why a wheel could not be renamed or read, and exit.
+
+    Args:
+        error: One of ``UNUSABLE_WHEEL_ERRORS``.
+        report_read_failure: Reports the operating system error the SDK
+            chained as ``error``'s ``__cause__``, such as
+            :func:`report_wheel_read_failure`; any other error is reported by
+            :func:`report_unusable_wheel`.
+
+    Raises:
+        typer.Exit: Always, with the exit code of the reporter it calls.
+    """  # noqa: DOC502
+    if isinstance(error.__cause__, OSError):
+        report_read_failure(format_os_error_reason(error.__cause__), error)
+
+    report_unusable_wheel(error)
+
+
+def report_wheel_read_failure(reason: str, error: Exception) -> NoReturn:
+    """Print that the built wheel could not be read from disk, with what to do about it, and exit.
+
+    Args:
+        reason: What the operating system reported, without the path it
+            names, such as ``Input/output error``.
+        error: The error reading the wheel raised.
+
+    Raises:
+        typer.Exit: Always, with ``INPUT_ERROR_EXIT_CODE``.
+    """
+    error_console.print(f"[red]Error:[/red] Could not read the wheel: {escape(reason)}. {WHEEL_READ_FAILURE_HINT}")
+    raise typer.Exit(INPUT_ERROR_EXIT_CODE) from error
+
+
+def report_renamed_copy_failure(reason: str, error: Exception) -> NoReturn:
+    """Print that the renamed copy of the wheel could not be written, with what to do about it, and exit.
+
+    Args:
+        reason: What the operating system reported, without the path it
+            names, such as ``No space left on device``.
+        error: The error writing the copy, creating the renamed wheel
+            directory, or reading the copy back, raised.
+
+    Raises:
+        typer.Exit: Always, with ``FAILURE_EXIT_CODE``.
+    """
+    error_console.print(
+        f"[red]Error:[/red] Could not write the renamed copy of the wheel: {escape(reason)}. {TEMPORARY_DIRECTORY_HINT}"
+    )
+    raise typer.Exit(FAILURE_EXIT_CODE) from error
+
+
+def remove_renamed_wheel_directory(directory: Path) -> None:
+    """Remove the renamed wheel directory.
+
+    A directory that cannot be removed prints a warning on stderr naming it,
+    and is left for the user to delete.
+
+    Args:
+        directory: Path :func:`renamed_wheel_directory` yielded.
+    """
+    try:
+        shutil.rmtree(directory)
+    except OSError:
+        error_console.print(
+            f"[yellow]Warning:[/yellow] Could not remove the temporary directory {escape(str(directory))}; "
+            "delete it yourself.",
+            soft_wrap=True,
+        )
+
+
+@contextmanager
+def renamed_wheel_directory() -> Iterator[Path]:
+    """Scope the renamed wheel directory, the temporary directory the renamed copy of the wheel is written to.
+
+    The directory is made on entry in the system's temporary directory,
+    which ``TMPDIR`` names, under ``RENAMED_WHEEL_DIRECTORY_PREFIX``, before
+    the CLI knows whether the wheel needs a renamed copy, so a temporary
+    directory that cannot be written fails a wheel needing none too. It is
+    removed on exit; a directory that cannot be removed never fails a
+    publish whose declaration and upload succeeded (see
+    :func:`remove_renamed_wheel_directory`).
+
+    Yields:
+        Path to the directory.
+
+    Raises:
+        typer.Exit: With ``FAILURE_EXIT_CODE`` if the directory cannot be
+            created (see :func:`report_renamed_copy_failure`).
+    """  # noqa: DOC502
+    try:
+        directory = Path(tempfile.mkdtemp(prefix=RENAMED_WHEEL_DIRECTORY_PREFIX))
+    except OSError as e:
+        report_renamed_copy_failure(format_os_error_reason(e), e)
+
+    try:
+        yield directory
+    finally:
+        remove_renamed_wheel_directory(directory)
+
+
+def rename_wheel(wheel_path: Path, organization_slug: str, destination_directory: Path) -> Path:
+    """Rename a built wheel to the organization's distribution name, behind a spinner on stderr.
+
+    Args:
+        wheel_path: Path to the built ``.whl``, left unchanged.
+        organization_slug: Slug of the publishing organization.
+        destination_directory: The renamed wheel directory the renamed copy
+            is written to.
+
+    Returns:
+        Path to the renamed copy, or ``wheel_path`` when no copy was written
+        because the wheel already carries the distribution name or names no
+        single provider.
+
+    Raises:
+        typer.Exit: With ``INPUT_ERROR_EXIT_CODE`` if reading the open wheel
+            fails with an operating system error, which
+            ``rename_provider_wheel`` raises as the ``__cause__`` of a
+            :class:`zipfile.BadZipFile` (see
+            :func:`report_wheel_read_failure`), or if the wheel cannot be
+            published for any other reason (see ``UNUSABLE_WHEEL_ERRORS``);
+            or with ``FAILURE_EXIT_CODE`` if the renamed copy cannot be
+            written.
+        OSError: If ``wheel_path`` cannot be opened.
+    """  # noqa: DOC502
+    try:
+        return _fetch_with_spinner(
+            f"Renaming {wheel_path.name}...",
+            lambda: rename_provider_wheel(wheel_path, organization_slug, destination_directory),
+        )
+    except UNUSABLE_WHEEL_ERRORS as e:
+        report_wheel_error(e, report_wheel_read_failure)
+    except RenamedWheelWriteError as e:
+        report_renamed_copy_failure(e.reason, e)
+
+
+def print_renamed_wheel(wheel_path: Path, renamed_wheel_path: Path) -> None:
+    """Print the renamed copy's filename on stderr when renaming changed it.
+
+    A copy keeps the built wheel's filename when renaming changed only its
+    ``.dist-info`` directory or ``METADATA``; nothing is printed for it.
 
     Args:
         wheel_path: Path to the built ``.whl``.
+        renamed_wheel_path: Path to the renamed copy :func:`rename_wheel` wrote.
+    """
+    if renamed_wheel_path.name != wheel_path.name:
+        error_console.print(f"Renamed to {escape(renamed_wheel_path.name)}")
+
+
+def read_declaration(
+    wheel_path: Path,
+    changelog: str | None,
+    report_read_failure: Callable[[str, Exception], NoReturn],
+) -> ProviderVersionDeclaration:
+    """Read what a wheel declares about itself, behind a spinner on stderr.
+
+    Args:
+        wheel_path: Path to the ``.whl`` to declare: the built wheel, or the
+            renamed copy :func:`rename_wheel` wrote.
         changelog: Release notes for the version, or ``None``.
+        report_read_failure: Reports an operating system error opening or
+            reading ``wheel_path``: :func:`report_wheel_read_failure` for the
+            built wheel, :func:`report_renamed_copy_failure` for the renamed
+            copy.
 
     Returns:
         The wheel's declaration.
 
     Raises:
-        typer.Exit: With ``INPUT_ERROR_EXIT_CODE`` if the file is not a zip
-            archive or has no single top-level ``.dist-info`` directory with
-            a ``METADATA`` file in it (see ``UNREADABLE_WHEEL_ERRORS``).
-    """
+        typer.Exit: With the exit code of ``report_read_failure`` if opening
+            or reading the wheel fails with an operating system error, which
+            ``read_wheel_declaration`` raises as is or as the ``__cause__``
+            of a :class:`zipfile.BadZipFile`; or with
+            ``INPUT_ERROR_EXIT_CODE`` if the wheel cannot be published for
+            any other reason (see :func:`report_unusable_wheel`).
+    """  # noqa: DOC502
     try:
-        return read_wheel_declaration(wheel_path, changelog=changelog)
-    except UNREADABLE_WHEEL_ERRORS as e:
-        error_console.print(f"[red]Error:[/red] {escape(str(e))}. Rebuild the wheel and publish it again.")
-        raise typer.Exit(INPUT_ERROR_EXIT_CODE) from e
+        return _fetch_with_spinner(
+            f"Reading {wheel_path.name}...",
+            lambda: read_wheel_declaration(wheel_path, changelog=changelog),
+        )
+    except OSError as e:
+        report_read_failure(format_os_error_reason(e), e)
+    except UNUSABLE_WHEEL_ERRORS as e:
+        report_wheel_error(e, report_read_failure)
 
 
-def report_publish_failure(error: httpx.TransportError | httpx.HTTPStatusError) -> NoReturn:
-    """Print why a declaration or an upload failed, and exit.
+def print_publish_again_hint(republish_command: str) -> None:
+    """Print how to publish the same wheel again after a publish stopped before its watch.
 
     Args:
-        error: The error the declaration or the upload raised.
+        republish_command: Command that publishes the same wheel again, from ``build_republish_command``.
+    """
+    error_console.print(f"To publish it again, run: {escape(republish_command)}", soft_wrap=True)
+
+
+def report_declaration_failure(error: httpx.TransportError | httpx.HTTPStatusError, republish_command: str) -> NoReturn:
+    """Print why a declaration failed, and exit.
+
+    Args:
+        error: The error the declaration raised.
+        republish_command: Command that publishes the same wheel again, from ``build_republish_command``.
 
     Raises:
         typer.Exit: With ``FAILURE_EXIT_CODE`` if the request broke off after
-            the API received some of it, which prints what broke it off, or
-            if the API refused it or could not take it, which prints the
-            API's reason or the set-up message for an organization that is
-            not ready.
+            the API received some of it, which prints what broke it off and
+            the command that publishes the wheel again, or if the API
+            refused it or could not take it, which prints the API's reason
+            or the set-up message for an organization that is not ready,
+            and, for any other ``5xx``, a proxy's included, the command that
+            publishes the wheel again.
         httpx.TransportError: If the API received none of the request, as
             ``errors.is_request_unsent`` tells: the request is invalid, or
             connecting failed or timed out.
     """  # noqa: DOC502
     if isinstance(error, httpx.HTTPStatusError):
         check_bootstrap_error(error)
-        error_console.print(f"[red]Error:[/red] {format_publish_refusal(error)}")
+        error_console.print(f"[red]Error:[/red] {format_declaration_refusal(error)}")
+
+        if error.response.is_server_error:
+            print_publish_again_hint(republish_command)
+
         raise typer.Exit(FAILURE_EXIT_CODE) from error
 
     if is_request_unsent(error):
         raise error
 
-    error_console.print(f"[red]Error:[/red] {format_publish_interruption(error)}")
+    error_console.print(f"[red]Error:[/red] {format_declaration_interruption(error)}")
+    print_publish_again_hint(republish_command)
     raise typer.Exit(FAILURE_EXIT_CODE) from error
 
 
-def declare_version(client: PragmaClient, declaration: ProviderVersionDeclaration) -> DeclaredProviderVersion:
+def report_unreadable_declaration_response(
+    error: ValidationError | json.JSONDecodeError | httpx.DecodingError | UnicodeDecodeError,
+    republish_command: str,
+) -> NoReturn:
+    """Print that the API answered the declaration with data the CLI cannot read, and exit.
+
+    Prints which fields are invalid and why, never their values, so no part
+    of a signed upload address reaches the terminal, or why the body could
+    not be decoded. Ends with the command that publishes the wheel again.
+
+    Args:
+        error: The error reading the declaration's answer raised: an invalid
+            model, a body that is not JSON, or a body that could not be
+            decoded, its JSON text not valid UTF-8 included.
+        republish_command: Command that publishes the same wheel again, from ``build_republish_command``.
+
+    Raises:
+        typer.Exit: Always, with ``FAILURE_EXIT_CODE``.
+    """
+    print_unreadable_response(error)
+    print_publish_again_hint(republish_command)
+    raise typer.Exit(FAILURE_EXIT_CODE) from error
+
+
+def declare_version(
+    client: PragmaClient,
+    declaration: ProviderVersionDeclaration,
+    republish_command: str,
+) -> DeclaredProviderVersion:
     """Declare the version a wheel describes.
 
     Args:
         client: Authenticated SDK client.
         declaration: The wheel's declaration.
+        republish_command: Command that publishes the same wheel again, from ``build_republish_command``.
 
     Returns:
         The declared version: ``awaiting_wheel`` for a new declaration, or
@@ -585,7 +959,9 @@ def declare_version(client: PragmaClient, declaration: ProviderVersionDeclaratio
     Raises:
         typer.Exit: With ``FAILURE_EXIT_CODE`` if the API refuses the
             declaration, a 404 included, cannot take it, or the request
-            breaks off (see :func:`report_publish_failure`).
+            breaks off (see :func:`report_declaration_failure`), or if its
+            answer cannot be read (see
+            :func:`report_unreadable_declaration_response`).
         httpx.TransportError: If the API received none of the request.
     """  # noqa: DOC502
     try:
@@ -594,70 +970,180 @@ def declare_version(client: PragmaClient, declaration: ProviderVersionDeclaratio
             lambda: client.declare_provider_version(declaration),
         )
     except (httpx.TransportError, httpx.HTTPStatusError) as e:
-        report_publish_failure(e)
+        report_declaration_failure(e, republish_command)
+    except (ValidationError, json.JSONDecodeError, httpx.DecodingError, UnicodeDecodeError) as e:
+        report_unreadable_declaration_response(e, republish_command)
 
 
-def upload_declared_wheel(client: PragmaClient, operation_id: str, wheel_path: Path) -> ProviderVersion:
-    """Upload the wheel of a declared version.
+def print_declared_version(declared_version: DeclaredProviderVersion) -> None:
+    """Print the declared version and its operation id on stderr.
+
+    Args:
+        declared_version: The version as this publish declared it.
+    """
+    error_console.print(
+        f"[bold]Publishing[/bold] {escape(declared_version.canonical)} {escape(declared_version.version)}"
+    )
+    error_console.print(f"[dim]Operation {escape(declared_version.operation_id)}[/dim]")
+
+
+def print_upload_outcome(outcome: WheelUploadOutcome, wheel_size: int) -> None:
+    """Print on stderr how this publish's upload left the wheel in storage.
+
+    Args:
+        outcome: What the upload returned.
+        wheel_size: Size of the wheel in bytes.
+    """
+    match outcome:
+        case WheelUploadOutcome.ALREADY_STORED:
+            error_console.print("Wheel already uploaded")
+        case WheelUploadOutcome.STORED:
+            error_console.print(f"Uploaded {format_wheel_size(wheel_size)}")
+
+
+def report_upload_failure(error: WheelUploadError | httpx.RequestError | OSError, republish_command: str) -> NoReturn:
+    """Print why a wheel upload failed or why its outcome is unknown, and exit.
+
+    Ends with the command that publishes the wheel again.
+
+    Args:
+        error: One of ``UPLOAD_FAILURE_ERRORS``.
+        republish_command: Command that publishes the same wheel again, from ``build_republish_command``.
+
+    Raises:
+        typer.Exit: Always, with ``FAILURE_EXIT_CODE``.
+    """
+    error_console.print(f"[red]Error:[/red] {escape(format_upload_failure(error))}")
+    print_publish_again_hint(republish_command)
+    raise typer.Exit(FAILURE_EXIT_CODE) from error
+
+
+def upload_declared_wheel(
+    client: PragmaClient,
+    wheel_upload: WheelUploadAddress,
+    wheel_path: Path,
+    republish_command: str,
+) -> WheelUploadOutcome:
+    """Upload the wheel of a declared version to the address its declaration returned.
 
     Args:
         client: Authenticated SDK client.
-        operation_id: The declared version's ``operation_id``.
-        wheel_path: Path to the declared ``.whl``.
+        wheel_upload: The declared version's ``wheel_upload``.
+        wheel_path: Path to the declared, renamed ``.whl``.
+        republish_command: Command that publishes the same wheel again, from ``build_republish_command``.
 
     Returns:
-        The version after the upload, ``staged`` or further along.
+        Whether this upload stored the wheel or storage already held it.
 
     Raises:
-        typer.Exit: With ``FAILURE_EXIT_CODE`` if the API refuses the upload,
-            a 409 for a publish another one replaced or that has finished
-            included, cannot take it, or the request breaks off (see
-            :func:`report_publish_failure`).
-        httpx.TransportError: If the API received none of the request.
+        typer.Exit: With ``FAILURE_EXIT_CODE`` if storage refused the
+            upload, its address expired included, the upload got no
+            readable answer from storage, or the wheel could not be read
+            (see :func:`report_upload_failure`).
     """  # noqa: DOC502
     try:
         return _fetch_with_spinner(
             f"Uploading {wheel_path.name}...",
-            lambda: client.upload_provider_wheel(operation_id, wheel_path),
+            lambda: client.upload_provider_wheel(wheel_upload, wheel_path),
         )
-    except (httpx.TransportError, httpx.HTTPStatusError) as e:
-        report_publish_failure(e)
+    except UPLOAD_FAILURE_ERRORS as e:
+        report_upload_failure(e, republish_command)
 
 
-def is_replaced_publish(version: ProviderVersion, watched_version: ProviderVersion) -> bool:
+def publish_wheel(
+    client: PragmaClient,
+    wheel_path: Path,
+    changelog: str | None,
+    republish_command: str,
+) -> DeclaredProviderVersion:
+    """Declare a built wheel under the caller's organization's distribution name, and upload it when asked.
+
+    Reads the caller's organization first, and uploads the wheel only when
+    the declaration returns an upload address; without one, prints that the
+    wheel was already received and a ``Status:`` line for the declared
+    status. Prints each step on stderr.
+
+    Args:
+        client: Authenticated SDK client.
+        wheel_path: Path to the built ``.whl``, left unchanged.
+        changelog: Release notes for the version, or ``None``.
+        republish_command: Command that publishes the same wheel again, from ``build_republish_command``.
+
+    Returns:
+        The version as this publish declared it; its ``wheel_upload`` is set
+        when this publish uploaded the wheel.
+
+    Raises:
+        typer.Exit: If the renamed copy cannot be written or read back, the
+            wheel cannot be published, or the declaration or the upload
+            fails (see :func:`renamed_wheel_directory`,
+            :func:`rename_wheel`, :func:`read_declaration`,
+            :func:`declare_version` and :func:`upload_declared_wheel`).
+        httpx.HTTPStatusError: If the API refuses to name the caller's
+            organization.
+        httpx.TransportError: If reading the caller's organization fails in
+            transit, or the API received none of the declaration.
+        OSError: If the wheel cannot be opened.
+    """  # noqa: DOC502
+    organization = _fetch_with_spinner("Reading your organization...", client.get_current_organization)
+
+    with renamed_wheel_directory() as directory:
+        declared_wheel_path = rename_wheel(wheel_path, organization.slug, directory)
+
+        if declared_wheel_path == wheel_path:
+            declaration = read_declaration(wheel_path, changelog, report_wheel_read_failure)
+        else:
+            print_renamed_wheel(wheel_path, declared_wheel_path)
+            declaration = read_declaration(declared_wheel_path, changelog, report_renamed_copy_failure)
+
+        declared_version = declare_version(client, declaration, republish_command)
+        print_declared_version(declared_version)
+
+        if declared_version.wheel_upload is None:
+            error_console.print("Wheel already received")
+            print_version_status(declared_version.status, VERSION_STATUS_LABELS[declared_version.status])
+        else:
+            outcome = upload_declared_wheel(
+                client, declared_version.wheel_upload, declared_wheel_path, republish_command
+            )
+            print_upload_outcome(outcome, declaration.wheel_size)
+
+    return declared_version
+
+
+def is_replaced_publish(version: ProviderVersion, declared_version: DeclaredProviderVersion) -> bool:
     """Tell whether another publish of the same version replaced the one being watched.
 
-    A replacing publish records its own wheel, or none until its upload, so
-    the version's ``wheel_sha256`` no longer matches the one it carried when
-    the watch started. A republish of the same wheel with only a new
-    changelog goes unnoticed.
+    A replacing publish declares the version under its own operation, so the
+    version's ``operation_id`` no longer matches the one it carried when the
+    watch started.
 
     Args:
         version: The version as last read.
-        watched_version: The version the watch started from, which already
-            holds this publish's wheel.
+        declared_version: The version the watch started from, as this
+            publish declared it.
 
     Returns:
-        ``True`` if the two versions' ``wheel_sha256`` differ.
+        ``True`` if the two versions' ``operation_id`` differ.
     """
-    return version.wheel_sha256 != watched_version.wheel_sha256
+    return version.operation_id != declared_version.operation_id
 
 
-def compute_watch_end(version: ProviderVersion, accepted_at: float) -> float:
+def compute_watch_end(version: ProviderVersion, watch_started_at: float) -> float:
     """Compute when the publish watch stops waiting for a version, on the monotonic clock.
 
     Args:
         version: The version as last read.
-        accepted_at: ``time.monotonic()`` reading taken when the API accepted
-            the upload, or the declaration when no upload was needed.
+        watch_started_at: ``time.monotonic()`` reading taken when the upload
+            finished, or the declaration when no upload was needed.
 
     Returns:
-        ``accepted_at`` plus ``ADMISSION_MINIMUM_WATCH_SECONDS``, or, once the
-        provider host has taken the version, its ``operation_deadline_at``
-        plus ``ADMISSION_DEADLINE_MARGIN_SECONDS`` when that is later. A
-        deadline without a timezone is read as UTC.
+        ``watch_started_at`` plus ``ADMISSION_MINIMUM_WATCH_SECONDS``, or,
+        once the provider host has taken the version, its
+        ``operation_deadline_at`` plus ``ADMISSION_DEADLINE_MARGIN_SECONDS``
+        when that is later. A deadline without a timezone is read as UTC.
     """
-    minimum_end = accepted_at + ADMISSION_MINIMUM_WATCH_SECONDS
+    minimum_end = watch_started_at + ADMISSION_MINIMUM_WATCH_SECONDS
     deadline = version.operation_deadline_at
 
     if deadline is None:
@@ -673,8 +1159,8 @@ def compute_watch_end(version: ProviderVersion, accepted_at: float) -> float:
 
 def watch_admission(
     client: PragmaClient,
-    watched_version: ProviderVersion,
-    accepted_at: float,
+    declared_version: DeclaredProviderVersion,
+    watch_started_at: float,
     show_status: Callable[[VersionStatus], object],
 ) -> ProviderVersion:
     """Poll a version until it settles, another publish replaces it, or the watch bound passes.
@@ -686,14 +1172,15 @@ def watch_admission(
 
     Args:
         client: Authenticated SDK client.
-        watched_version: The version after the upload, or after the
-            declaration when the wheel was already received; the baseline
-            :func:`is_replaced_publish` compares against.
-        accepted_at: ``time.monotonic()`` reading taken when the API accepted
-            the upload, or the declaration when no upload was needed.
-        show_status: Called with the version's status each time it changes,
-            starting with the status of ``watched_version``; not called for
-            a read showing another publish replaced this one.
+        declared_version: The version as this publish declared it, which
+            :func:`is_replaced_publish` compares each read against.
+        watch_started_at: ``time.monotonic()`` reading taken when the upload
+            finished, or the declaration when no upload was needed.
+        show_status: Called with the version's status each time a read
+            shows a status different from the previous read, the first read
+            being compared with ``declared_version``; never called for
+            ``declared_version`` itself, nor for a read showing another
+            publish replaced this one.
 
     Returns:
         The version as last read: ``published``, ``failed``, replaced, or
@@ -703,11 +1190,10 @@ def watch_admission(
         httpx.HTTPStatusError: If reading the version fails.
         httpx.TransportError: If the API cannot be reached.
     """  # noqa: DOC502
-    version = watched_version
-    show_status(version.status)
+    version = declared_version
 
     while version.status not in SETTLED_VERSION_STATUSES:
-        remaining_seconds = compute_watch_end(version, accepted_at) - time.monotonic()
+        remaining_seconds = compute_watch_end(version, watch_started_at) - time.monotonic()
 
         if remaining_seconds <= 0:
             break
@@ -716,7 +1202,7 @@ def watch_admission(
         previous_status = version.status
         version = client.get_provider_version(version.canonical, version.version)
 
-        if is_replaced_publish(version, watched_version):
+        if is_replaced_publish(version, declared_version):
             break
 
         if version.status != previous_status:
@@ -725,33 +1211,50 @@ def watch_admission(
     return version
 
 
-def show_version_status(progress: Progress, task: TaskID, status: VersionStatus) -> None:
-    """Print a version status as a line on stderr and show its label next to the spinner.
+def print_version_status(status: VersionStatus, label: str) -> None:
+    """Print a version status as a ``Status:`` line on stderr.
+
+    Args:
+        status: The version's status.
+        label: The status's plain-words label, not escaped for Rich markup.
+    """
+    error_console.print(f"Status: {format_version_status(status, label)}")
+
+
+def show_status_change(
+    progress: Progress,
+    task: TaskID,
+    declared_version: DeclaredProviderVersion,
+    status: VersionStatus,
+) -> None:
+    """Show a status the publish watch reached: a ``Status:`` line on stderr and its label beside the spinner.
 
     Args:
         progress: The spinner the publish watch runs behind.
         task: The spinner's task.
+        declared_version: The version as this publish declared it.
         status: The version's new status.
     """
-    label = VERSION_STATUS_LABELS[status]
-    capitalized_label = label[:1].upper() + label[1:]
-    progress.console.print(f"Status: {format_version_status(status)}")
-    progress.update(task, description=f"{escape(capitalized_label)}...")
+    label = format_watched_status_label(declared_version, status)
+    print_version_status(status, label)
+    progress.update(task, description=format_spinner_description(label))
 
 
 def watch_admission_with_progress(
     client: PragmaClient,
-    watched_version: ProviderVersion,
-    accepted_at: float,
+    declared_version: DeclaredProviderVersion,
+    watch_started_at: float,
 ) -> ProviderVersion:
     """Run :func:`watch_admission` behind a spinner on stderr, printing each status the version reaches.
 
+    The spinner starts at the declared status's label from
+    :func:`format_watched_status_label`.
+
     Args:
         client: Authenticated SDK client.
-        watched_version: The version after the upload, or after the
-            declaration when the wheel was already received.
-        accepted_at: ``time.monotonic()`` reading taken when the API accepted
-            the upload, or the declaration when no upload was needed.
+        declared_version: The version as this publish declared it.
+        watch_started_at: ``time.monotonic()`` reading taken when the upload
+            finished, or the declaration when no upload was needed.
 
     Returns:
         The version as :func:`watch_admission` last read it.
@@ -760,25 +1263,32 @@ def watch_admission_with_progress(
         httpx.HTTPStatusError: If reading the version fails.
         httpx.TransportError: If the API cannot be reached.
     """  # noqa: DOC502
+    starting_label = format_watched_status_label(declared_version, declared_version.status)
+
     with build_spinner_progress() as progress:
-        task = progress.add_task("", total=None)
-        return watch_admission(client, watched_version, accepted_at, partial(show_version_status, progress, task))
+        task = progress.add_task(format_spinner_description(starting_label), total=None)
+        show_status = partial(show_status_change, progress, task, declared_version)
+        return watch_admission(client, declared_version, watch_started_at, show_status)
 
 
-def print_admission_outcome(version: ProviderVersion, watched_version: ProviderVersion, resume_command: str) -> None:
+def print_admission_outcome(
+    version: ProviderVersion,
+    declared_version: DeclaredProviderVersion,
+    republish_command: str,
+) -> None:
     """Print how the publish of a version ended, exiting non-zero unless it published.
 
     Args:
         version: The version as the watch last read it.
-        watched_version: The version the watch started from.
-        resume_command: Command that keeps waiting for the version, from ``build_resume_command``.
+        declared_version: The version as this publish declared it.
+        republish_command: Command that keeps waiting for the version, from ``build_republish_command``.
 
     Raises:
         typer.Exit: With ``FAILURE_EXIT_CODE`` if another publish replaced
             this one or the version failed admission, or with
             ``ADMISSION_UNCONFIRMED_EXIT_CODE`` if it has not settled.
     """
-    if is_replaced_publish(version, watched_version):
+    if is_replaced_publish(version, declared_version):
         report_replaced_publish(version)
 
     match version.status:
@@ -793,7 +1303,8 @@ def print_admission_outcome(version: ProviderVersion, watched_version: ProviderV
             error_console.print(f"[red]Error:[/red] {escape(version.error_message or '')}")
             raise typer.Exit(FAILURE_EXIT_CODE)
         case _:
-            report_unfinished_admission(version, resume_command)
+            status_label = format_watched_status_label(declared_version, version.status)
+            report_unfinished_admission(version, status_label, republish_command)
 
 
 def report_replaced_publish(version: ProviderVersion) -> NoReturn:
@@ -813,13 +1324,13 @@ def report_replaced_publish(version: ProviderVersion) -> NoReturn:
     raise typer.Exit(FAILURE_EXIT_CODE)
 
 
-def report_watch_failure(reason: str, version: ProviderVersion, resume_command: str) -> NoReturn:
+def report_watch_failure(reason: str, version: ProviderVersion, republish_command: str) -> NoReturn:
     """Print why the publish watch stopped reading a version, with how to follow the version, then exit.
 
     Args:
         reason: Why the watch stopped, not escaped for Rich markup.
         version: The version being watched.
-        resume_command: Command that keeps waiting for the version, from ``build_resume_command``.
+        republish_command: Command that keeps waiting for the version, from ``build_republish_command``.
 
     Raises:
         typer.Exit: Always, with ``ADMISSION_UNCONFIRMED_EXIT_CODE``.
@@ -829,16 +1340,19 @@ def report_watch_failure(reason: str, version: ProviderVersion, resume_command: 
     error_console.print(
         f"Check admission of {canonical} {escape(version.version)} with: pragma providers versions {canonical}"
     )
-    print_resume_hint(resume_command)
+    print_keep_waiting_hint(republish_command)
     raise typer.Exit(ADMISSION_UNCONFIRMED_EXIT_CODE)
 
 
-def report_unfinished_admission(version: ProviderVersion, resume_command: str) -> NoReturn:
+def report_unfinished_admission(version: ProviderVersion, status_label: str, republish_command: str) -> NoReturn:
     """Print that a version has not settled, what it waits on, and how to follow it, then exit.
 
     Args:
         version: The version as the watch last read it, still unsettled.
-        resume_command: Command that keeps waiting for the version, from ``build_resume_command``.
+        status_label: Plain-words label of the version's status, from
+            :func:`format_watched_status_label`, not escaped for Rich
+            markup.
+        republish_command: Command that keeps waiting for the version, from ``build_republish_command``.
 
     Raises:
         typer.Exit: Always, with ``ADMISSION_UNCONFIRMED_EXIT_CODE``.
@@ -846,31 +1360,33 @@ def report_unfinished_admission(version: ProviderVersion, resume_command: str) -
     canonical = escape(version.canonical)
     error_console.print(
         f"[yellow]Admission of {canonical} {escape(version.version)} has not finished: "
-        f"{escape(VERSION_STATUS_LABELS[version.status])}. "
+        f"{escape(status_label)}. "
         f"Check it with: pragma providers versions {canonical}[/yellow]"
     )
-    print_resume_hint(resume_command)
+    print_keep_waiting_hint(republish_command)
     raise typer.Exit(ADMISSION_UNCONFIRMED_EXIT_CODE)
 
 
-def print_resume_hint(resume_command: str) -> None:
+def print_keep_waiting_hint(republish_command: str) -> None:
     """Print how to keep waiting for admission of the version just published.
 
     Args:
-        resume_command: Command that keeps waiting for the version, from ``build_resume_command``.
+        republish_command: Command that keeps waiting for the version, from ``build_republish_command``.
     """
-    error_console.print(f"To keep waiting, run: {escape(resume_command)}", soft_wrap=True)
+    error_console.print(f"To keep waiting, run: {escape(republish_command)}", soft_wrap=True)
 
 
-def build_resume_command(wheel_path: Path, changelog: Path | None) -> str:
+def build_republish_command(wheel_path: Path, changelog: Path | None) -> str:
     """Build the publish command that sends the same declaration again.
 
     The same declaration makes publish watch the version in flight instead
     of replacing it: the wheel and the changelog are both part of it, so a
-    rebuilt wheel or a missing changelog would replace the version.
+    rebuilt wheel or a missing changelog would replace the version. The
+    renamed copy is the same only when renamed by the same Python and zlib,
+    so the command is meant for the environment that ran this publish.
 
     Args:
-        wheel_path: The published wheel.
+        wheel_path: The built wheel this publish read, not its renamed copy.
         changelog: The release notes file passed to this publish, if any.
 
     Returns:
@@ -898,7 +1414,7 @@ def publish(
         Path | None,
         typer.Option(
             "--wheel",
-            help="Prebuilt .whl to upload instead of building one; not combined with PROJECT_DIRECTORY",
+            help="Prebuilt .whl to publish instead of building one; not combined with PROJECT_DIRECTORY",
             exists=True,
             dir_okay=False,
             readable=True,
@@ -918,22 +1434,23 @@ def publish(
     """Publish a new provider version and wait for its admission.
 
     Builds the wheel with 'uv build --wheel' into PROJECT_DIRECTORY/dist/
-    (the current directory by default), or takes a prebuilt one via '--wheel',
-    declares the version it describes and uploads it, unless the same
-    declaration is already in flight with its wheel received. The wheel
-    alone identifies the version: its 'pragma.provider' entry point names
-    the provider, its metadata carries the version, and the publishing
-    organization comes from the authenticated user. Your organization's
-    provider host then admits the version; the command waits for that and
-    exits non-zero when admission fails, another publish of the version
-    replaces this one, or the version has not settled shortly after its
-    admission deadline. A failed version can be published again.
+    (the current directory by default), or takes a prebuilt one via
+    '--wheel', renames a copy under your organization's distribution name
+    (the original file is left unchanged), declares the version it
+    describes, and uploads the copy unless Pragmatiks already received it.
+    The wheel alone identifies the version: its 'pragma.provider' entry
+    point names the provider, its metadata carries the version, and the
+    publishing organization comes from the authenticated user. Your
+    organization's provider host then admits the version; the command waits
+    for that and exits non-zero when admission fails, another publish of
+    the version replaces this one, or the version has not settled shortly
+    after its admission deadline. A failed version can be published again.
 
-    Exit code 3: the upload was accepted, or the wheel was already received,
-    but admission is not confirmed: the watch ended with the version still
+    Exit code 3: the wheel was uploaded, or was already received, but
+    admission is not confirmed: the watch ended with the version still
     unsettled, or could not read the version. Publishing the same wheel
-    again with '--wheel', and the same '--changelog' if one was given,
-    keeps waiting for it.
+    again with '--wheel', and the same '--changelog' if one was given, from
+    the same environment, keeps waiting for it.
 
     Examples:
         pragma providers publish
@@ -954,34 +1471,21 @@ def publish(
     require_auth(client)
 
     wheel_path = wheel or run_wheel_build(project_directory or Path("."))
-    declaration = read_declaration(wheel_path, changelog_text)
+    republish_command = build_republish_command(wheel_path, changelog)
 
-    declared_version = declare_version(client, declaration)
-    error_console.print(
-        f"[bold]Publishing[/bold] {escape(declared_version.canonical)} {escape(declared_version.version)}"
-    )
-    error_console.print(f"[dim]Operation {escape(declared_version.operation_id)}[/dim]")
-
-    if declared_version.status == VersionStatus.AWAITING_WHEEL:
-        watched_version = upload_declared_wheel(client, declared_version.operation_id, wheel_path)
-        error_console.print(f"Uploaded {format_wheel_size(declaration.wheel_size)}")
-    else:
-        watched_version = declared_version
-        error_console.print("Wheel already received")
-
-    accepted_at = time.monotonic()
-    resume_command = build_resume_command(wheel_path, changelog)
+    declared_version = publish_wheel(client, wheel_path, changelog_text, republish_command)
+    watch_started_at = time.monotonic()
 
     try:
-        last_read_version = watch_admission_with_progress(client, watched_version, accepted_at)
+        last_read_version = watch_admission_with_progress(client, declared_version, watch_started_at)
     except httpx.HTTPStatusError as e:
-        report_watch_failure(format_api_error(e), watched_version, resume_command)
+        report_watch_failure(format_api_error(e), declared_version, republish_command)
     except httpx.TransportError as e:
-        report_watch_failure(format_request_failure(e), watched_version, resume_command)
+        report_watch_failure(format_request_failure(e), declared_version, republish_command)
     except Exception as e:
-        report_watch_failure(str(e) or type(e).__name__, watched_version, resume_command)
+        report_watch_failure(str(e) or type(e).__name__, declared_version, republish_command)
 
-    print_admission_outcome(last_read_version, watched_version, resume_command)
+    print_admission_outcome(last_read_version, declared_version, republish_command)
 
 
 def _merge_install_config(
@@ -1773,9 +2277,11 @@ def print_versions_table(versions: list[ProviderVersion]) -> None:
     for provider_version in versions:
         published_at = provider_version.published_at
         published = published_at.strftime("%Y-%m-%d %H:%M:%S") if published_at else "[dim]-[/dim]"
+        status_label = VERSION_STATUS_LABELS[provider_version.status]
+
         table.add_row(
             escape(provider_version.version),
-            format_version_status(provider_version.status),
+            format_version_status(provider_version.status, status_label),
             published,
             format_version_message(provider_version),
         )
