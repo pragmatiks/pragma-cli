@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, NoReturn
 
 import httpx
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 from rich.markup import escape
 
@@ -29,7 +30,6 @@ if TYPE_CHECKING:
 
     import jsonschema
     from pragma_sdk import PragmaClient
-    from pydantic import ValidationError
 
 
 LOGIN_REQUIRED_MESSAGE = "Not authenticated. Run 'pragma auth login' to authenticate."
@@ -267,32 +267,52 @@ def format_request_failure(error: httpx.RequestError) -> str:
         error: The request error the request raised.
 
     Returns:
+        :func:`format_known_request_failure`'s phrase for ``the API``, such
+        as ``the API did not answer in time``. A cause without a phrase of
+        its own, such as a proxy failure, is named by its error type and
+        message: ``the connection to the API failed (ProxyError: ...)``.
+    """
+    if (phrase := format_known_request_failure(error, "the API")) is not None:
+        return phrase
+
+    detail = str(error).rstrip(".")
+    cause = f"{type(error).__name__}: {detail}" if detail else type(error).__name__
+    return f"the connection to the API failed ({cause})"
+
+
+def format_known_request_failure(error: httpx.RequestError, recipient: str) -> str | None:
+    """Format what kept a request from getting an answer, in plain words, when the cause has a phrase of its own.
+
+    Never includes the error's own text: an invalid request's message can
+    carry header values such as the bearer token.
+
+    Args:
+        error: The request error the request raised.
+        recipient: What the request was sent to, as it reads inside a
+            sentence, such as ``the API`` or ``storage``.
+
+    Returns:
         A lowercase phrase naming the cause, such as ``the API did not
-        answer in time``, without a trailing period. An invalid request is
-        not described further, since its message can carry header values
-        such as the bearer token. A cause without a phrase of its own, such
-        as a proxy failure, is named by its error type and message: ``the
-        connection to the API failed (ProxyError: ...)``.
+        answer in time``, without a trailing period, or ``None`` for a cause
+        without a phrase of its own, such as a proxy failure.
     """
     match error:
         case httpx.ConnectError() | httpx.ConnectTimeout():
-            return "the API could not be reached"
+            return f"{recipient} could not be reached"
         case httpx.WriteTimeout():
-            return "sending to the API timed out"
+            return f"sending to {recipient} timed out"
         case httpx.ReadTimeout():
-            return "the API did not answer in time"
+            return f"{recipient} did not answer in time"
         case httpx.TimeoutException():
-            return "the connection to the API timed out"
+            return f"the connection to {recipient} timed out"
         case httpx.NetworkError():
-            return "the connection to the API broke off"
+            return f"the connection to {recipient} broke off"
         case httpx.LocalProtocolError():
             return "the request could not be sent because it is invalid"
         case httpx.ProtocolError():
-            return "the connection closed before the API answered"
+            return f"the connection closed before {recipient} answered"
         case _:
-            detail = str(error).rstrip(".")
-            cause = f"{type(error).__name__}: {detail}" if detail else type(error).__name__
-            return f"the connection to the API failed ({cause})"
+            return None
 
 
 def is_connection_failure(error: httpx.RequestError) -> bool:
@@ -302,8 +322,8 @@ def is_connection_failure(error: httpx.RequestError) -> bool:
         error: The request error a request raised.
 
     Returns:
-        ``True`` if no request reached the API, or the error has no phrase
-        of its own in ``format_request_failure`` (a proxy failure, for
+        ``True`` if no request reached the API, or the error is neither a
+        timeout, a network error nor a protocol error (a proxy failure, for
         example); ``False`` for a timeout, a dropped connection or a
         protocol error once connected.
     """
@@ -330,6 +350,9 @@ def report_input_error(error: Exception) -> NoReturn:
 def report_unreadable_response(error: ValidationError | json.JSONDecodeError | jsonschema.SchemaError) -> NoReturn:
     """Print that the API answered with data the CLI cannot read, and exit.
 
+    An invalid model prints which fields are invalid and why, never their
+    values (see :func:`format_unreadable_response_reason`).
+
     Args:
         error: Error raised while parsing or validating an API response: an
             invalid model, a body that is not JSON, or a resource schema
@@ -338,8 +361,78 @@ def report_unreadable_response(error: ValidationError | json.JSONDecodeError | j
     Raises:
         typer.Exit: Always, with ``FAILURE_EXIT_CODE``.
     """
-    error_console.print(f"[red]Error:[/red] Could not read the API's response: {escape(str(error))}")
+    print_unreadable_response(error)
     raise typer.Exit(FAILURE_EXIT_CODE) from error
+
+
+def print_unreadable_response(
+    error: ValidationError | json.JSONDecodeError | jsonschema.SchemaError | httpx.DecodingError | UnicodeDecodeError,
+) -> None:
+    """Print on stderr that the API answered with data the CLI cannot read, and why.
+
+    Args:
+        error: Error raised while reading an API response, as
+            :func:`format_unreadable_response_reason` takes it.
+    """
+    error_console.print(
+        f"[red]Error:[/red] Could not read the API's response: {escape(format_unreadable_response_reason(error))}"
+    )
+
+
+def format_unreadable_response_reason(
+    error: ValidationError | json.JSONDecodeError | jsonschema.SchemaError | httpx.DecodingError | UnicodeDecodeError,
+) -> str:
+    """Format why an API response could not be read.
+
+    Args:
+        error: Error raised while reading an API response: an invalid model,
+            a body that is not JSON, a resource schema that is not a valid
+            JSON schema, or a body that could not be decoded, its JSON text
+            not valid UTF-8 included.
+
+    Returns:
+        :func:`format_validation_failure`'s field list, without the values,
+        for an invalid model; else the error's own text. Not escaped for
+        Rich markup.
+    """
+    if isinstance(error, ValidationError):
+        return format_validation_failure(error)
+
+    return str(error)
+
+
+def format_validation_failure(error: ValidationError) -> str:
+    """Format why an API response failed validation, without the values it carried.
+
+    Args:
+        error: The validation error parsing the response raised.
+
+    Returns:
+        Each invalid field's location and what is wrong with it, such as
+        ``wheel_upload.expires_at: Field required``, joined by ``; ``. A
+        failure of the whole response, such as one that is not an object,
+        shows what is wrong without a location. Not escaped for Rich markup.
+    """
+    descriptions = []
+
+    for failure in error.errors(include_url=False, include_context=False, include_input=False):
+        location = ".".join(str(part) for part in failure["loc"])
+        descriptions.append(f"{location}: {failure['msg']}" if location else failure["msg"])
+
+    return "; ".join(descriptions)
+
+
+def format_os_error_reason(error: OSError) -> str:
+    """Format what an operating system error reports, without the path it names.
+
+    Args:
+        error: The operating system error.
+
+    Returns:
+        The operating system's error text, such as ``No space left on
+        device``, or the error's type when it has none.
+    """
+    return error.strerror or type(error).__name__
 
 
 def report_os_error(error: OSError) -> NoReturn:
