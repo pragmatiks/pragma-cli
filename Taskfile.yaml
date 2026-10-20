@@ -3,15 +3,33 @@ version: "3"
 tasks:
   install:
     desc: Install dependencies
-    cmd: uv sync --all-groups
+    cmd: uv sync --all-groups --locked
 
   format:
     desc: Format code
-    cmd: uv run ruff format .
+    cmd: uv run --locked ruff format .
 
   check:
     desc: Lint and type check
     cmds:
-      - uv run ruff check --fix .
-      - uvx ty check
+      - task: check:local-sdk
+      - uv run --locked ruff check --fix .
+      - uvx ty check --python .venv {{if .PRAGMA_SDK_DIRECTORY}}--extra-search-path {{shellQuote .PRAGMA_SDK_DIRECTORY}}/src{{end}}
 
+  check:local-sdk:
+    internal: true
+    run: once
+    silent: true
+    cmd: |
+      sdk_directory={{if .PRAGMA_SDK_DIRECTORY}}{{shellQuote .PRAGMA_SDK_DIRECTORY}}{{end}}
+      if [ -n "$sdk_directory" ]; then
+        case "$sdk_directory" in
+          /*) ;;
+          *) echo "PRAGMA_SDK_DIRECTORY must be an absolute path, got: $sdk_directory" >&2; exit 1 ;;
+        esac
+        if [ ! -d "$sdk_directory/src/pragma_sdk" ]; then
+          echo "PRAGMA_SDK_DIRECTORY must point at a pragma-sdk checkout containing src/pragma_sdk, got: $sdk_directory" >&2
+          exit 1
+        fi
+        echo "Using the local SDK checkout at $sdk_directory"
+      fi
