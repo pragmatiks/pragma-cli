@@ -13,8 +13,17 @@ repos:
         entry: python -m pragmatiks_lint.comments
         language: python
         language_version: python3.13
-        additional_dependencies: ["pragmatiks-lint==0.6.0"]
+        additional_dependencies: ["pragmatiks-lint==0.7.0"]
         types: [python]
+        pass_filenames: true
+        stages: [pre-commit]
+      - id: check-sources
+        name: Reject sibling path overrides
+        entry: python -m pragmatiks_lint.sources
+        language: python
+        language_version: python3.13
+        additional_dependencies: ["pragmatiks-lint==0.7.0"]
+        files: (^|/)(pyproject\.toml|package\.json|pnpm-workspace\.yaml)$
         pass_filenames: true
         stages: [pre-commit]
       - id: check-unittest
