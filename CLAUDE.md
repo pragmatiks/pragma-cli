@@ -119,9 +119,24 @@ Always use `task` commands:
 
 | Command | Purpose |
 |---------|---------|
+| `task install` | Install the locked environment into `.venv` |
 | `task format` | Format with ruff |
-| `task check` | Lint + type check |
-| `task test` | Run integration tests |
+| `task check` | Lint + type check against `.venv`, whatever `VIRTUAL_ENV` the shell carries |
+
+### Local SDK checkout
+
+To work against an unreleased pragma-sdk, set an absolute `PRAGMA_SDK_DIRECTORY` in the worktree's own gitignored `mise.local.toml` and run `mise trust` once:
+
+```toml
+[env]
+PRAGMA_SDK_DIRECTORY = "/absolute/path/to/pragma-sdk"
+```
+
+- `task check` validates the path (absolute, contains `src/pragma_sdk`), prints it, and type-checks against the local SDK checkout layered over the locked environment.
+- Run the CLI against it with `uv run --with-editable "$PRAGMA_SDK_DIRECTORY" pragma …`.
+- `pyproject.toml` and `uv.lock` never change; never `uv add --editable` a sibling checkout.
+- Code that uses names only in an unreleased SDK passes `task check` with the variable set, but the pre-commit ty hook rejects it until that SDK is released, because committed code must work against the registry SDK.
+- Never set it in the main checkout's `mise.local.toml`: mise loads parent directories' config into every worktree under `.claude/worktrees`.
 
 ## Patterns
 
