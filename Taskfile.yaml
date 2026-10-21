@@ -1,9 +1,53 @@
 version: "3"
 
+vars:
+  MISE_VERSION_PIN: "2026.10.17"
+
 tasks:
   install:
-    desc: Install dependencies
-    cmd: uv sync --all-groups --locked
+    desc: Write the mise ceiling, install the locked toolchain and dependencies, then the git hooks
+    cmds:
+      - task: install:mise-ceiling
+      - mise install
+      - uv sync --all-groups --locked
+      - task: install:hooks
+
+  install:mise-ceiling:
+    desc: Write the gitignored .miserc.toml that keeps mise in .claude/worktrees checkouts from loading the primary checkout's config
+    cmd: |
+      primary_checkout=$(cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd -P)
+      worktrees_directory="$primary_checkout/.claude/worktrees"
+      ceiling_line="ceiling_paths = [\"$worktrees_directory\"]"
+
+      if [ -f .miserc.toml ] && grep -qF "\"$worktrees_directory\"" .miserc.toml; then
+        exit 0
+      fi
+
+      if [ -f .miserc.toml ] && grep -v '^[[:space:]]*$' .miserc.toml | grep -qvx 'ceiling_paths = \["[^"]*"\]'; then
+        echo ".miserc.toml holds other settings, so it was left unchanged. Add $worktrees_directory to its ceiling_paths, for example: $ceiling_line" >&2
+        exit 1
+      fi
+
+      printf '%s\n' "$ceiling_line" > .miserc.toml
+
+  install:hooks:
+    desc: Install the pre-commit and commit-msg git hooks into the shared hooks directory
+    cmd: |
+      hooks_directory=$(git rev-parse --path-format=absolute --git-path hooks)
+      expected_hooks_directory="$(git rev-parse --path-format=absolute --git-common-dir)/hooks"
+      test "$hooks_directory" = "$expected_hooks_directory" || {
+        echo "Git reads hooks from $hooks_directory (core.hooksPath), but pre-commit installs into $expected_hooks_directory." >&2
+        echo "Point core.hooksPath at $expected_hooks_directory or unset it." >&2
+        exit 1
+      }
+      GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0= pre-commit install --hook-type pre-commit --hook-type commit-msg
+
+  lock:toolchain:
+    desc: Regenerate mise.lock for macOS arm64 and Linux x86_64 without bumping any tool
+    cmds:
+      - test "$(mise --version | cut -d' ' -f1)" = "{{.MISE_VERSION_PIN}}"
+      - test "$(uname -sm)" = "Darwin arm64" || test "$(uname -sm)" = "Linux x86_64"
+      - mise lock --platform macos-arm64,linux-x64
 
   format:
     desc: Format code

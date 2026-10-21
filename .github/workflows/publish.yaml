@@ -32,17 +32,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
         with:
-          version: "0.12.20"
-          enable-cache: false
-
-      - name: Set up Python
-        run: uv python install 3.13
-
-      - name: Install commitizen
-        run: uv tool install commitizen==4.19.2
+          version: 2026.10.17
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          cache: false
 
       - name: Configure git
         run: |
@@ -258,14 +252,11 @@ jobs:
             echo "version=${VERSION}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
         with:
-          version: "0.12.20"
-          enable-cache: false
-
-      - name: Set up Python
-        run: uv python install 3.13
+          version: 2026.10.17
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          cache: false
 
       - name: Build package
         run: uv build

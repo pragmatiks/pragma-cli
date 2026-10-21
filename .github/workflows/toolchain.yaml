@@ -1,0 +1,71 @@
+name: Toolchain
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolchain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  toolchain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+        with:
+          version: 2026.10.17
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          cache: false
+
+      - name: Print tool versions
+        run: |
+          mise --version
+          python --version
+          uv --version
+          task --version
+          pre-commit --version
+          cz version
+
+      - name: Assert every mise-action version equals the pin
+        run: |
+          pin=$(sed -n 's/^  MISE_VERSION_PIN: "\(.*\)"$/\1/p' Taskfile.yaml)
+          test -n "$pin"
+
+          test "$(sed -n 's/^min_version = "\(.*\)"$/\1/p' mise.toml)" = "$pin"
+
+          test "$(mise --version | cut -d' ' -f1)" = "$pin"
+
+          mise_action_versions=$(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -exec yq --no-doc '
+            .jobs[].steps[]
+            | select(.uses == "jdx/mise-action@*")
+            | filename + ":" + (line | tostring) + "\t" + (.with.version // "" | tostring)
+          ' {} +)
+
+          test -n "$mise_action_versions"
+          if printf '%s\n' "$mise_action_versions" | cut -f2 | grep -qvxF "$pin"; then
+            echo "Every jdx/mise-action step must set version: $pin (MISE_VERSION_PIN in Taskfile.yaml). Found:" >&2
+            printf '%s\n' "$mise_action_versions" >&2
+            exit 1
+          fi
+
+      - name: Assert UV_PYTHON equals the mise python pin
+        run: |
+          python_pin=$(sed -n 's/^python = "\(.*\)"$/\1/p' mise.toml)
+          uv_python=$(sed -n 's/^UV_PYTHON = "\(.*\)"$/\1/p' mise.toml)
+          test -n "$python_pin"
+          test "$uv_python" = "$python_pin" || {
+            echo "UV_PYTHON is $uv_python but mise.toml pins python $python_pin." >&2
+            exit 1
+          }
+
+      - name: Assert the toolchain lock is current
+        env:
+          MISE_GITHUB_TOKEN: ${{ github.token }}
+        run: task lock:toolchain && test -z "$(git status --porcelain -- 'mise*.lock' .mise/locks)"

@@ -18,3 +18,9 @@ mise.local.toml
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 .claude/plans/
+
+# mise ceiling written by task install (per-machine, not committed)
+/.miserc.toml
+
+# mise lock sidecars (committed)
+!/.mise/locks/
