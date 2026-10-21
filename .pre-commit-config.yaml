@@ -40,8 +40,10 @@ repos:
         types: [python]
         pass_filenames: false
 
-  - repo: https://github.com/commitizen-tools/commitizen
-    rev: v4.11.2
+  - repo: local
     hooks:
       - id: commitizen
+        name: commitizen check
+        entry: mise exec -- cz check --allow-abort --commit-msg-file
+        language: system
         stages: [commit-msg]

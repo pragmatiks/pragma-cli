@@ -18,10 +18,10 @@ url = "https://github.com/pre-commit/pre-commit/releases/download/v4.6.2/pre-com
 url_api = "https://api.github.com/repos/pre-commit/pre-commit/releases/assets/509317714"
 
 [[tools."pypi:commitizen"]]
-version = "4.15.1"
+version = "4.19.2"
 backend = "pypi:commitizen"
-specifiers = ["4.15.1"]
-uv = { path = ".mise/locks/pypi-commitizen/4.15.1", digest = "sha256:e15e7bd18fea1ec2ccc18c13bf5bd211fe5d65f72b39fcd4274bdd0b6ded591a" }
+specifiers = ["4.19.2"]
+uv = { path = ".mise/locks/pypi-commitizen/4.19.2", digest = "sha256:6592b2f75d9c08773b3de77f8d54cbcd3f4befabd7304cf3aa86e9d2448fc11e" }
 
 [[tools.python]]
 version = "3.13.7"
