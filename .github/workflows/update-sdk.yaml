@@ -8,6 +8,8 @@ on:
         required: true
         type: string
 
+permissions: {}
+
 jobs:
   update-sdk:
     runs-on: ubuntu-latest
@@ -16,13 +18,25 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Validate SDK version
+        env:
+          SDK_VERSION: ${{ inputs.sdk_version }}
+        run: |
+          if ! echo "$SDK_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            echo "::error::sdk_version must look like X.Y.Z or X.Y.Z-suffix"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.20"
+          enable-cache: false
 
       - name: Set up Python
         run: uv python install 3.13
@@ -33,16 +47,18 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Update SDK version
+        env:
+          SDK_VERSION: ${{ inputs.sdk_version }}
         run: |
-          SDK_VERSION="${{ inputs.sdk_version }}"
           echo "Updating to SDK v${SDK_VERSION}"
 
           sed -i "s|pragmatiks-sdk>=.*\"|pragmatiks-sdk>=${SDK_VERSION}\"|" pyproject.toml
           sed -i "s|tag = \"v.*\"|tag = \"v${SDK_VERSION}\"|" pyproject.toml
 
       - name: Update lockfile (retry on simple-index propagation lag)
+        env:
+          SDK_VERSION: ${{ inputs.sdk_version }}
         run: |
-          SDK_VERSION="${{ inputs.sdk_version }}"
           for ATTEMPT in $(seq 1 60); do
             if OUTPUT=$(uv lock --upgrade-package pragmatiks-sdk 2>&1); then
               echo "$OUTPUT"
@@ -65,26 +81,33 @@ jobs:
 
       - name: Commit changes
         id: commit
+        env:
+          SDK_VERSION: ${{ inputs.sdk_version }}
         run: |
           git add .
           if git diff --staged --quiet; then
             echo "No changes to commit"
-            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
-            git commit -m "fix(deps): update pragmatiks-sdk to v${{ inputs.sdk_version }}"
-            echo "has_changes=true" >> $GITHUB_OUTPUT
+            git commit -m "fix(deps): update pragmatiks-sdk to v${SDK_VERSION}"
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create PR
         if: steps.commit.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SDK_VERSION: ${{ inputs.sdk_version }}
         run: |
-          SDK_VERSION="${{ inputs.sdk_version }}"
           BRANCH="fix/update-sdk-${SDK_VERSION}"
+          AUTHORIZATION="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::${AUTHORIZATION}"
 
           git checkout -b "${BRANCH}"
-          git push origin "${BRANCH}"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+            GIT_CONFIG_VALUE_0="$AUTHORIZATION" \
+            git push origin "${BRANCH}"
 
           gh pr create \
             --title "fix(deps): update pragmatiks-sdk to v${SDK_VERSION}" \

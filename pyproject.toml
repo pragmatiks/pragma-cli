@@ -59,6 +59,7 @@ name = "cz_conventional_commits"
 version = "13.0.0"
 version_files = ["pyproject.toml:^version"]
 tag_format = "v$version"
+bump_message = "bump: version $current_version → $new_version [skip ci]"
 update_changelog_on_bump = true
 changelog_file = "CHANGELOG.md"
 
@@ -73,5 +74,5 @@ dev = [
 module-name = "pragma_cli"
 
 [build-system]
-requires = ["uv_build>=0.9.8"]
+requires = ["uv_build==0.12.20"]
 build-backend = "uv_build"
