@@ -185,7 +185,13 @@ This applies to any new top-level dependency. It does NOT apply to transitive de
 
 Package: `pragmatiks-cli` on [PyPI](https://pypi.org/project/pragmatiks-cli/)
 
-Releases are CI-owned. Pushing to `main` runs `.github/workflows/publish.yaml`, which runs `cz bump` (version and `CHANGELOG.md` from conventional commits), tags `v{version}`, builds, creates the GitHub release, publishes to PyPI through trusted publishing, and triggers the pragma-providers re-publish. A push whose commits carry no bump type (`chore`, `docs`, …) releases nothing.
+Releases are CI-owned. People change `main` only through pull requests; the only direct push is the bump commit from the pragma-ci-bot GitHub App, which may bypass the `main` ruleset and whose key lives only in the `release` environment. Each merge to `main`, or a manual dispatch from `main`, runs `.github/workflows/publish.yaml`; runs queue and execute one at a time:
+
+1. `bump` (no secrets) runs `cz bump` on the latest `main` (version and `CHANGELOG.md` from conventional commits, commit marked `[skip ci]`) and hands the bump commit and `v{version}` tag on as a git bundle.
+2. `push` (`release` environment) pushes the bump commit and tag to `main` as pragma-ci-bot. If `main` moved since the bump, it pushes nothing, dispatches a new `publish.yaml` run on `main` (which bumps from the latest `main`) and ends without failure.
+3. `build` builds the commit that was pushed, `publish` uploads it to PyPI through trusted publishing (`pypi` environment), `dispatch` triggers the pragma-providers re-publish, and `github-release` creates the GitHub release.
+
+A merge whose commits carry no bump type (`chore`, `docs`, …) releases nothing. Merges made by the update-sdk workflow use `GITHUB_TOKEN`, which starts no workflow run, so they ship with the next merge or a manual dispatch of `publish.yaml`. The GitHub release is created last and marks a release complete: when `bump` finds nothing to bump but the current version's tag has no GitHub release, the run builds, publishes and releases that tag's commit without a push. So after a failure past `push`, any later run (a re-run, a manual dispatch or the next merge) finishes the release.
 
 Never run `cz bump`, `uv build` or `uv publish` locally, and never hand-edit the version or changelog.
 
