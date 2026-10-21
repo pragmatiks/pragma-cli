@@ -126,9 +126,9 @@ Always use `task` commands:
 
 ### Toolchain
 
-mise is the only toolchain source, on the Mac, in Linux cloud sessions and in CI. On a fresh clone run `mise trust && mise install --locked` first (task comes from mise), then `task install`.
+mise is the only toolchain source, on the Mac, in Linux cloud sessions and in CI. On a fresh clone run `mise trust && mise install` first (task comes from mise), then `task install`.
 
-- `mise.toml` pins python, uv, task, pre-commit, commitizen and yq; `mise.lock` and `.mise/locks/` lock them, and `task install` installs them with `mise install --locked`.
+- `mise.toml` pins python, uv, task, pre-commit, commitizen and yq; `mise.lock` and `.mise/locks/` lock them; `locked = true` in `[settings]` makes every mise install fail on a tool the lockfile does not record.
 - `mise.toml` points uv at mise's Python (`UV_PYTHON`, `UV_PYTHON_PREFERENCE`), so `.venv` always runs the pinned interpreter.
 - Changing a tool version in `mise.toml` means running `task lock:toolchain` and committing the lock; the `Toolchain` workflow fails a pull request whose lock is stale.
 - The mise version is pinned three times and moves in one sweep across every Pragmatiks repo: `MISE_VERSION_PIN` in `Taskfile.yaml`, `min_version` in `mise.toml`, and every `jdx/mise-action` `version:` under `.github/workflows`.

@@ -11,3 +11,6 @@ yq = "4.54.1"
 [env]
 UV_PYTHON = "3.13.7"
 UV_PYTHON_PREFERENCE = "only-system"
+
+[settings]
+locked = true
