@@ -29,16 +29,13 @@ jobs:
           mise --version
           python --version
           uv --version
-          task --version
           pre-commit --version
           cz version
 
       - name: Assert every mise-action version equals the pin
         run: |
-          pin=$(sed -n 's/^  MISE_VERSION_PIN: "\(.*\)"$/\1/p' Taskfile.yaml)
+          pin=$(sed -n 's/^min_version = "\(.*\)"$/\1/p' mise.toml)
           test -n "$pin"
-
-          test "$(sed -n 's/^min_version = "\(.*\)"$/\1/p' mise.toml)" = "$pin"
 
           test "$(mise --version | cut -d' ' -f1)" = "$pin"
 
@@ -50,7 +47,7 @@ jobs:
 
           test -n "$mise_action_versions"
           if printf '%s\n' "$mise_action_versions" | cut -f2 | grep -qvxF "$pin"; then
-            echo "Every jdx/mise-action step must set version: $pin (MISE_VERSION_PIN in Taskfile.yaml). Found:" >&2
+            echo "Every jdx/mise-action step must set version: $pin (min_version in mise.toml). Found:" >&2
             printf '%s\n' "$mise_action_versions" >&2
             exit 1
           fi
@@ -68,4 +65,4 @@ jobs:
       - name: Assert the toolchain lock is current
         env:
           MISE_GITHUB_TOKEN: ${{ github.token }}
-        run: task lock:toolchain && test -z "$(git status --porcelain -- 'mise*.lock' .mise/locks)"
+        run: mise run lock:toolchain && test -z "$(git status --porcelain -- 'mise*.lock' .mise/locks)"

@@ -1,0 +1,45 @@
+[install]
+description = "Write the mise ceiling, install the locked toolchain and dependencies, then the git hooks"
+extends = "bash"
+run = [
+  { task = "install:mise-ceiling" },
+  "mise install",
+  { task = "install:python" },
+  { task = "install:hooks" },
+]
+
+["install:mise-ceiling"]
+description = "Write the gitignored .miserc.toml that keeps mise in .claude/worktrees checkouts from loading the primary checkout's config"
+file = "scripts/tasks/install_mise_ceiling.sh"
+
+["install:hooks"]
+description = "Install the pre-commit and commit-msg git hooks into the shared hooks directory"
+file = "scripts/tasks/install_hooks.sh"
+
+["lock:toolchain"]
+description = "Re-resolve mise.lock and .mise/locks/ for macOS arm64 and Linux x64 without bumping any tool; needs mise at the min_version in mise.toml"
+file = "scripts/tasks/lock_toolchain.sh"
+
+[format]
+description = "Format code"
+extends = "bash"
+run = "uv run --locked ruff format ."
+
+[check]
+description = "Lint and type check against .venv, or against the PRAGMA_SDK_DIRECTORY checkout when it is set"
+extends = "bash"
+depends = ["check:local-sdk"]
+run = [
+  "uv run --locked ruff check --fix .",
+  { task = "check:types" },
+]
+
+["check:types"]
+description = "Type check against .venv, adding the PRAGMA_SDK_DIRECTORY checkout to the search path when it is set"
+hide = true
+file = "scripts/tasks/check_types.sh"
+
+["check:local-sdk"]
+description = "Fail unless PRAGMA_SDK_DIRECTORY is unset or names an absolute pragma-sdk checkout"
+hide = true
+file = "scripts/tasks/check_local_sdk.sh"

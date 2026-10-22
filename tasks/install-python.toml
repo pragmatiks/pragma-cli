@@ -1,0 +1,16 @@
+["install:python"]
+description = "Sync the locked environment into .venv"
+hide = true
+extends = "bash"
+sources = [
+  "pyproject.toml",
+  "uv.lock",
+  "mise.toml",
+  "mise.lock",
+]
+outputs = [".venv/.install-complete"]
+run = [
+  "rm -f .venv/.install-complete",
+  "uv sync --all-groups --locked",
+  "touch .venv/.install-complete",
+]

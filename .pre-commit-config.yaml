@@ -37,7 +37,7 @@ repos:
         stages: [pre-commit]
       - id: ty
         name: ty type checker
-        entry: env -u VIRTUAL_ENV uvx ty check
+        entry: env -u VIRTUAL_ENV uv run --locked ty check
         language: system
         types: [python]
         pass_filenames: false

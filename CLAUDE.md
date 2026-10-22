@@ -115,23 +115,23 @@ SSH/HTTPS credentials.
 
 ## Development
 
-Always use `task` commands:
+Always use mise tasks (`mise tasks` lists them all):
 
 | Command | Purpose |
 |---------|---------|
-| `task install` | Install the locked mise toolchain, the locked environment into `.venv`, and the pre-commit and commit-msg hooks |
-| `task format` | Format with ruff |
-| `task check` | Lint + type check against `.venv`, whatever `VIRTUAL_ENV` the shell carries |
-| `task lock:toolchain` | Regenerate `mise.lock` and `.mise/locks/` for macOS arm64 and Linux x86_64 without bumping a tool; runs only on those hosts and only with the pinned mise version |
+| `mise run install` | Install the locked mise toolchain, the locked environment into `.venv`, and the pre-commit and commit-msg hooks |
+| `mise run format` | Format with ruff |
+| `mise run check` | Lint + type check against `.venv`, whatever `VIRTUAL_ENV` the shell carries |
+| `mise run lock:toolchain` | Regenerate `mise.lock` and `.mise/locks/` for macOS arm64 and Linux x64 without bumping a tool; runs only on those hosts and only with mise at the `min_version` in `mise.toml` |
 
 ### Toolchain
 
-mise is the only toolchain source, on the Mac, in Linux cloud sessions and in CI. On a fresh clone run `mise trust && mise install` first (task comes from mise), then `task install`.
+mise is the only toolchain source, on the Mac, in Linux cloud sessions and in CI. On a fresh clone run `mise trust`, then `mise run install`.
 
-- `mise.toml` pins python, uv, task, pre-commit, commitizen and yq; `mise.lock` and `.mise/locks/` lock them; `locked = true` in `[settings]` makes every mise install fail on a tool the lockfile does not record.
+- `mise.toml` pins python, uv, pre-commit, commitizen and yq; `mise.lock` and `.mise/locks/` lock them; `locked = true` in `[settings]` makes every mise install fail on a tool the lockfile does not record.
 - `mise.toml` points uv at mise's Python (`UV_PYTHON`, `UV_PYTHON_PREFERENCE`), so `.venv` always runs the pinned interpreter.
-- Changing a tool version in `mise.toml` means running `task lock:toolchain` and committing the lock; the `Toolchain` workflow fails a pull request whose lock is stale.
-- The mise version is pinned three times and moves in one sweep across every Pragmatiks repo: `MISE_VERSION_PIN` in `Taskfile.yaml`, `min_version` in `mise.toml`, and every `jdx/mise-action` `version:` under `.github/workflows`.
+- Changing a tool version in `mise.toml` means running `mise run lock:toolchain` and committing the lock; the `Toolchain` workflow fails a pull request whose lock is stale.
+- The mise version is pinned twice and moves in one sweep across every Pragmatiks repo: `min_version` in `mise.toml`, and every `jdx/mise-action` `version:` under `.github/workflows`.
 
 ### Local SDK checkout
 
@@ -142,10 +142,10 @@ To work against an unreleased pragma-sdk, set an absolute `PRAGMA_SDK_DIRECTORY`
 PRAGMA_SDK_DIRECTORY = "/absolute/path/to/pragma-sdk"
 ```
 
-- `task check` validates the path (absolute, contains `src/pragma_sdk`), prints it, and type-checks against the local SDK checkout layered over the locked environment.
+- `mise run check` validates the path (absolute, contains `src/pragma_sdk`), prints it, and type-checks against the local SDK checkout layered over the locked environment.
 - Run the CLI against it with `uv run --with-editable "$PRAGMA_SDK_DIRECTORY" pragma …`.
 - `pyproject.toml` and `uv.lock` never change; never `uv add --editable` a sibling checkout.
-- Code that uses names only in an unreleased SDK passes `task check` with the variable set, but the pre-commit ty hook rejects it until that SDK is released, because committed code must work against the registry SDK.
+- Code that uses names only in an unreleased SDK passes `mise run check` with the variable set, but the pre-commit ty hook rejects it until that SDK is released, because committed code must work against the registry SDK.
 - Never set it in the main checkout's `mise.local.toml`: mise loads parent directories' config into every worktree under `.claude/worktrees`.
 
 ## Patterns
@@ -221,7 +221,7 @@ This section is an embedded copy of the pragma-os repo's `docs/engineering-princ
 
 | Layer | What | Where |
 |---|---|---|
-| 1. Style + standard smells | `ruff` (Python), `eslint` (TS) with curated rule set | per-repo `task check` / `pnpm lint` |
+| 1. Style + standard smells | `ruff` (Python), `eslint` (TS) with curated rule set | per-repo `mise run check` / `pnpm lint` |
 | 2. Complexity gating | `radon` / `xenon` (Python), `eslint-plugin-sonarjs/cognitive-complexity` (TS) | CI fail on regression |
 | 3. Pragmatiks-specific rules | `semgrep` ruleset (cross-language) + custom scripts | shared via `pragmatiks-lint` (PyPI) and `@pragmatiks/lint` (npm) |
 
@@ -360,7 +360,7 @@ Provider event `on_delete` stays (provider deletes external object).
 **Programmatic check**:
 - `eslint-plugin-unicorn/prevent-abbreviations` (TS) — direct fit, allowlist config.
 - `pra-no-abbreviations-python` semgrep rule (Python) — regex matching forbidden short identifiers, allowlist.
-- `packages/api/scripts/check_openapi_spec.py` (`task api:check`) — flags infrastructure terms in generated OpenAPI spec. Kubernetes, pod, namespace, and vendor names not in term list yet — reviewer scans for them.
+- `packages/api/scripts/check_openapi_spec.py` (`mise run api:check`) — flags infrastructure terms in generated OpenAPI spec. Kubernetes, pod, namespace, and vendor names not in term list yet — reviewer scans for them.
 
 **Reviewer hint**: `db`, `cfg`, `k8s` in any new code = blocker. Banned synonym from vocabulary table on any surface = blocker.
 
