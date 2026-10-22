@@ -1,0 +1,2 @@
+[task_templates.bash]
+shell = "bash -euo pipefail -c"
