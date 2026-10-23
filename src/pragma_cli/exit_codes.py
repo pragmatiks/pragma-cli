@@ -28,7 +28,8 @@ EXIT_CODES_HELP = (
     "or could not read the version); "
     f"{NOT_FOUND_EXIT_CODE} not found: the target does not exist, is not installed, has no deployment, "
     "or is not visible to you. "
-    "Errors and warnings go to stderr; command output, including -o json, goes to stdout."
+    "Errors and warnings go to stderr; command output goes to stdout, "
+    "and with -o json or -o yaml stdout carries only the json or yaml document."
 )
 """Exit-code and output-stream contract shown in ``pragma --help``."""
 
