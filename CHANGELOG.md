@@ -1,5 +1,11 @@
 # Changelog
 
+## v13.1.0 (2026-10-23)
+
+### Feat
+
+- **providers**: publish prints its operation id and version record with -o json|yaml (#96)
+
 ## v13.0.0 (2026-10-18)
 
 ### BREAKING CHANGE
