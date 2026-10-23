@@ -1271,12 +1271,66 @@ def watch_admission_with_progress(
         return watch_admission(client, declared_version, watch_started_at, show_status)
 
 
-def print_admission_outcome(
+def build_version_record(version: ProviderVersion) -> dict[str, Any]:
+    """Build the record ``pragma providers versions -o json|yaml`` prints for one version.
+
+    Args:
+        version: Any provider version, a :class:`DeclaredProviderVersion`
+            included.
+
+    Returns:
+        The version's :class:`ProviderVersion` fields in JSON mode, never
+        ``wheel_upload``, so the signed upload address is never printed.
+    """
+    listed_fields = set(ProviderVersion.model_fields) | set(ProviderVersion.model_computed_fields)
+    return version.model_dump(mode="json", include=listed_fields)
+
+
+def build_publish_document(version: ProviderVersion, declared_version: DeclaredProviderVersion) -> dict[str, Any]:
+    """Build the document ``pragma providers publish -o json|yaml`` prints once the watch ends.
+
+    Args:
+        version: The version to report, any :class:`ProviderVersion`, a
+            :class:`DeclaredProviderVersion` included; its ``wheel_upload``
+            is dropped.
+        declared_version: The version as this publish declared it.
+
+    Returns:
+        A dict with ``operation_id``, this publish's own operation id, and
+        ``version``, the record :func:`build_version_record` builds, as
+        ``pragma providers versions -o json`` prints it. Another publish
+        replaced this one when ``version.operation_id`` differs from
+        ``operation_id``.
+    """
+    return {
+        "operation_id": declared_version.operation_id,
+        "version": build_version_record(version),
+    }
+
+
+def format_published_version(version: ProviderVersion) -> str:
+    """Format the ``Published`` line for a version admission published.
+
+    Args:
+        version: The published version.
+
+    Returns:
+        The line in Rich markup, its values escaped.
+    """
+    resource_types = format_resource_type_count(len(version.schemas or []))
+    return (
+        f"[green]Published[/green] {escape(version.canonical)} {escape(version.version)} — "
+        f"Python {escape(str(version.python_version))}, SDK {escape(str(version.sdk_version))}, "
+        f"{resource_types}"
+    )
+
+
+def report_unpublished_version(
     version: ProviderVersion,
     declared_version: DeclaredProviderVersion,
     republish_command: str,
 ) -> None:
-    """Print how the publish of a version ended, exiting non-zero unless it published.
+    """Print why admission did not publish the version, and exit; return when it published.
 
     Args:
         version: The version as the watch last read it.
@@ -1293,12 +1347,7 @@ def print_admission_outcome(
 
     match version.status:
         case VersionStatus.PUBLISHED:
-            resource_types = format_resource_type_count(len(version.schemas or []))
-            console.print(
-                f"[green]Published[/green] {escape(version.canonical)} {escape(version.version)} — "
-                f"Python {escape(str(version.python_version))}, SDK {escape(str(version.sdk_version))}, "
-                f"{resource_types}"
-            )
+            return
         case VersionStatus.FAILED:
             error_console.print(f"[red]Error:[/red] {escape(version.error_message or '')}")
             raise typer.Exit(FAILURE_EXIT_CODE)
@@ -1322,6 +1371,24 @@ def report_replaced_publish(version: ProviderVersion) -> NoReturn:
     )
     error_console.print(f"Check it with: pragma providers versions {canonical}")
     raise typer.Exit(FAILURE_EXIT_CODE)
+
+
+def format_watch_failure_reason(error: Exception) -> str:
+    """Format why the publish watch stopped reading a version.
+
+    Args:
+        error: What reading the version raised.
+
+    Returns:
+        A one-line reason the watch stopped, not escaped for Rich markup.
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        return format_api_error(error)
+
+    if isinstance(error, httpx.TransportError):
+        return format_request_failure(error)
+
+    return str(error) or type(error).__name__
 
 
 def report_watch_failure(reason: str, version: ProviderVersion, republish_command: str) -> NoReturn:
@@ -1430,6 +1497,14 @@ def publish(
             readable=True,
         ),
     ] = None,
+    output: Annotated[
+        OutputFormat,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output format; json and yaml print the operation id and version record on stdout",
+        ),
+    ] = OutputFormat.TABLE,
 ):
     """Publish a new provider version and wait for its admission.
 
@@ -1452,12 +1527,29 @@ def publish(
     again with '--wheel', and the same '--changelog' if one was given, from
     the same environment, keeps waiting for it.
 
+    With '-o json' or '-o yaml', once the watch ends, stdout carries one
+    document and nothing else: 'operation_id', this publish's own
+    operation id, and 'version', the version as last read, shaped like a
+    'pragma providers versions -o json' record (the declared version when
+    a read fails or none was read). It is printed on exit 0 (published),
+    exit 1 when admission failed ('version.error_message' says why) or
+    another publish replaced this one ('version.operation_id' differs from
+    'operation_id'), and exit 3, where 'version.status' may be the
+    declared status. Every other exit leaves stdout empty. With json and
+    yaml, all progress, errors and the 'Published' line go to stderr; in
+    table format the 'Published' line stays on stdout.
+
     Examples:
         pragma providers publish
         pragma providers publish ./my-provider --changelog NOTES.md
         pragma providers publish --wheel dist/my_provider-1.0.0-py3-none-any.whl
+        pragma providers publish --wheel dist/my_provider-1.0.0-py3-none-any.whl -o json
 
     \f
+
+    Exits through ``typer.Exit`` with ``FAILURE_EXIT_CODE`` when admission
+    failed or another publish replaced this one, and with
+    ``ADMISSION_UNCONFIRMED_EXIT_CODE`` when admission is not confirmed.
 
     Raises:
         click.UsageError: If both PROJECT_DIRECTORY and --wheel are given.
@@ -1478,14 +1570,19 @@ def publish(
 
     try:
         last_read_version = watch_admission_with_progress(client, declared_version, watch_started_at)
-    except httpx.HTTPStatusError as e:
-        report_watch_failure(format_api_error(e), declared_version, republish_command)
-    except httpx.TransportError as e:
-        report_watch_failure(format_request_failure(e), declared_version, republish_command)
     except Exception as e:
-        report_watch_failure(str(e) or type(e).__name__, declared_version, republish_command)
+        reason = format_watch_failure_reason(e)
+        try:
+            output_data(build_publish_document(declared_version, declared_version), output)
+        finally:
+            report_watch_failure(reason, declared_version, republish_command)
 
-    print_admission_outcome(last_read_version, declared_version, republish_command)
+    output_data(build_publish_document(last_read_version, declared_version), output)
+
+    report_unpublished_version(last_read_version, declared_version, republish_command)
+
+    published_console = console if output == OutputFormat.TABLE else error_console
+    published_console.print(format_published_version(last_read_version))
 
 
 def _merge_install_config(
@@ -2015,7 +2112,7 @@ def versions(
         report_not_found(e, f"Provider '{name}' not found in the store.")
 
     if output != OutputFormat.TABLE:
-        data = [provider_version.model_dump(mode="json") for provider_version in provider_versions]
+        data = [build_version_record(provider_version) for provider_version in provider_versions]
         output_data(data, output)
         return
 
@@ -2394,7 +2491,7 @@ def _provider_detail_to_dict(provider, versions: list[ProviderVersion] | None = 
         "readme": getattr(provider, "readme", None),
         "created_at": _serialize_datetime(provider, "created_at"),
         "updated_at": _serialize_datetime(provider, "updated_at"),
-        "versions": [provider_version.model_dump(mode="json") for provider_version in versions],
+        "versions": [build_version_record(provider_version) for provider_version in versions],
     }
 
 

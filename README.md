@@ -62,8 +62,8 @@ Exit codes and output streams are listed in `pragma --help`: errors and warnings
 | `pragma providers list` | List deployed providers |
 | `pragma providers init <name>` | Initialize a new provider project |
 | `pragma providers update [project-directory]` | Update project from template |
-| `pragma providers publish [project-directory \| --wheel <path>] [--changelog <file>]` | Build the wheel via `uv build` into `<project-directory>/dist` (or take a prebuilt one), rename a copy to your organization's distribution name (`<organization>-<provider>`), declare the version and upload that copy if Pragmatiks does not have it yet, and wait until your organization's provider host admits it (`published`) or refuses it (`failed`) |
-| `pragma providers versions <name>` | List a provider's versions with their status (for example `waiting for the provider host`, `admitting`, `publishing to the registry`) |
+| `pragma providers publish [project-directory \| --wheel <path>] [--changelog <file>] [-o json\|yaml]` | Build the wheel via `uv build` into `<project-directory>/dist` (or take a prebuilt one), rename a copy to your organization's distribution name (`<organization>-<provider>`), declare the version and upload that copy if Pragmatiks does not have it yet, and wait until your organization's provider host admits it (`published`) or refuses it (`failed`); `-o json\|yaml` prints the operation id and the version's last-read record on stdout once the wait ends |
+| `pragma providers versions <name> [-o json\|yaml]` | List a provider's versions with their status (for example `waiting for the provider host`, `admitting`, `publishing to the registry`) |
 | `pragma providers deploy <name> [--version <v>]` | Restart an installed provider at its installed version; `--version` must name a published version and does not change the installed one (use `upgrade` or `downgrade`) |
 | `pragma providers status <name> [-o json\|yaml]` | Check deployment status |
 | `pragma providers delete <name> [--yes]` | Delete a provider from the catalog (admins of the owning organization only); a provider that is still installed is refused |
