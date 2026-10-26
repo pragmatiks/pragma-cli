@@ -156,6 +156,15 @@ PRAGMA_SDK_DIRECTORY = "/absolute/path/to/pragma-sdk"
 - SDK client for all API operations
 - YAML for resource definitions
 
+## Delivery
+
+Canonical: pragma-kit `project-instructions.md` (Delivery, Cloud threads). In short:
+
+- **Land it** by default: commit, push, open the pull request, and rebase-merge it once CI and review are clean.
+- **PR it** (push, open the pull request, stop) only when the work departs from the agreed plan: an architecture change, a new pattern, a new library, or a changed design decision. Name the departure and wait for the founder. The founder saying "PR it" or "land it" sets the mode for that task.
+- Branch from the latest `origin/main` as `<feat|fix|chore>/PRA-<n>_<snake_case_summary>`; the branch is deleted on merge.
+- Commits carry the founder's git identity, with no `Co-Authored-By`, `Claude-Session` or other Claude trailers.
+
 ## Evidence-based development
 
 Fact-check with live lookups before writing code. The cost of a query is far less than a debugging cycle on stale assumptions.
