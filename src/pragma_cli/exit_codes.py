@@ -16,8 +16,8 @@ version still unsettled or could not read the version.
 NOT_FOUND_EXIT_CODE = 4
 """Exit code when the API answers 404.
 
-The target does not exist, is not installed, has no deployment, or is not
-visible to the caller.
+The target does not exist, is not installed, or is not visible to the
+caller.
 """
 
 EXIT_CODES_HELP = (
@@ -26,7 +26,7 @@ EXIT_CODES_HELP = (
     f"{ADMISSION_UNCONFIRMED_EXIT_CODE} command-specific, named in that command's help "
     "(providers publish: wheel uploaded or already received, then the watch ended with admission unsettled "
     "or could not read the version); "
-    f"{NOT_FOUND_EXIT_CODE} not found: the target does not exist, is not installed, has no deployment, "
+    f"{NOT_FOUND_EXIT_CODE} not found: the target does not exist, is not installed, "
     "or is not visible to you. "
     "Errors and warnings go to stderr; command output goes to stdout, "
     "and with -o json or -o yaml stdout carries only the json or yaml document."

@@ -1,7 +1,7 @@
 """Provider management commands.
 
-Unified commands for registering, installing, deploying, and managing
-Pragmatiks providers.
+Unified commands for publishing, installing, and managing Pragmatiks
+providers.
 """
 
 from __future__ import annotations
@@ -29,13 +29,12 @@ import yaml
 from pragma_sdk import (
     SETTLED_VERSION_STATUSES,
     DeclaredProviderVersion,
-    DeploymentResult,
-    DeploymentStatus,
     PragmaClient,
+    ProviderInstallation,
+    ProviderInstallationEvent,
     ProviderVersion,
     ProviderVersionDeclaration,
     RenamedWheelWriteError,
-    UpgradePolicy,
     VersionStatus,
     WheelExpansionLimitError,
     WheelUploadAddress,
@@ -138,6 +137,26 @@ VERSION_STATUS_COLORS = {
     VersionStatus.FAILED: "red",
 }
 """Rich color of each settled version status; every unsettled status shows yellow."""
+
+INSTALLATION_STATE_COLORS = {
+    "ready": "green",
+    "failed": "red",
+    "deleting": "dim",
+}
+"""Rich color of each installation state outside an operation; ``pending`` and ``processing`` show yellow."""
+
+INSTALLATION_STATE_LABELS = {
+    "pending": "Queued",
+    "processing": "Starting",
+    "ready": "Running",
+    "failed": "Failed",
+    "deleting": "Uninstalling",
+    "uninstalled": "Uninstalled",
+}
+"""Label the tables show for each installation state, matching the web console; json and yaml keep the raw state."""
+
+INSTALLATION_OPERATION_LABELS = {"start": "restart"}
+"""Word the tables show for an operation whose type reads differently on the web console; other types show as is."""
 
 
 def get_template_source() -> str:
@@ -465,31 +484,6 @@ def format_version_message(version: ProviderVersion) -> str:
         return escape(AWAITING_WHEEL_HINT)
 
     return format_optional_value(version.error_message)
-
-
-def _format_deployment_status(status: DeploymentStatus | None) -> str:
-    """Format deployment status with color coding.
-
-    Args:
-        status: Deployment status or None if not deployed.
-
-    Returns:
-        Formatted status string with Rich markup.
-    """
-    if status is None:
-        return "[dim]not deployed[/dim]"
-
-    match status:
-        case DeploymentStatus.AVAILABLE:
-            return "[green]running[/green]"
-        case DeploymentStatus.PROGRESSING:
-            return "[yellow]deploying[/yellow]"
-        case DeploymentStatus.PENDING:
-            return "[yellow]pending[/yellow]"
-        case DeploymentStatus.FAILED:
-            return "[red]failed[/red]"
-        case _:
-            return f"[dim]{status}[/dim]"
 
 
 def format_wheel_size(size_bytes: int) -> str:
@@ -1703,16 +1697,6 @@ def fetch_install_preview(client: PragmaClient, name: str, version: str | None) 
 def install(
     name: ProviderNameArgument,
     version: Annotated[str | None, typer.Option("--version", "-v", help="Version to install (default: latest)")] = None,
-    upgrade_policy: Annotated[
-        UpgradePolicy,
-        typer.Option(
-            "--upgrade-policy",
-            help=(
-                "auto: upgrade to each newer published version automatically; "
-                "manual: stay on the installed version until you run 'pragma providers upgrade'"
-            ),
-        ),
-    ] = UpgradePolicy.MANUAL,
     config: Annotated[
         list[str] | None,
         typer.Option("--config", "-c", help="Configuration key=value pair (repeatable)"),
@@ -1737,7 +1721,6 @@ def install(
     Examples:
         pragma providers install pragmatiks/qdrant
         pragma providers install pragmatiks/postgres --version 1.2.0
-        pragma providers install pragmatiks/redis --upgrade-policy auto
         pragma providers install pragmatiks/qdrant --config SOME_KEY=some_value
         pragma providers install pragmatiks/qdrant --config-file config.yaml --config OVERRIDE_KEY=value
         pragma providers install pragmatiks/qdrant -y
@@ -1772,12 +1755,12 @@ def install(
         lambda: client.install_provider(
             name,
             version=version,
-            upgrade_policy=upgrade_policy,
             config=merged_config,
         ),
     )
 
-    console.print(f"[green]Installed:[/green] {escape(name)} v{escape(result.installed_version)}")
+    console.print(f"[green]Installed:[/green] {escape(name)} {format_target_version(result.operation_version)}")
+    print_history_pointer(name)
 
 
 @app.command()
@@ -1877,7 +1860,8 @@ def upgrade(
         lambda: client.upgrade_provider(name, target_version=version),
     )
 
-    console.print(f"[green]Upgraded:[/green] {escape(name)} -> v{escape(result.installed_version)}")
+    console.print(f"[green]Upgraded:[/green] {escape(name)} -> {format_target_version(result.operation_version)}")
+    print_history_pointer(name)
 
 
 @app.command()
@@ -1933,7 +1917,8 @@ def downgrade(
         error_console.print("[dim]The version chain between current and target may be broken.[/dim]")
         raise typer.Exit(FAILURE_EXIT_CODE) from e
 
-    console.print(f"[green]Downgraded:[/green] {escape(name)} -> v{escape(result.installed_version)}")
+    console.print(f"[green]Downgraded:[/green] {escape(name)} -> {format_target_version(result.operation_version)}")
+    print_history_pointer(name)
 
 
 @app.command("list")
@@ -2025,14 +2010,14 @@ def _list_installations(client: PragmaClient, output: OutputFormat) -> None:
     )
 
     if output != OutputFormat.TABLE:
-        output_data([_installed_provider_to_dict(p) for p in providers], output)
+        output_data([build_installation_record(installation) for installation in providers], output)
         return
 
     if not providers:
         console.print("[dim]No providers installed.[/dim]")
         return
 
-    _print_installed_table(providers)
+    print_installed_table(providers)
 
 
 @app.command()
@@ -2124,76 +2109,38 @@ def versions(
 
 
 @app.command()
-def deploy(
-    name: CompletedProviderNameArgument,
-    version: Annotated[
-        str | None,
-        typer.Option(
-            "--version",
-            "-v",
-            help="Published version the API checks before restarting; it does not change the installed version",
-        ),
-    ] = None,
-):
-    """Restart an installed provider at its installed version.
-
-    Restarts the provider on your organization's provider host, which
-    reloads it at the version installed in your organization. --version
-    must name a published version and never changes the installed
-    version; use 'pragma providers upgrade' or 'pragma providers downgrade'
-    to change it.
-
-    Examples:
-        pragma providers deploy pragmatiks/postgres
-        pragma providers deploy pragmatiks/postgres --version 1.2.0
-    """
-    client = get_client()
-    require_auth(client)
-
-    console.print(f"[bold]Restarting provider:[/bold] {escape(name)}")
-    console.print()
-
-    deploy_result = _fetch_with_spinner(
-        "Restarting...",
-        lambda: client.deploy_provider(name, version),
-    )
-
-    console.print(f"[green]Restart requested:[/green] {escape(name)}")
-    console.print(f"[dim]Deployment:[/dim] {escape(deploy_result.deployment_name)}")
-    console.print(f"[dim]Status:[/dim] {escape(deploy_result.status.value)}")
-
-    if deploy_result.image:
-        console.print(f"[dim]Image:[/dim] {escape(deploy_result.image)}")
-
-
-@app.command()
-def status(
+def history(
     name: CompletedProviderNameArgument,
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
 ):
-    """Check the deployment status of an installed provider.
+    """Show the history of an installed provider, newest first.
 
-    Shows the deployment name, status (pending, progressing, available or
-    failed), ready and available replicas, and, when known, the deployed
-    version, image, last update time and status message.
+    Lists each transition of the installation: when it happened, the
+    states it moved between, the operation and version behind it, its
+    message and, for a failure, its cause. The history is kept for 30 days,
+    also after the provider is uninstalled.
 
     Examples:
-        pragma providers status pragmatiks/postgres
-        pragma providers status pragmatiks/my-provider -o json
+        pragma providers history acme/pipeline
+        pragma providers history acme/pipeline -o json
     """
     client = get_client()
     require_auth(client)
 
-    result = _fetch_with_spinner(
-        "Fetching deployment status...",
-        lambda: client.get_deployment_status(name),
+    events = _fetch_with_spinner(
+        "Fetching history...",
+        lambda: client.list_provider_history(name),
     )
 
     if output != OutputFormat.TABLE:
-        output_data(result.model_dump(mode="json"), output)
+        output_data([event.model_dump(mode="json") for event in events], output)
         return
 
-    _print_deployment_status(name, result)
+    if not events:
+        console.print("[dim]No history found.[/dim]")
+        return
+
+    print_history_table(events)
 
 
 @app.command()
@@ -2239,48 +2186,6 @@ def delete(
     )
 
     console.print(f"[green]✓[/green] Provider [bold]{escape(name)}[/bold] deleted successfully")
-
-
-def _print_deployment_status(name: str, result: DeploymentResult) -> None:
-    """Print deployment status in a formatted table.
-
-    Args:
-        name: Provider name (``org/name``).
-        result: DeploymentResult from the API.
-    """
-    status_colors = {
-        "pending": "yellow",
-        "progressing": "cyan",
-        "available": "green",
-        "failed": "red",
-    }
-    status_color = status_colors.get(result.status.value, "white")
-
-    console.print()
-    console.print(f"[bold]Provider:[/bold] {escape(name)}")
-    console.print()
-
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("Property")
-    table.add_column("Value")
-
-    table.add_row("Deployment", escape(result.deployment_name))
-    table.add_row("Status", f"[{status_color}]{escape(result.status.value)}[/{status_color}]")
-    table.add_row("Replicas", f"{result.ready_replicas}/{result.available_replicas}")
-
-    if result.version:
-        table.add_row("Version", escape(result.version))
-
-    if result.image:
-        table.add_row("Image", escape(result.image))
-
-    if result.updated_at:
-        table.add_row("Updated", result.updated_at.strftime("%Y-%m-%d %H:%M:%S UTC"))
-
-    if result.message:
-        table.add_row("Message", escape(result.message))
-
-    console.print(table)
 
 
 def _print_store_list_table(result) -> None:
@@ -2386,35 +2291,147 @@ def print_versions_table(versions: list[ProviderVersion]) -> None:
     console.print(table)
 
 
-def _print_installed_table(providers) -> None:
-    """Print installed providers in a formatted table.
+def format_target_version(version: str | None) -> str:
+    """Format the version an operation targets, such as ``v3.0.0``.
 
     Args:
-        providers: List of installed provider summaries.
+        version: The target version, or ``None`` when the API sent none.
+
+    Returns:
+        The version prefixed with ``v`` with Rich markup escaped, or a dim dash.
+    """
+    if not version:
+        return "[dim]-[/dim]"
+
+    return escape(f"v{version}")
+
+
+def print_history_pointer(name: str) -> None:
+    """Print the command that follows an installation operation started for a provider.
+
+    Args:
+        name: The provider's namespaced name.
+    """
+    console.print(f"[dim]Follow it with: pragma providers history {escape(name)}[/dim]")
+
+
+def format_installation_state_label(state: str) -> str:
+    """Format an installation state as the label the tables show, such as ``Running`` for ``ready``.
+
+    Args:
+        state: An installation state, or ``uninstalled`` from a history entry.
+
+    Returns:
+        The state's label with Rich markup escaped, or the state itself when
+        it has no label.
+    """
+    return escape(INSTALLATION_STATE_LABELS.get(state, state))
+
+
+def format_installation_state(state: str | None) -> str:
+    """Format an installation's state for the terminal, colored by the state.
+
+    Args:
+        state: The installation's lifecycle state, or ``None`` when the API
+            sent none.
+
+    Returns:
+        The state's label in Rich markup: green when running, red when
+        failed, dim while uninstalling, yellow while an operation runs, or a
+        dim dash.
+    """
+    if not state:
+        return "[dim]-[/dim]"
+
+    color = INSTALLATION_STATE_COLORS.get(state, "yellow")
+    return f"[{color}]{format_installation_state_label(state)}[/{color}]"
+
+
+def format_installation_operation(operation_type: str | None, operation_version: str | None) -> str:
+    """Format an operation and the version it targets, such as ``upgrade v3.0.0`` or ``restart v3.0.0``.
+
+    Args:
+        operation_type: The operation's type, or ``None`` when there is none.
+        operation_version: The version the operation targets, or ``None``.
+
+    Returns:
+        The operation and its version with Rich markup escaped, or a dim
+        dash when there is no operation.
+    """
+    if not operation_type:
+        return "[dim]-[/dim]"
+
+    operation_label = escape(INSTALLATION_OPERATION_LABELS.get(operation_type, operation_type))
+    if not operation_version:
+        return operation_label
+
+    return f"{operation_label} {format_target_version(operation_version)}"
+
+
+def format_history_transition(event: ProviderInstallationEvent) -> str:
+    """Format the states a history entry moved between, such as ``Queued -> Starting``.
+
+    Args:
+        event: The history entry.
+
+    Returns:
+        ``<from> -> <to>`` as state labels with Rich markup escaped, or the
+        entered state's label alone when the entry has no previous state.
+    """
+    to_label = format_installation_state_label(event.to_state)
+    if not event.from_state:
+        return to_label
+
+    return f"{format_installation_state_label(event.from_state)} -> {to_label}"
+
+
+def print_installed_table(installations: list[ProviderInstallation]) -> None:
+    """Print installed providers with their state and latest operation in a table.
+
+    Args:
+        installations: Installed providers to list.
     """
     table = Table(show_header=True, header_style="bold")
     table.add_column("Provider")
+    table.add_column("State")
     table.add_column("Version")
-    table.add_column("Upgrade Policy")
-    table.add_column("Installed At")
-    table.add_column("Upgrade Available")
+    table.add_column("Operation")
+    table.add_column("Message")
 
-    for p in providers:
-        installed_at = str(getattr(p, "installed_at", None) or "-")[:19]
-        upgrade_available = getattr(p, "upgrade_available", False)
-        latest = getattr(p, "latest_version", None)
-
-        if upgrade_available and latest:
-            upgrade_display = f"[green]yes[/green] ({escape(latest)})"
-        else:
-            upgrade_display = "[dim]-[/dim]"
-
+    for installation in installations:
         table.add_row(
-            escape(p.canonical),
-            escape(p.installed_version),
-            format_optional_value(getattr(p, "upgrade_policy", None)),
-            escape(installed_at),
-            upgrade_display,
+            escape(installation.canonical),
+            format_installation_state(installation.lifecycle_state),
+            format_target_version(installation.installed_version),
+            format_installation_operation(installation.operation_type, installation.operation_version),
+            format_optional_value(installation.failure_message),
+        )
+
+    console.print(table)
+
+
+def print_history_table(events: list[ProviderInstallationEvent]) -> None:
+    """Print an installation's history in a table, in the order given.
+
+    Args:
+        events: History entries, newest first.
+    """
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Time")
+    table.add_column("Transition")
+    table.add_column("Operation")
+    table.add_column("Version")
+    table.add_column("Message")
+    table.add_column("Cause")
+
+    for event in events:
+        table.add_row(
+            event.occurred_at.strftime("%Y-%m-%d %H:%M:%S"),
+            format_history_transition(event),
+            format_installation_operation(event.operation_type, None),
+            format_target_version(event.version),
+            format_optional_value(event.message),
+            format_optional_value(event.cause),
         )
 
     console.print(table)
@@ -2495,22 +2512,15 @@ def _provider_detail_to_dict(provider, versions: list[ProviderVersion] | None = 
     }
 
 
-def _installed_provider_to_dict(provider) -> dict:
-    """Convert an installed provider summary to a plain dict for JSON/YAML output.
+def build_installation_record(installation: ProviderInstallation) -> dict:
+    """Build the JSON or YAML record of an installed provider.
 
     Args:
-        provider: Installed provider summary object.
+        installation: The installed provider.
 
     Returns:
-        Dictionary representation.
+        The installation's identity, served version, state, latest
+        operation and its target version, failure message, and installation
+        time in ISO 8601.
     """
-    return {
-        "prefix": provider.prefix,
-        "name": provider.name,
-        "canonical": provider.canonical,
-        "installed_version": provider.installed_version,
-        "upgrade_policy": getattr(provider, "upgrade_policy", None),
-        "installed_at": _serialize_datetime(provider, "installed_at"),
-        "latest_version": getattr(provider, "latest_version", None),
-        "upgrade_available": getattr(provider, "upgrade_available", False),
-    }
+    return installation.model_dump(mode="json", exclude={"config", "created_at", "updated_at"})
