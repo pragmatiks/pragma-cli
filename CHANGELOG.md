@@ -1,5 +1,20 @@
 # Changelog
 
+## v14.0.0 (2026-10-28)
+
+### BREAKING CHANGE
+
+- `pragma providers status`, `pragma providers deploy`
+and `--upgrade-policy` are removed with the API behind them.
+
+### Feat
+
+- providers history and installation states (PRA-510)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v19.0.0 (#99)
+
 ## v13.1.0 (2026-10-23)
 
 ### Feat
