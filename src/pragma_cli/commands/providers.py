@@ -1718,6 +1718,8 @@ def install(
 ):
     """Install a provider from the store.
 
+    Queues the operation and returns. Follow it with: pragma providers history NAME.
+
     Examples:
         pragma providers install pragmatiks/qdrant
         pragma providers install pragmatiks/postgres --version 1.2.0
@@ -1759,7 +1761,7 @@ def install(
         ),
     )
 
-    console.print(f"[green]Installed:[/green] {escape(name)} {format_target_version(result.operation_version)}")
+    console.print(f"[green]Install queued:[/green] {escape(name)} {format_target_version(result.operation_version)}")
     print_history_pointer(name)
 
 
@@ -1776,6 +1778,8 @@ def uninstall(
     ] = False,
 ):
     """Uninstall an installed provider.
+
+    Queues the operation and returns. Follow it with: pragma providers history NAME.
 
     Examples:
         pragma providers uninstall pragmatiks/qdrant
@@ -1822,7 +1826,8 @@ def uninstall(
 
         report_not_found(e, f"Provider '{name}' is not installed.")
 
-    console.print(f"[green]Uninstalled:[/green] {escape(name)}")
+    console.print(f"[green]Uninstall queued:[/green] {escape(name)}")
+    print_history_pointer(name)
 
 
 @app.command()
@@ -1835,6 +1840,8 @@ def upgrade(
     ] = False,
 ):
     """Upgrade an installed provider to a newer version.
+
+    Queues the operation and returns. Follow it with: pragma providers history NAME.
 
     Examples:
         pragma providers upgrade pragmatiks/qdrant
@@ -1860,7 +1867,7 @@ def upgrade(
         lambda: client.upgrade_provider(name, target_version=version),
     )
 
-    console.print(f"[green]Upgraded:[/green] {escape(name)} -> {format_target_version(result.operation_version)}")
+    console.print(f"[green]Upgrade queued:[/green] {escape(name)} -> {format_target_version(result.operation_version)}")
     print_history_pointer(name)
 
 
@@ -1874,6 +1881,8 @@ def downgrade(
     ] = False,
 ) -> None:
     """Downgrade an installed provider to a previous version.
+
+    Queues the operation and returns. Follow it with: pragma providers history NAME.
 
     Requires an explicit target version. Migrations run sequentially
     through each intermediate version in reverse order.
@@ -1917,7 +1926,9 @@ def downgrade(
         error_console.print("[dim]The version chain between current and target may be broken.[/dim]")
         raise typer.Exit(FAILURE_EXIT_CODE) from e
 
-    console.print(f"[green]Downgraded:[/green] {escape(name)} -> {format_target_version(result.operation_version)}")
+    console.print(
+        f"[green]Downgrade queued:[/green] {escape(name)} -> {format_target_version(result.operation_version)}"
+    )
     print_history_pointer(name)
 
 
