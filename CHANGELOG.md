@@ -1,5 +1,11 @@
 # Changelog
 
+## v14.0.1 (2026-10-29)
+
+### Fix
+
+- say provider operations are queued, not done (PRA-829)
+
 ## v14.0.0 (2026-10-28)
 
 ### BREAKING CHANGE
