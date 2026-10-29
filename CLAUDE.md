@@ -131,6 +131,7 @@ mise is the only toolchain source, on the Mac, in Linux cloud sessions and in CI
 
 - `mise.toml` pins python, uv, pre-commit, commitizen and yq; `mise.lock` and `.mise/locks/` lock them; `locked = true` in `[settings]` makes every mise install fail on a tool the lockfile does not record.
 - `mise.toml` points uv at mise's Python (`UV_PYTHON`, `UV_PYTHON_PREFERENCE`), so `.venv` always runs the pinned interpreter.
+- `[tool.uv] required-version` in `pyproject.toml` equals the uv pin in `mise.toml`; uv refuses to run at any other version, and the `Toolchain` workflow fails a pull request where they differ.
 - Changing a tool version in `mise.toml` means running `mise run lock:toolchain` and committing the lock; the `Toolchain` workflow fails a pull request whose lock is stale.
 - The mise version is pinned twice and moves in one sweep across every Pragmatiks repo: `min_version` in `mise.toml`, and every `jdx/mise-action` `version:` under `.github/workflows`.
 
