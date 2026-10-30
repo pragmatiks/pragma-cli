@@ -587,6 +587,24 @@ def format_state(state: str) -> str:
     return escape(f"[{state}]")
 
 
+def format_resource_state(resource: dict) -> str:
+    """Name a resource's state as the CLI shows it.
+
+    Args:
+        resource: Resource dictionary the API returned.
+
+    Returns:
+        ``processing (apply queued)`` while the resource is processing and
+        holds a configuration applied during its operation (the API's
+        ``queued_config``), otherwise its ``lifecycle_state``.
+    """
+    state = resource["lifecycle_state"]
+
+    if state == LifecycleState.PROCESSING and resource.get("queued_config") is not None:
+        return f"{state} (apply queued)"
+    return state
+
+
 def _print_resource_schemas_table(types: list[dict]) -> None:
     """Print resource schemas in a formatted table.
 
@@ -701,7 +719,7 @@ def _print_resources_table(resources: list[dict]) -> None:
     failed_resources: list[tuple[str, str]] = []
 
     for res in resources:
-        state = _format_state_color(res["lifecycle_state"])
+        state = _format_state_color(res)
         updated = res.get("updated_at")
         if updated:
             updated = updated[:19].replace("T", " ")
@@ -764,8 +782,14 @@ def get(
     output_data([fetched_resource], output, table_renderer=_print_resources_table)
 
 
-def _format_state_color(state: str) -> str:
-    """Format lifecycle state with color markup.
+def _format_state_color(resource: dict) -> str:
+    """Format a resource's state with color markup.
+
+    The color follows the lifecycle state; the text is
+    ``format_resource_state``'s.
+
+    Args:
+        resource: Resource dictionary the API returned.
 
     Returns:
         State string wrapped in Rich color markup.
@@ -780,8 +804,8 @@ def _format_state_color(state: str) -> str:
         "deleting": "dark_orange",
         "deleted": "dim",
     }
-    color = state_colors.get(state.lower(), "white")
-    return f"[{color}]{escape(state)}[/{color}]"
+    color = state_colors.get(resource["lifecycle_state"].lower(), "white")
+    return f"[{color}]{escape(format_resource_state(resource))}[/{color}]"
 
 
 def _format_config_value(value) -> str:
@@ -873,7 +897,10 @@ def _print_resource_details(res: dict) -> None:
     table.add_column("Property")
     table.add_column("Value")
 
-    table.add_row("State", _format_state_color(res["lifecycle_state"]))
+    table.add_row("State", _format_state_color(res))
+
+    if res.get("operation_id"):
+        table.add_row("Operation", escape(f"{res['operation_type'].lower()} {res['operation_id']}"))
 
     if res.get("error"):
         table.add_row("Error", f"[red]{escape(res['error'])}[/red]")
@@ -972,7 +999,8 @@ def _plan_apply_batch(
     Args:
         files: YAML files supplied on the command line.
         project_id: Resolved project ID for the active command.
-        draft: When False, injects ``lifecycle_state=pending``.
+        draft: Sets every document's ``lifecycle_state`` to ``draft`` when
+            True and to ``pending`` when False, whatever the document says.
 
     Returns:
         Fully-planned batch with either a populated resource list or
@@ -1025,8 +1053,7 @@ def _plan_apply_batch(
                 plan.errors.append(_PlanError(source=source, index=index, resource_id=resource_id, message=str(e)))
                 continue
 
-            if not draft:
-                prepared["lifecycle_state"] = "pending"
+            prepared["lifecycle_state"] = "draft" if draft else "pending"
 
             try:
                 payload = _resource_payload(prepared, project_id)
@@ -1083,7 +1110,14 @@ def apply(
     positional_file: Annotated[
         list[typer.FileText] | None, typer.Argument(show_default=False, help="YAML file(s) (same as -f).")
     ] = None,
-    draft: Annotated[bool, typer.Option("--draft", "-d", help="Keep in draft state (don't deploy)")] = False,
+    draft: Annotated[
+        bool,
+        typer.Option(
+            "--draft",
+            "-d",
+            help="Save as a draft without deploying; only a new or draft resource can be saved as one.",
+        ),
+    ] = False,
 ):
     """Apply resources from YAML files (multi-document supported).
 
@@ -1092,7 +1126,8 @@ def apply(
         pragma resources apply <file.yaml>
 
     By default, resources are queued for immediate processing (deployed).
-    Use --draft to keep resources in draft state without deploying.
+    Use --draft to save new or draft resources without deploying; the API
+    refuses a resource that is not a draft and says how to recover it.
 
     The project context follows the standard chain:
     ``--project`` flag > ``PRAGMA_PROJECT`` env > persistent default.
@@ -1167,8 +1202,9 @@ def _execute_plan(plan: _ApplyPlan, project_id: str) -> None:
             report_apply_failure(e, heading, plan, applied, uploaded, failed_resource_id=planned.resource_id)
 
         applied_id = f"{result['provider']}/{result['resource']}/{result['name']}"
-        applied.append((planned.resource_id, result["lifecycle_state"]))
-        print(f"Applied {escape(applied_id)} {format_state(result['lifecycle_state'])}")
+        applied_state = format_resource_state(result)
+        applied.append((planned.resource_id, applied_state))
+        print(f"Applied {escape(applied_id)} {format_state(applied_state)}")
 
         if planned.upload is not None:
             pending_uploads.append(planned)
@@ -1208,7 +1244,8 @@ def report_apply_failure(
         error: The error the apply or upload raised.
         heading: What failed, such as ``Error applying acme/db/database/main``.
         plan: Full plan that was being executed.
-        applied: ``(resource_id, lifecycle_state)`` pairs applied so far.
+        applied: ``(resource_id, state)`` pairs applied so far, each state
+            as ``format_resource_state`` names it.
         uploaded: Resource IDs whose file content was uploaded so far.
         failed_resource_id: Resource ID whose apply or upload failed.
 
@@ -1247,7 +1284,8 @@ def _report_partial_apply_failure(
     Args:
         plan: Plan that was executing when the failure occurred.
         applied: Resources that were successfully applied, as a list
-            of ``(resource_id, lifecycle_state)`` tuples.
+            of ``(resource_id, state)`` tuples, each state as
+            ``format_resource_state`` names it.
         uploaded: Resource IDs whose file bytes were uploaded.
         failed_resource_id: Resource ID whose apply or upload failed.
     """
