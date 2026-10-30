@@ -69,6 +69,23 @@ def parse_resource_id(resource_id: str) -> tuple[str, str, str]:
     return provider, resource, name
 
 
+def parse_api_error_body(response: httpx.Response) -> dict[str, Any] | None:
+    """Read an API error body as a JSON object.
+
+    Args:
+        response: The API's error response.
+
+    Returns:
+        The decoded body, or ``None`` when it is not JSON or not a JSON object.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+
+    return body if isinstance(body, dict) else None
+
+
 def parse_api_error_message(response: httpx.Response) -> str | None:
     """Read the human-readable message from an API error body.
 
@@ -79,12 +96,9 @@ def parse_api_error_message(response: httpx.Response) -> str | None:
         A string ``detail``, ``detail.message``, or a top-level ``message``,
         or ``None`` when the body carries none of them.
     """
-    try:
-        body = response.json()
-    except ValueError:
-        return None
+    body = parse_api_error_body(response)
 
-    if not isinstance(body, dict):
+    if body is None:
         return None
 
     detail = body.get("detail")
@@ -97,6 +111,26 @@ def parse_api_error_message(response: httpx.Response) -> str | None:
 
     message = body.get("message")
     return message if isinstance(message, str) else None
+
+
+def parse_api_error_code(response: httpx.Response) -> str | None:
+    """Read the machine-readable code from an API error body.
+
+    Args:
+        response: The API's error response.
+
+    Returns:
+        The body's top-level ``error`` string, such as
+        ``organization_deleting``, or ``None`` when the body is not a JSON
+        object or carries no string ``error``.
+    """
+    body = parse_api_error_body(response)
+
+    if body is None:
+        return None
+
+    code = body.get("error")
+    return code if isinstance(code, str) else None
 
 
 def format_optional_value(value: str | None) -> str:

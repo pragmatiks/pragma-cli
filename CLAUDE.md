@@ -81,6 +81,10 @@ The context (`--context`/`PRAGMA_CONTEXT`) is resolved when a command first need
 - `pragma auth token` - Print the bearer token; without a valid one prints the login-required message on stderr, failure
 - `pragma auth logout` - Clear credentials
 
+### Organizations
+- `pragma organizations me [-o json|yaml]` - Show the caller's own organization: ID, name, slug, status and timestamps
+- `pragma organizations status [-o json|yaml]` - Show the organization's status (`bootstrapping`, `ready`, `bootstrap_failed`, `deleting`, `deleted`); `deleting` and `deleted` add a line saying so, JSON and YAML are the API's answer as returned, and the command exits 0 in every status
+
 ### Operations
 - `pragma ops dead-letter list` - List failed events
 - `pragma ops dead-letter show <id>` - Show event details as plain JSON; an unknown event prints "Event '<id>' not found." and exits not found

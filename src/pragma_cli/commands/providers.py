@@ -53,6 +53,7 @@ from rich.table import Table
 from pragma_cli import get_client
 from pragma_cli.commands.completions import completion_provider_ids
 from pragma_cli.errors import (
+    ORGANIZATION_DELETING,
     check_bootstrap_error,
     error_console,
     format_api_error,
@@ -70,7 +71,13 @@ from pragma_cli.exit_codes import (
     FAILURE_EXIT_CODE,
     INPUT_ERROR_EXIT_CODE,
 )
-from pragma_cli.helpers import OutputFormat, format_optional_value, output_data, parse_api_error_message
+from pragma_cli.helpers import (
+    OutputFormat,
+    format_optional_value,
+    output_data,
+    parse_api_error_code,
+    parse_api_error_message,
+)
 
 
 app = typer.Typer(help="Provider management commands")
@@ -1793,7 +1800,7 @@ def uninstall(
             resources and --cascade is not set, with ``NOT_FOUND_EXIT_CODE``
             if it is not installed, or with code 0 if the user cancels.
         httpx.HTTPStatusError: If the API refuses the uninstall for any
-            other reason.
+            other reason, a 409 for an organization being deleted included.
     """  # noqa: DOC502
     client = get_client()
     require_auth(client)
@@ -1819,7 +1826,7 @@ def uninstall(
             lambda: client.uninstall_provider(name, cascade=cascade),
         )
     except httpx.HTTPStatusError as e:
-        if e.response.status_code == 409:
+        if e.response.status_code == 409 and parse_api_error_code(e.response) != ORGANIZATION_DELETING:
             error_console.print(f"[red]Error:[/red] Provider '{escape(name)}' has active resources.")
             error_console.print("[dim]Use --cascade to delete all resources with the provider.[/dim]")
             raise typer.Exit(FAILURE_EXIT_CODE) from e
