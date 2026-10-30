@@ -1789,8 +1789,10 @@ def uninstall(
     \f
 
     Raises:
-        typer.Exit: With ``FAILURE_EXIT_CODE`` if the provider still has
-            resources and --cascade is not set, with ``NOT_FOUND_EXIT_CODE``
+        typer.Exit: With ``FAILURE_EXIT_CODE`` and the API's message if the
+            API refuses the uninstall with a conflict, such as resources left
+            without --cascade or an installed provider that embeds this one,
+            with ``NOT_FOUND_EXIT_CODE``
             if it is not installed, or with code 0 if the user cancels.
         httpx.HTTPStatusError: If the API refuses the uninstall for any
             other reason.
@@ -1820,8 +1822,7 @@ def uninstall(
         )
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 409:
-            error_console.print(f"[red]Error:[/red] Provider '{escape(name)}' has active resources.")
-            error_console.print("[dim]Use --cascade to delete all resources with the provider.[/dim]")
+            print_api_error(e)
             raise typer.Exit(FAILURE_EXIT_CODE) from e
 
         report_not_found(e, f"Provider '{name}' is not installed.")
