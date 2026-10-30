@@ -1,8 +1,8 @@
 """Dead letter event management commands.
 
-Commands for listing, inspecting, retrying, and deleting dead letter events
-from the Pragmatiks platform. Dead letter events are failed resource
-operations that exceeded retry attempts.
+Commands for listing, inspecting, and deleting dead letter events
+from the Pragmatiks platform. A dead letter event records a provider
+reply that Pragmatiks could not read.
 """
 
 from __future__ import annotations
@@ -110,63 +110,6 @@ def show(
         report_not_found(e, f"Event '{event_id}' not found.")
 
     output_data(event, OutputFormat.JSON)
-
-
-@app.command()
-def retry(
-    event_id: Annotated[
-        str | None,
-        typer.Argument(help="Dead letter event ID to retry"),
-    ] = None,
-    all_events: Annotated[
-        bool,
-        typer.Option("--all", help="Retry all dead letter events"),
-    ] = False,
-):
-    """Retry dead letter event(s).
-
-    Retries a single event by ID, or all events with --all flag.
-    The --all flag requires confirmation.
-
-    Example:
-        pragma ops dead-letter retry evt_123abc
-        pragma ops dead-letter retry --all
-
-    \f
-
-    Raises:
-        typer.Exit: With ``NOT_FOUND_EXIT_CODE`` if the event is not found,
-            or with code 0 if the user cancels.
-        click.UsageError: If both or neither of EVENT_ID and --all are given.
-    """
-    if event_id and all_events:
-        raise click.UsageError("Pass either EVENT_ID or --all, not both.")
-
-    if not event_id and not all_events:
-        raise click.UsageError("Provide EVENT_ID or --all.")
-
-    client = get_client()
-
-    if all_events:
-        events = client.list_dead_letter_events()
-        count = len(events)
-
-        if count == 0:
-            print("[dim]No dead letter events to retry.[/dim]")
-            return
-
-        if not typer.confirm(f"Retry {count} event(s)?"):
-            raise typer.Exit(0)
-
-        retried = client.retry_all_dead_letter_events()
-        print(f"[green]Retried {retried} event(s)[/green]")
-    elif event_id:
-        try:
-            client.retry_dead_letter_event(event_id)
-        except httpx.HTTPStatusError as e:
-            report_not_found(e, f"Event '{event_id}' not found.")
-
-        print(f"[green]Retried event:[/green] {escape(event_id)}")
 
 
 @app.command()
