@@ -1,6 +1,6 @@
 [project]
 name = "pragmatiks-cli"
-version = "14.0.2"
+version = "14.0.3"
 description = "Command-line interface for Pragmatiks"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -56,7 +56,7 @@ exclude = ["**/__pycache__/**"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "14.0.2"
+version = "14.0.3"
 version_files = ["pyproject.toml:^version"]
 tag_format = "v$version"
 bump_message = "bump: version $current_version → $new_version [skip ci]"

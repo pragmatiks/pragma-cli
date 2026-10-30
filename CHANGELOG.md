@@ -1,5 +1,11 @@
 # Changelog
 
+## v14.0.3 (2026-10-30)
+
+### Fix
+
+- print the API's refusal when an uninstall conflicts (PRA-511)
+
 ## v14.0.2 (2026-10-30)
 
 ### Fix
