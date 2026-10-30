@@ -1,5 +1,11 @@
 # Changelog
 
+## v14.0.2 (2026-10-30)
+
+### Fix
+
+- show each provider version's package and wheel digest in the versions table (PRA-470)
+
 ## v14.0.1 (2026-10-29)
 
 ### Fix
