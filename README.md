@@ -91,7 +91,6 @@ Exit codes and output streams are listed in `pragma --help`: errors and warnings
 |---------|-------------|
 | `pragma ops dead-letter list` | List failed events |
 | `pragma ops dead-letter show <id>` | Show event details |
-| `pragma ops dead-letter retry <id> \| --all` | Retry failed event(s) |
 | `pragma ops dead-letter delete <id> \| --all \| --provider <name>` | Delete failed event(s) |
 
 ## Environment Variables
