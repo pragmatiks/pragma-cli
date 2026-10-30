@@ -2091,7 +2091,9 @@ def versions(
     A version still being published shows where it is, from "waiting for
     the wheel" to "publishing to the registry"; a failed version shows why
     it failed. Versions that are not published are visible only to the
-    organization that published them.
+    organization that published them. The Wheel SHA-256 column is the
+    digest of the stored wheel, renamed to the organization's distribution
+    name, not of the file you built.
 
     Examples:
         pragma providers versions acme/pipeline
@@ -2285,6 +2287,8 @@ def print_versions_table(versions: list[ProviderVersion]) -> None:
     table.add_column("Version")
     table.add_column("Status")
     table.add_column("Published")
+    table.add_column("Package")
+    table.add_column("Wheel SHA-256")
     table.add_column("Message")
 
     for provider_version in versions:
@@ -2296,10 +2300,44 @@ def print_versions_table(versions: list[ProviderVersion]) -> None:
             escape(provider_version.version),
             format_version_status(provider_version.status, status_label),
             published,
+            format_package(provider_version.package),
+            format_wheel_digest(provider_version.wheel_sha256),
             format_version_message(provider_version),
         )
 
     console.print(table)
+
+
+def format_package(package: str | None) -> str:
+    """Format a version's importable package for a table cell.
+
+    Args:
+        package: The package its entry point names, or ``None`` before the publish declared one.
+
+    Returns:
+        The package with Rich markup escaped, or a dim dash.
+    """
+    if not package:
+        return "[dim]-[/dim]"
+
+    return escape(package)
+
+
+def format_wheel_digest(wheel_sha256: str | None) -> str:
+    """Format a wheel's SHA-256 digest for a table cell, shortened to its first 12 hex characters.
+
+    The full digest is in the ``-o json|yaml`` output.
+
+    Args:
+        wheel_sha256: The wheel's hex digest, or ``None`` before the publish declared one.
+
+    Returns:
+        The shortened digest, or a dim dash.
+    """
+    if not wheel_sha256:
+        return "[dim]-[/dim]"
+
+    return escape(wheel_sha256[:12])
 
 
 def format_target_version(version: str | None) -> str:
