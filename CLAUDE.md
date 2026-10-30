@@ -41,7 +41,8 @@ pragma = "pragma_cli.main:app"
 - `pragma resources schemas` - List available resource schemas
 - `pragma resources get <org/provider/resource[/name]>` - Get resource(s) by type or full ID
 - `pragma resources describe <org/provider/resource/name>` - Show detailed resource info
-- `pragma resources apply <file>... | -f <file>...` - Apply resources from YAML. Files given both positionally and with `-f` are a usage error. Every document is planned first; invalid documents are listed and the command exits with an input error before anything is applied. A schema read the API refuses (any status but 404, which skips schema validation for that provider), a schema that is not a valid JSON schema, or a broken network goes to the global handler, failure, before anything is applied
+- A processing resource holding a configuration applied while its operation runs (`queued_config`) shows its state as `processing (apply queued)` in the `list`/`get` State column, the `describe` State row, the `apply` `Applied <id> [<state>]` line and the `PARTIAL APPLY FAILURE` report's applied list; `describe` also shows an `Operation` row, `<operation type, lowercased> <operation_id>`, while the resource carries an `operation_id`
+- `pragma resources apply <file>... | -f <file>... [--draft]` - Apply resources from YAML. Every document is sent as `pending`, or as `draft` with `--draft`, whatever its own `lifecycle_state`; the API refuses a draft save of a resource that is neither new nor a draft (409, its message names the recovery). Files given both positionally and with `-f` are a usage error. Every document is planned first; invalid documents are listed and the command exits with an input error before anything is applied. A schema read the API refuses (any status but 404, which skips schema validation for that provider), a schema that is not a valid JSON schema, or a broken network goes to the global handler, failure, before anything is applied
 - `pragma resources delete|deactivate <org/provider/resource/name> | -f <file>...` - Delete or deactivate a resource. With `-f`, every file is parsed and checked first; a file that is not UTF-8 or valid YAML, or a document without a provider, resource and name or declaring a `project_id` other than the active project, is listed and the command exits with an input error before any resource changes. A resource ID together with `-f` is a usage error
 - `pragma resources tags list/add/remove` - Manage resource tags
 - A resource ID that is not `org/provider/resource/name` with no empty segment (`get` also takes `org/provider/resource`) is a usage error before any request
@@ -84,7 +85,6 @@ The context (`--context`/`PRAGMA_CONTEXT`) is resolved when a command first need
 ### Operations
 - `pragma ops dead-letter list` - List failed events
 - `pragma ops dead-letter show <id>` - Show event details as plain JSON; an unknown event prints "Event '<id>' not found." and exits not found
-- `pragma ops dead-letter retry <id> | --all` - Retry failed event(s); an id together with `--all` is a usage error
 - `pragma ops dead-letter delete <id> | --all | --provider <name>` - Delete failed event(s); an id together with `--all` or `--provider`, or `--all` together with `--provider`, is a usage error
 
 ## Plugin Authoring
