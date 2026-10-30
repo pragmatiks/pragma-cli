@@ -22,7 +22,7 @@ from pragma_cli.exit_codes import (
     NOT_FOUND_EXIT_CODE,
     compute_http_exit_code,
 )
-from pragma_cli.helpers import parse_api_error_message
+from pragma_cli.helpers import parse_api_error_code, parse_api_error_message
 
 
 if TYPE_CHECKING:
@@ -48,6 +48,17 @@ ORGANIZATION_BOOTSTRAPPING = "organization_bootstrapping"
 
 ORGANIZATION_BOOTSTRAP_FAILED = "organization_bootstrap_failed"
 """``error`` value of the API's 503 body when setting up the caller's organization failed."""
+
+BOOTSTRAP_FALLBACK_MESSAGES: dict[str, str] = {
+    ORGANIZATION_BOOTSTRAPPING: "Your organization is being set up. Please try again in a moment.",
+    ORGANIZATION_BOOTSTRAP_FAILED: (
+        "Your organization could not be set up. Please contact support at support@pragmatiks.io."
+    ),
+}
+"""What ``check_bootstrap_error`` prints, by ``error`` code, when the API's 503 body carries no message."""
+
+ORGANIZATION_DELETING = "organization_deleting"
+"""``error`` value of the API's 409 body while the caller's organization is being deleted."""
 
 error_console = Console(stderr=True)
 """Console for errors and warnings; it writes to stderr so stdout carries only command output."""
@@ -132,7 +143,8 @@ def format_api_error(error: httpx.HTTPStatusError) -> str:
 def check_bootstrap_error(error: httpx.HTTPStatusError) -> None:
     """Report a 503 saying the caller's organization is not set up yet, and exit.
 
-    Returns without printing anything for any other response, so the caller
+    Prints the API's own message, or ``BOOTSTRAP_FALLBACK_MESSAGES`` when the
+    body carries none, with Rich markup escaped. Returns without printing anything for any other response, so the caller
     reports the error itself.
 
     Args:
@@ -145,23 +157,15 @@ def check_bootstrap_error(error: httpx.HTTPStatusError) -> None:
     if error.response.status_code != 503:
         return
 
-    try:
-        body = error.response.json()
-    except ValueError:
+    kind = parse_api_error_code(error.response)
+
+    if kind not in BOOTSTRAP_FALLBACK_MESSAGES:
         return
 
-    if not isinstance(body, dict):
-        return
-
-    kind = body.get("error")
-
-    if kind == ORGANIZATION_BOOTSTRAPPING:
-        error_console.print("[yellow]Your workspace is still being set up. Please try again in a moment.[/yellow]")
-        raise typer.Exit(FAILURE_EXIT_CODE)
-
-    if kind == ORGANIZATION_BOOTSTRAP_FAILED:
-        error_console.print("[red]Your workspace setup failed. Please contact support.[/red]")
-        raise typer.Exit(FAILURE_EXIT_CODE)
+    message = parse_api_error_message(error.response) or BOOTSTRAP_FALLBACK_MESSAGES[kind]
+    color = "yellow" if kind == ORGANIZATION_BOOTSTRAPPING else "red"
+    error_console.print(f"[{color}]{escape(message)}[/{color}]")
+    raise typer.Exit(FAILURE_EXIT_CODE)
 
 
 def report_not_found(error: httpx.HTTPStatusError, not_found_message: str) -> NoReturn:
