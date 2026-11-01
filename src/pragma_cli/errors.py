@@ -51,9 +51,7 @@ ORGANIZATION_BOOTSTRAP_FAILED = "organization_bootstrap_failed"
 
 BOOTSTRAP_FALLBACK_MESSAGES: dict[str, str] = {
     ORGANIZATION_BOOTSTRAPPING: "Your organization is being set up. Please try again in a moment.",
-    ORGANIZATION_BOOTSTRAP_FAILED: (
-        "Your organization could not be set up. Please contact support at support@pragmatiks.io."
-    ),
+    ORGANIZATION_BOOTSTRAP_FAILED: "Your organization could not be set up. Try again from the Pragmatiks dashboard.",
 }
 """What ``check_bootstrap_error`` prints, by ``error`` code, when the API's 503 body carries no message."""
 
