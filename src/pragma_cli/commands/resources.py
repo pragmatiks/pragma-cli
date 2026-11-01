@@ -808,6 +808,54 @@ def _format_state_color(resource: dict) -> str:
     return f"[{color}]{escape(format_resource_state(resource))}[/{color}]"
 
 
+HEALTH_COLORS = {
+    "healthy": "green",
+    "degraded": "yellow",
+    "blocked": "yellow",
+    "failed": "red",
+}
+
+
+def format_health(resource: dict) -> str:
+    """Format a resource's health with color markup.
+
+    A degraded resource names each failed dependency it reads from:
+    ``degraded — <id> failed, <id> failed``. Every other health value is
+    shown as it is.
+
+    Args:
+        resource: Resource dictionary the API returned, carrying ``health``.
+
+    Returns:
+        Health string wrapped in Rich color markup.
+    """
+    health = resource["health"]
+    failed_dependencies = ", ".join(f"{entry['resource']} failed" for entry in resource.get("degraded_by") or [])
+    text = f"{health} — {failed_dependencies}" if failed_dependencies else health
+    color = HEALTH_COLORS.get(health, "white")
+    return f"[{color}]{escape(text)}[/{color}]"
+
+
+def print_blockers(blockers: list[dict]) -> None:
+    """Print the ``Blocked by:`` section of a resource's details.
+
+    Each blocker prints its resource and reason on one line, then, dimmed,
+    the command that shows that resource.
+
+    Args:
+        blockers: Blockers the API returned on the resource; an empty list
+            prints nothing.
+    """
+    if not blockers:
+        return
+
+    console.print()
+    console.print("[bold]Blocked by:[/bold]")
+    for blocker in blockers:
+        console.print(f"  {escape(blocker['resource'])} — {escape(blocker['reason'])}")
+        console.print(f"    [dim]{escape(blocker['command'])}[/dim]")
+
+
 def _format_config_value(value) -> str:
     """Format a config value for display.
 
@@ -899,6 +947,9 @@ def _print_resource_details(res: dict) -> None:
 
     table.add_row("State", _format_state_color(res))
 
+    if res.get("health"):
+        table.add_row("Health", format_health(res))
+
     if res.get("operation_id"):
         table.add_row("Operation", escape(f"{res['operation_type'].lower()} {res['operation_id']}"))
 
@@ -911,6 +962,8 @@ def _print_resource_details(res: dict) -> None:
         table.add_row("Updated", escape(res["updated_at"]))
 
     console.print(table)
+
+    print_blockers(res.get("blockers") or [])
 
     config = res.get("config", {})
     if config:
@@ -957,8 +1010,8 @@ def describe(
 
     Resolves the active project from ``--project``, ``PRAGMA_PROJECT``,
     or the persistent default set via ``pragma projects use <project-id>``.
-    Displays the resource's config, outputs, dependencies, and error
-    messages. Sensitive fields are redacted by default; use --reveal
+    Displays the resource's state, health, blockers, config, outputs,
+    dependencies, and error messages. Sensitive fields are redacted by default; use --reveal
     to show their values.
 
     Examples:
