@@ -1,5 +1,20 @@
 # Changelog
 
+## v15.0.0 (2026-11-01)
+
+### BREAKING CHANGE
+
+- pragma ops dead-letter retry is removed; Pragmatiks no longer retries a dead-letter event.
+
+### Feat
+
+- **resources**: show a queued apply and the running operation, and send --draft as a draft (PRA-500)
+- delete the ops dead-letter retry command (PRA-500)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v20.0.0 (#107)
+
 ## v14.0.3 (2026-10-30)
 
 ### Fix
