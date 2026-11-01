@@ -1,5 +1,21 @@
 # Changelog
 
+## v15.1.0 (2026-11-01)
+
+### Feat
+
+- **resources**: label dependents a delete fails
+- **resources**: show blockers and health in describe
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v21.1.0 (#110)
+- **deps**: update pragmatiks-sdk to v21.0.0 (#108)
+
+### Refactor
+
+- **resources**: tidy the describe health helpers
+
 ## v15.0.0 (2026-11-01)
 
 ### BREAKING CHANGE
