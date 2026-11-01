@@ -19,6 +19,7 @@ ACTION_WORDING = {
     TeardownAction.WALK_THROUGH: "left in draft",
     TeardownAction.RELEASED: "kept, another owner still holds it",
     TeardownAction.DEPENDENT_WAITING: "moved to waiting until its dependency returns",
+    TeardownAction.DEPENDENT_FAILED: "failed, its dependency is deleted",
 }
 
 
