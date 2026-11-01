@@ -35,6 +35,13 @@ app = typer.Typer()
 
 _MAX_FILE_REFERENCE_SIZE = 10 * 1024 * 1024
 
+HEALTH_COLORS = {
+    "healthy": "green",
+    "degraded": "yellow",
+    "blocked": "yellow",
+    "failed": "red",
+}
+
 
 class _ScopedResourcePayload(BaseModel):
     """Generic project-scoped resource payload for CLI-driven apply operations.
@@ -808,27 +815,22 @@ def _format_state_color(resource: dict) -> str:
     return f"[{color}]{escape(format_resource_state(resource))}[/{color}]"
 
 
-HEALTH_COLORS = {
-    "healthy": "green",
-    "degraded": "yellow",
-    "blocked": "yellow",
-    "failed": "red",
-}
-
-
 def format_health(resource: dict) -> str:
     """Format a resource's health with color markup.
 
-    A degraded resource names each failed dependency it reads from:
-    ``degraded — <id> failed, <id> failed``. Every other health value is
-    shown as it is.
+    Each failed dependency in ``degraded_by``, when present, is appended
+    after the health value: ``degraded — <id> failed, <id> failed``. Without
+    one, the health value is shown as it is.
 
     Args:
         resource: Resource dictionary the API returned, carrying ``health``.
 
     Returns:
         Health string wrapped in Rich color markup.
-    """
+
+    Raises:
+        KeyError: If the resource carries no ``health``.
+    """  # noqa: DOC502
     health = resource["health"]
     failed_dependencies = ", ".join(f"{entry['resource']} failed" for entry in resource.get("degraded_by") or [])
     text = f"{health} — {failed_dependencies}" if failed_dependencies else health
@@ -1011,8 +1013,8 @@ def describe(
     Resolves the active project from ``--project``, ``PRAGMA_PROJECT``,
     or the persistent default set via ``pragma projects use <project-id>``.
     Displays the resource's state, health, blockers, config, outputs,
-    dependencies, and error messages. Sensitive fields are redacted by default; use --reveal
-    to show their values.
+    dependencies, and error messages. Sensitive fields are redacted by
+    default; use --reveal to show their values.
 
     Examples:
         pragma resources describe pragmatiks/gcp/secret/my-test-secret
