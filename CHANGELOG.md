@@ -1,5 +1,16 @@
 # Changelog
 
+## v16.0.0 (2026-11-02)
+
+### Feat
+
+- remove the pragma ops dead-letter commands (PRA-505C)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v22.0.1 (#113)
+- **deps**: update pragmatiks-sdk to v22.0.0 (#112)
+
 ## v15.1.0 (2026-11-01)
 
 ### Feat
