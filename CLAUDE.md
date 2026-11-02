@@ -82,11 +82,6 @@ The context (`--context`/`PRAGMA_CONTEXT`) is resolved when a command first need
 - `pragma auth token` - Print the bearer token; without a valid one prints the login-required message on stderr, failure
 - `pragma auth logout` - Clear credentials
 
-### Operations
-- `pragma ops dead-letter list` - List failed events
-- `pragma ops dead-letter show <id>` - Show event details as plain JSON; an unknown event prints "Event '<id>' not found." and exits not found
-- `pragma ops dead-letter delete <id> | --all | --provider <name>` - Delete failed event(s); an id together with `--all` or `--provider`, or `--all` together with `--provider`, is a usage error
-
 ## Plugin Authoring
 
 `pragma` discovers and mounts top-level subcommands at startup via the `pragma.commands`

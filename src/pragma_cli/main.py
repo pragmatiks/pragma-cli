@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from typer.core import TyperGroup
 
 from pragma_cli import set_client_factory
-from pragma_cli.commands import auth, config, ops, organizations, projects, providers, resources
+from pragma_cli.commands import auth, config, organizations, projects, providers, resources
 from pragma_cli.config import (
     MalformedConfigError,
     PragmaConfig,
@@ -193,7 +193,6 @@ def main(
 app.add_typer(resources.app, name="resources")
 app.add_typer(auth.app, name="auth")
 app.add_typer(config.app, name="config")
-app.add_typer(ops.app, name="ops")
 app.add_typer(organizations.app, name="organizations")
 app.add_typer(providers.app, name="providers")
 app.add_typer(projects.app, name="projects")
