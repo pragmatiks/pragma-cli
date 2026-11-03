@@ -1,5 +1,11 @@
 # Changelog
 
+## v16.0.1 (2026-11-03)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v23.0.0 (#115)
+
 ## v16.0.0 (2026-11-02)
 
 ### Feat
