@@ -1,5 +1,11 @@
 # Changelog
 
+## v16.1.1 (2026-11-05)
+
+### Fix
+
+- drop the dead downgrade version-chain hint
+
 ## v16.1.0 (2026-11-05)
 
 ### Feat
