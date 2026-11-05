@@ -24,7 +24,7 @@ The behavior contract of every `pragma` command: arguments, output, errors and e
 - Every command taking a namespaced provider name (`org/name`) rejects one that is not `org/name` with a usage error before any request
 - `pragma providers install|upgrade|downgrade|uninstall <name>` - Queue the operation and print `Install queued:`, `Upgrade queued:` or `Downgrade queued:` with its target version (`operation_version`), or `Uninstall queued:`, then a dim `Follow it with: pragma providers history <name>` pointer; an uninstall the API refuses with a conflict (resources left without `--cascade`, or an installed provider that embeds it) prints the API's message, failure
 - `pragma providers history <name> [-o json|yaml]` - Show an installed provider's history from `GET /providers/installed/{org}/{name}/history`, newest first, with columns Time, Transition (state labels, `Uninstalled` once removed), Operation (`restart` for a host start, as on the web), Version, Message and Cause; kept 30 days, also after an uninstall; no history prints "No history found." in table format
-- `pragma providers downgrade <name> --version <v>` - A 422 prints the API's message, then a hint that the version chain may be broken
+- `pragma providers downgrade <name> --version <v>` - A 422 reaches the global API error handler, which prints the API's message; no extra hint
 - `pragma providers delete <name> [--yes]` - Delete a provider from the catalog (admins of the owning organization only)
 
 ## Exit codes and output streams
