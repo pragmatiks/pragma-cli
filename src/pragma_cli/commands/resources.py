@@ -858,6 +858,25 @@ def print_blockers(blockers: list[dict]) -> None:
         console.print(f"    [dim]{escape(blocker['command'])}[/dim]")
 
 
+def print_provider_blocker(provider_blocker: dict | None) -> None:
+    """Print the ``Waiting for provider:`` section of a resource's details.
+
+    The provider and reason print on one line, then, dimmed, the command
+    that shows the provider's installation.
+
+    Args:
+        provider_blocker: Provider blocker the API returned on the resource;
+            ``None`` prints nothing.
+    """
+    if not provider_blocker:
+        return
+
+    console.print()
+    console.print("[bold]Waiting for provider:[/bold]")
+    console.print(f"  {escape(provider_blocker['provider'])} — {escape(provider_blocker['reason'])}")
+    console.print(f"    [dim]{escape(provider_blocker['command'])}[/dim]")
+
+
 def _format_config_value(value) -> str:
     """Format a config value for display.
 
@@ -969,6 +988,7 @@ def _print_resource_details(res: dict) -> None:
     console.print(table)
 
     print_blockers(res.get("blockers") or [])
+    print_provider_blocker(res.get("provider_blocker"))
 
     config = res.get("config", {})
     if config:
