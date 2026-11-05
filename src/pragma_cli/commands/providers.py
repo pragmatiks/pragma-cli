@@ -143,11 +143,13 @@ INSTALLATION_STATE_COLORS = {
     "failed": "red",
     "deleting": "dim",
 }
-"""Rich color of each installation state outside an operation; ``pending`` and ``processing`` show yellow."""
+"""Rich color of each installation state outside an operation; every state during an operation shows yellow."""
 
 INSTALLATION_STATE_LABELS = {
     "pending": "Queued",
     "processing": "Starting",
+    "draining": "Draining",
+    "swapping": "Switching",
     "ready": "Running",
     "failed": "Failed",
     "deleting": "Uninstalling",
