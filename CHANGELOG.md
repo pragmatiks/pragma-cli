@@ -1,5 +1,15 @@
 # Changelog
 
+## v16.3.0 (2026-11-05)
+
+### Feat
+
+- show the translating installation state as Translating (PRA-512)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v24.1.0 (#122)
+
 ## v16.2.0 (2026-11-05)
 
 ### Feat
