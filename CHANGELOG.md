@@ -1,5 +1,11 @@
 # Changelog
 
+## v16.1.0 (2026-11-05)
+
+### Feat
+
+- show the provider version in resources describe
+
 ## v16.0.1 (2026-11-03)
 
 ### Fix
