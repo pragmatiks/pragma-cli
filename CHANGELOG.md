@@ -1,5 +1,16 @@
 # Changelog
 
+## v16.2.0 (2026-11-05)
+
+### Feat
+
+- label the draining and swapping installation states and show the provider blocker (PRA-512)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v24.0.0 (#120)
+- **deps**: update pragmatiks-sdk to v23.1.0 (#119)
+
 ## v16.1.1 (2026-11-05)
 
 ### Fix
