@@ -955,6 +955,9 @@ def _print_resource_details(res: dict) -> None:
     if res.get("operation_id"):
         table.add_row("Operation", escape(f"{res['operation_type'].lower()} {res['operation_id']}"))
 
+    if res.get("provider_version"):
+        table.add_row("Provider version", escape(res["provider_version"]))
+
     if res.get("error"):
         table.add_row("Error", f"[red]{escape(res['error'])}[/red]")
 
