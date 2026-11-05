@@ -149,6 +149,7 @@ INSTALLATION_STATE_LABELS = {
     "pending": "Queued",
     "processing": "Starting",
     "draining": "Draining",
+    "translating": "Translating",
     "swapping": "Switching",
     "ready": "Running",
     "failed": "Failed",
