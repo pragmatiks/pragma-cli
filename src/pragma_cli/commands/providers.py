@@ -1885,8 +1885,7 @@ def downgrade(
 
     Queues the operation and returns. Follow it with: pragma providers history NAME.
 
-    Requires an explicit target version. Migrations run sequentially
-    through each intermediate version in reverse order.
+    Requires an explicit target version.
 
     Examples:
         pragma providers downgrade pragmatiks/qdrant --version 1.0.0
@@ -1895,11 +1894,7 @@ def downgrade(
     \f
 
     Raises:
-        typer.Exit: With ``FAILURE_EXIT_CODE`` after printing the API's
-            message and the version-chain hint on a 422, or with code 0 if
-            the user cancels.
-        httpx.HTTPStatusError: If the API refuses the downgrade with any
-            other status.
+        typer.Exit: With code 0 if the user cancels.
     """
     client = get_client()
     require_auth(client)
@@ -1914,18 +1909,10 @@ def downgrade(
             console.print("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
 
-    try:
-        result = _fetch_with_spinner(
-            "Downgrading provider...",
-            lambda: client.downgrade_provider(name, target_version=version),
-        )
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code != 422:
-            raise
-
-        print_api_error(e)
-        error_console.print("[dim]The version chain between current and target may be broken.[/dim]")
-        raise typer.Exit(FAILURE_EXIT_CODE) from e
+    result = _fetch_with_spinner(
+        "Downgrading provider...",
+        lambda: client.downgrade_provider(name, target_version=version),
+    )
 
     console.print(
         f"[green]Downgrade queued:[/green] {escape(name)} -> {format_target_version(result.operation_version)}"
