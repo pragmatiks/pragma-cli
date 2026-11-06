@@ -1,5 +1,11 @@
 # Changelog
 
+## v16.3.1 (2026-11-06)
+
+### Fix
+
+- drop the released teardown wording
+
 ## v16.3.0 (2026-11-05)
 
 ### Feat
