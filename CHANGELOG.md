@@ -1,5 +1,11 @@
 # Changelog
 
+## v16.4.1 (2026-11-07)
+
+### Fix
+
+- **deps**: require pragmatiks-lint[check]>=0.9.0 and adopt the check-uv-pip hook
+
 ## v16.4.0 (2026-11-07)
 
 ### Feat
