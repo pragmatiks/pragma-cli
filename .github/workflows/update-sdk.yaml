@@ -14,6 +14,7 @@ jobs:
   update-sdk:
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
       pull-requests: write
 
@@ -42,6 +43,21 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Compare the SDK major with the locked one
+        id: major
+        env:
+          SDK_VERSION: ${{ inputs.sdk_version }}
+        run: |
+          LOCKED_SDK_VERSION=$(python3 -c 'import tomllib; lock = tomllib.load(open("uv.lock", "rb")); print(next(package["version"] for package in lock["package"] if package["name"] == "pragmatiks-sdk"))')
+          echo "locked=${LOCKED_SDK_VERSION}" >> "$GITHUB_OUTPUT"
+
+          if [ "${SDK_VERSION%%.*}" = "${LOCKED_SDK_VERSION%%.*}" ]; then
+            echo "crosses=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Update SDK::pragmatiks-sdk ${LOCKED_SDK_VERSION} to ${SDK_VERSION} crosses a major version; the pull request waits for review"
+            echo "crosses=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Update SDK version
         env:
@@ -95,6 +111,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SDK_VERSION: ${{ inputs.sdk_version }}
+          LOCKED_SDK_VERSION: ${{ steps.major.outputs.locked }}
+          CROSSES_MAJOR: ${{ steps.major.outputs.crosses }}
         run: |
           BRANCH="fix/update-sdk-${SDK_VERSION}"
           AUTHORIZATION="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
@@ -106,8 +124,22 @@ jobs:
             GIT_CONFIG_VALUE_0="$AUTHORIZATION" \
             git push origin "${BRANCH}"
 
+          BODY="Automated SDK dependency update to v${SDK_VERSION}."
+          if [ "$CROSSES_MAJOR" = "true" ]; then
+            BODY="${BODY}
+
+          SDK major bump from \`${LOCKED_SDK_VERSION}\`: this pull request waits for review. Adapt the CLI on this branch, run \`mise run check\`, then merge it; the merge starts Publish."
+          fi
+
           gh pr create \
             --title "fix(deps): update pragmatiks-sdk to v${SDK_VERSION}" \
-            --body "Automated SDK dependency update to v${SDK_VERSION}."
+            --body "$BODY"
 
-          gh pr merge --squash
+      - name: Merge PR and start the release
+        if: steps.commit.outputs.has_changes == 'true' && steps.major.outputs.crosses == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SDK_VERSION: ${{ inputs.sdk_version }}
+        run: |
+          gh pr merge "fix/update-sdk-${SDK_VERSION}" --squash
+          gh workflow run publish.yaml --ref main
