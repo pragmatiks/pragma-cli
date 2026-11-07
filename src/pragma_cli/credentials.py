@@ -20,7 +20,7 @@ def extract_client_token(client: PragmaClient) -> str | None:
     Returns:
         The client's token, or None when it has no credentials.
     """
-    return client._auth.token if client._auth else None
+    return client.auth_token
 
 
 def save_credentials(token: str, context_name: str = "default"):
