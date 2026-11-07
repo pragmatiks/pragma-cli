@@ -1,5 +1,17 @@
 # Changelog
 
+## v16.3.2 (2026-11-07)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v25.1.0 (#126)
+- **deps**: update pragmatiks-sdk to v25.0.0 (#125)
+
+### Refactor
+
+- **providers**: drop the leading underscore from read_changelog
+- **providers**: move the publish flow into its own module
+
 ## v16.3.1 (2026-11-06)
 
 ### Fix
