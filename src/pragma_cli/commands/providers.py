@@ -15,9 +15,11 @@ import httpx
 import typer
 import yaml
 from pragma_sdk import (
+    InstallationLifecycleState,
     PragmaClient,
     ProviderInstallation,
     ProviderInstallationEvent,
+    ProviderModel,
     ProviderVersion,
     VersionStatus,
 )
@@ -395,7 +397,9 @@ def fetch_install_preview(client: PragmaClient, name: str, version: str | None) 
     With an explicit version, reads that version in any status, so a version
     the caller's organization is still admitting, or one that failed, reaches
     the install request and its refusal rather than stopping at the catalog.
-    Without one, reads the catalog entry and previews its latest version.
+    Without one, reads the catalog entry and the caller's installations: a
+    ``failed`` installation previews its stored version, the one installing
+    it again installs, and anything else previews the catalog's latest version.
 
     Args:
         client: Authenticated SDK client.
@@ -411,27 +415,81 @@ def fetch_install_preview(client: PragmaClient, name: str, version: str | None) 
             is not found.
         httpx.HTTPStatusError: If the read fails with any other status.
     """  # noqa: DOC502
-    try:
-        if version is None:
-            provider = fetch_with_spinner(f"Fetching provider '{name}'...", lambda: client.get_provider(name))
-            label = provider.display_name or name
-            latest_version = provider.latest_version or "latest"
-            return label, latest_version
+    if version is None:
+        provider = fetch_catalog_provider(client, name)
+        label = provider.display_name or name
+        stored_version = fetch_install_again_version(client, name)
+        preview_version = stored_version or provider.latest_version or "latest"
 
+        return label, preview_version
+
+    try:
         provider_version = fetch_with_spinner(
             f"Fetching {name} {version}...",
             lambda: client.get_provider_version(name, version),
         )
         return name, provider_version.version
     except httpx.HTTPStatusError as e:
-        subject = f"Provider '{name}'" if version is None else f"Version {version} of '{name}'"
-        report_not_found(e, f"{subject} not found in the store.")
+        report_not_found(e, f"Version {version} of '{name}' not found in the store.")
+
+
+def fetch_catalog_provider(client: PragmaClient, name: str) -> ProviderModel:
+    """Fetch a provider's catalog entry for the install preview.
+
+    Args:
+        client: Authenticated SDK client.
+        name: Provider name (``org/name``).
+
+    Returns:
+        The catalog entry.
+
+    Raises:
+        typer.Exit: With ``NOT_FOUND_EXIT_CODE`` if the provider is not found.
+        httpx.HTTPStatusError: If the read fails with any other status.
+    """  # noqa: DOC502
+    try:
+        return fetch_with_spinner(f"Fetching provider '{name}'...", lambda: client.get_provider(name))
+    except httpx.HTTPStatusError as e:
+        report_not_found(e, f"Provider '{name}' not found in the store.")
+
+
+def fetch_install_again_version(client: PragmaClient, name: str) -> str | None:
+    """Fetch the version installing ``name`` again without a version installs.
+
+    Args:
+        client: Authenticated SDK client.
+        name: Provider name (``org/name``).
+
+    Returns:
+        The stored version (``operation_version``) of the caller's ``failed``
+        installation of ``name``, or ``None`` when it has none.
+
+    Raises:
+        httpx.HTTPStatusError: If the read fails.
+    """  # noqa: DOC502
+    installations = fetch_with_spinner("Fetching installations...", lambda: client.list_installations())
+
+    for installation in installations:
+        if installation.canonical == name and installation.lifecycle_state == InstallationLifecycleState.FAILED:
+            return installation.operation_version
+
+    return None
 
 
 @app.command()
 def install(
     name: ProviderNameArgument,
-    version: Annotated[str | None, typer.Option("--version", "-v", help="Version to install (default: latest)")] = None,
+    version: Annotated[
+        str | None,
+        typer.Option(
+            "--version",
+            "-v",
+            help=(
+                "Version to install (default: the latest published version; "
+                "installing a failed installation again: its stored version)"
+            ),
+        ),
+    ] = None,
     config: Annotated[
         list[str] | None,
         typer.Option("--config", "-c", help="Configuration key=value pair (repeatable)"),
