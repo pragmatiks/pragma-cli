@@ -58,7 +58,7 @@ The context (`--context`/`PRAGMA_CONTEXT`) is resolved when a command first need
 - `pragma config delete-context <name>` - Delete context; the current context is refused with a pointer to `pragma config use-context`, input error
 
 ## Authentication
-- `pragma auth login` - Authenticate (opens browser)
+- `pragma auth login [--context <name>]` - Authenticate (opens browser) and save the token under `<name>` (default: the resolved context); it never switches the active context. When `<name>` is not the configured current context, success also prints `Context '<name>' is not active; run 'pragma config use-context <name>' to activate it.`
 - `pragma auth whoami` - Show current user; no token or an expired one is a status report on stdout (success); a token the API rejects or an unreachable API is an error on stderr
 - `pragma auth token` - Print the bearer token; without a valid one prints the login-required message on stderr, failure
 - `pragma auth logout` - Clear credentials
