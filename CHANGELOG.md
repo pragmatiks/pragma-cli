@@ -1,5 +1,11 @@
 # Changelog
 
+## v16.4.2 (2026-11-07)
+
+### Fix
+
+- **deps**: require pragmatiks-lint[check]>=0.9.1 (PRA-932)
+
 ## v16.4.1 (2026-11-07)
 
 ### Fix
