@@ -179,13 +179,13 @@ def format_version_message(version: ProviderVersion) -> str:
 @app.command()
 def init(
     name: Annotated[str, typer.Argument(help="Provider name (e.g., 'postgres', 'mycompany')")],
-    output_dir: Annotated[
+    directory: Annotated[
         Path | None,
-        typer.Option("--output", "-o", help="Output directory (default: ./{name}-provider)"),
+        typer.Option("--directory", "-d", help="Project directory (default: ./{name}-provider)"),
     ] = None,
     description: Annotated[
         str | None,
-        typer.Option("--description", "-d", help="Provider description"),
+        typer.Option("--description", help="Provider description"),
     ] = None,
     author_name: Annotated[
         str | None,
@@ -209,7 +209,7 @@ def init(
 
     Example:
         pragma providers init mycompany
-        pragma providers init postgres --output ./providers/postgres
+        pragma providers init postgres --directory ./providers/postgres
         pragma providers init mycompany --defaults --description "My provider"
 
     \f
@@ -217,7 +217,7 @@ def init(
     Raises:
         typer.Exit: If directory already exists or template copy fails.
     """
-    project_directory = output_dir or Path(f"./{name}-provider")
+    project_directory = directory or Path(f"./{name}-provider")
 
     if project_directory.exists():
         error_console.print(f"[red]Error:[/red] Directory {escape(str(project_directory))} already exists.")
@@ -236,9 +236,9 @@ def init(
     if author_email:
         data["author_email"] = author_email
 
-    typer.echo(f"Creating provider project: {project_directory}")
-    typer.echo(f"  Template: {template_source}")
-    typer.echo("")
+    typer.echo(f"Creating provider project: {project_directory}", err=True)
+    typer.echo(f"  Template: {template_source}", err=True)
+    typer.echo("", err=True)
 
     try:
         vcs_ref = "HEAD" if not template_source.startswith("gh:") else None
@@ -256,7 +256,7 @@ def init(
 
     package_name = name.lower().replace("-", "_").replace(" ", "_") + "_provider"
 
-    typer.echo("")
+    typer.echo("", err=True)
     typer.echo(f"Created provider project: {project_directory}")
     typer.echo("")
     typer.echo("Next steps:")
@@ -520,7 +520,7 @@ def install(
     ] = None,
     config: Annotated[
         list[str] | None,
-        typer.Option("--config", "-c", help="Configuration key=value pair (repeatable)"),
+        typer.Option("--config", help="Configuration key=value pair (repeatable)"),
     ] = None,
     config_file: Annotated[
         Path | None,
@@ -556,21 +556,21 @@ def install(
     display, install_version = fetch_install_preview(client, name, version)
 
     provider_label = name if display == name else f"{display} ({name})"
-    console.print(f"[bold]Provider:[/bold] {escape(provider_label)}")
-    console.print(f"[bold]Version:[/bold]  {escape(install_version)}")
+    error_console.print(f"[bold]Provider:[/bold] {escape(provider_label)}")
+    error_console.print(f"[bold]Version:[/bold]  {escape(install_version)}")
 
     if merged_config:
-        console.print("[bold]Config:[/bold]")
+        error_console.print("[bold]Config:[/bold]")
         for key, value in sorted(merged_config.items()):
-            console.print(f"  {key} = {value}", markup=False)
+            error_console.print(f"  {key} = {value}", markup=False)
 
-    console.print()
+    error_console.print()
 
     if not yes:
         confirm = typer.confirm("Install this provider?")
 
         if not confirm:
-            console.print("[dim]Cancelled.[/dim]")
+            error_console.print("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
 
     result = fetch_with_spinner(
@@ -621,19 +621,19 @@ def uninstall(
     client = get_client()
     require_auth(client)
 
-    console.print(f"[bold]Provider:[/bold] {escape(name)}")
+    error_console.print(f"[bold]Provider:[/bold] {escape(name)}")
 
     if cascade:
         error_console.print("[yellow]Warning:[/yellow] --cascade will delete all resources for this provider")
 
-    console.print()
+    error_console.print()
 
     if not yes:
         action = "UNINSTALL provider and delete all its resources" if cascade else "UNINSTALL provider"
         confirm = typer.confirm(f"Are you sure you want to {action}?")
 
         if not confirm:
-            console.print("[dim]Cancelled.[/dim]")
+            error_console.print("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
 
     try:
@@ -674,14 +674,14 @@ def upgrade(
     require_auth(client)
 
     target = f"v{version}" if version else "latest"
-    console.print(f"[bold]Upgrading:[/bold] {escape(name)} -> {escape(target)}")
-    console.print()
+    error_console.print(f"[bold]Upgrading:[/bold] {escape(name)} -> {escape(target)}")
+    error_console.print()
 
     if not yes:
         confirm = typer.confirm(f"Upgrade {name} to {target}?")
 
         if not confirm:
-            console.print("[dim]Cancelled.[/dim]")
+            error_console.print("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
 
     result = fetch_with_spinner(
@@ -720,14 +720,14 @@ def downgrade(
     client = get_client()
     require_auth(client)
 
-    console.print(f"[bold]Downgrading:[/bold] {escape(name)} -> v{escape(version)}")
-    console.print()
+    error_console.print(f"[bold]Downgrading:[/bold] {escape(name)} -> v{escape(version)}")
+    error_console.print()
 
     if not yes:
         confirm = typer.confirm(f"Downgrade {name} to v{version}?")
 
         if not confirm:
-            console.print("[dim]Cancelled.[/dim]")
+            error_console.print("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
 
     result = fetch_with_spinner(
@@ -991,15 +991,15 @@ def delete(
     client = get_client()
     require_auth(client)
 
-    console.print(f"[bold]Provider:[/bold] {escape(name)}")
+    error_console.print(f"[bold]Provider:[/bold] {escape(name)}")
     error_console.print("[yellow]Warning:[/yellow] This will permanently delete the provider from the catalog.")
-    console.print()
+    error_console.print()
 
     if not yes:
         confirm = typer.confirm("Are you sure you want to DELETE this provider?")
 
         if not confirm:
-            console.print("[dim]Cancelled.[/dim]")
+            error_console.print("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
 
     fetch_with_spinner(
