@@ -46,6 +46,8 @@ from pragma_cli.errors import (
 from pragma_cli.exit_codes import (
     FAILURE_EXIT_CODE,
     INPUT_ERROR_EXIT_CODE,
+    NOT_FOUND_EXIT_CODE,
+    compute_http_exit_code,
 )
 from pragma_cli.helpers import OutputFormat, format_optional_value, output_data
 
@@ -400,6 +402,9 @@ def fetch_install_preview(client: PragmaClient, name: str, version: str | None) 
     Without one, reads the catalog entry and the caller's installations: a
     ``failed`` installation previews its stored version, the one installing
     it again installs, and anything else previews the catalog's latest version.
+    A provider not in the catalog whose versions the caller can read, such as
+    the author's provider whose first version is still being admitted,
+    previews ``latest`` and reaches the install request and its refusal.
 
     Args:
         client: Authenticated SDK client.
@@ -417,6 +422,11 @@ def fetch_install_preview(client: PragmaClient, name: str, version: str | None) 
     """  # noqa: DOC502
     if version is None:
         provider = fetch_catalog_provider(client, name)
+
+        if provider is None:
+            require_readable_versions(client, name)
+            return name, "latest"
+
         label = provider.display_name or name
         stored_version = fetch_install_again_version(client, name)
         preview_version = stored_version or provider.latest_version or "latest"
@@ -433,7 +443,7 @@ def fetch_install_preview(client: PragmaClient, name: str, version: str | None) 
         report_not_found(e, f"Version {version} of '{name}' not found in the store.")
 
 
-def fetch_catalog_provider(client: PragmaClient, name: str) -> ProviderModel:
+def fetch_catalog_provider(client: PragmaClient, name: str) -> ProviderModel | None:
     """Fetch a provider's catalog entry for the install preview.
 
     Args:
@@ -441,14 +451,32 @@ def fetch_catalog_provider(client: PragmaClient, name: str) -> ProviderModel:
         name: Provider name (``org/name``).
 
     Returns:
-        The catalog entry.
+        The catalog entry, or ``None`` when the catalog has no entry (404).
 
     Raises:
-        typer.Exit: With ``NOT_FOUND_EXIT_CODE`` if the provider is not found.
         httpx.HTTPStatusError: If the read fails with any other status.
     """  # noqa: DOC502
     try:
         return fetch_with_spinner(f"Fetching provider '{name}'...", lambda: client.get_provider(name))
+    except httpx.HTTPStatusError as e:
+        if compute_http_exit_code(e.response.status_code) == NOT_FOUND_EXIT_CODE:
+            return None
+        raise
+
+
+def require_readable_versions(client: PragmaClient, name: str) -> None:
+    """Require that the caller can read a provider's versions, for a provider not in the catalog.
+
+    Args:
+        client: Authenticated SDK client.
+        name: Provider name (``org/name``).
+
+    Raises:
+        typer.Exit: With ``NOT_FOUND_EXIT_CODE`` if the versions are not found.
+        httpx.HTTPStatusError: If the read fails with any other status.
+    """  # noqa: DOC502
+    try:
+        fetch_with_spinner(f"Fetching versions of '{name}'...", lambda: client.list_provider_versions(name))
     except httpx.HTTPStatusError as e:
         report_not_found(e, f"Provider '{name}' not found in the store.")
 
