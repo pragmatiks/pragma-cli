@@ -1,5 +1,15 @@
 # Changelog
 
+## v16.4.0 (2026-11-07)
+
+### Feat
+
+- add organization member and account deletion commands (PRA-851)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v27.2.0
+
 ## v16.3.7 (2026-11-07)
 
 ### Fix
