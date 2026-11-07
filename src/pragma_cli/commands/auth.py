@@ -16,6 +16,7 @@ from rich.markup import escape
 
 from pragma_cli import get_client
 from pragma_cli.config import CREDENTIALS_FILE, ContextConfig, load_config, select_context
+from pragma_cli.credentials import clear_credentials, extract_client_token, save_credentials
 from pragma_cli.errors import error_console, report_login_required
 from pragma_cli.exit_codes import FAILURE_EXIT_CODE
 
@@ -158,69 +159,6 @@ class CallbackHandler(BaseHTTPRequestHandler):
         """Suppress server logs."""
 
 
-def save_credentials(token: str, context_name: str = "default"):
-    """Save authentication token to local credentials file.
-
-    Args:
-        token: JWT token from Clerk
-        context_name: Context to associate with this token
-    """
-    CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    credentials = {}
-    if CREDENTIALS_FILE.exists():
-        with open(CREDENTIALS_FILE) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" in line:
-                    key, value = line.split("=", 1)
-                    credentials[key.strip()] = value.strip()
-
-    credentials[context_name] = token
-
-    with open(CREDENTIALS_FILE, "w") as f:
-        for key, value in credentials.items():
-            f.write(f"{key}={value}\n")
-
-    CREDENTIALS_FILE.chmod(0o600)
-
-
-def clear_credentials(context_name: str | None = None):
-    """Clear stored credentials.
-
-    Args:
-        context_name: Specific context to clear, or None for all
-    """
-    if not CREDENTIALS_FILE.exists():
-        return
-
-    if context_name is None:
-        CREDENTIALS_FILE.unlink()
-        return
-
-    credentials = {}
-    with open(CREDENTIALS_FILE) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" in line:
-                key, value = line.split("=", 1)
-                credentials[key.strip()] = value.strip()
-
-    credentials.pop(context_name, None)
-
-    if credentials:
-        with open(CREDENTIALS_FILE, "w") as f:
-            for key, value in credentials.items():
-                f.write(f"{key}={value}\n")
-        CREDENTIALS_FILE.chmod(0o600)
-    else:
-        CREDENTIALS_FILE.unlink()
-
-
 @app.command()
 def login(
     ctx: typer.Context,
@@ -352,7 +290,7 @@ def token():
         typer.Exit: If no token is stored or the stored token is expired.
     """  # noqa: DOC502
     client = get_client()
-    current_token = client._auth.token if client._auth else None
+    current_token = extract_client_token(client)
 
     if not current_token or _is_token_expired(current_token):
         report_login_required()
@@ -381,7 +319,7 @@ def whoami(ctx: typer.Context):
     current_context_name = ctx.obj["context"]
     client = get_client()
 
-    token = client._auth.token if client._auth else None
+    token = extract_client_token(client)
 
     if not token:
         print_authentication_status(current_context_name, "[yellow]Not authenticated[/yellow]")
