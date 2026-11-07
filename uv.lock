@@ -730,7 +730,7 @@ source = { editable = "." }
 dependencies = [
     { name = "copier" },
     { name = "jsonschema" },
-    { name = "pragmatiks-lint" },
+    { name = "pragmatiks-lint", extra = ["check"] },
     { name = "pragmatiks-sdk" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -747,7 +747,7 @@ dev = [
 requires-dist = [
     { name = "copier", specifier = ">=9.0.0" },
     { name = "jsonschema", specifier = ">=4.25.1" },
-    { name = "pragmatiks-lint", specifier = ">=0.6.0" },
+    { name = "pragmatiks-lint", extras = ["check"], specifier = ">=0.9.0" },
     { name = "pragmatiks-sdk", specifier = ">=27.2.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=13.9.0" },
@@ -762,17 +762,21 @@ dev = [
 
 [[package]]
 name = "pragmatiks-lint"
-version = "0.6.0"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bd/72/c521a91f83247424ae56580a4903191f3c90fd2c5f71e6bb337ef3dcc0a5/pragmatiks_lint-0.9.0.tar.gz", hash = "sha256:b1fe1ad65639220fff9a48e1e2cf38b928d2eb76af4049b15bb7ce60ee5180d6", size = 17528, upload-time = "2026-11-07T20:25:06.924Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/be/5a/047231bef4841e6f62b585aa16ac7ad82ad0b9d5a194f3b7fc644a4b60eb/pragmatiks_lint-0.9.0-py3-none-any.whl", hash = "sha256:8d781996b93127ef552901dc98bf6b19ce7f8d65743e0aa3ef13c3375c41e933", size = 23348, upload-time = "2026-11-07T20:25:05.729Z" },
+]
+
+[package.optional-dependencies]
+check = [
     { name = "rich" },
     { name = "semgrep" },
     { name = "typer" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/80/83/96927b0e2442cbbcbe9ed068a1a838a268f134a857f91e8d68d1a79586a1/pragmatiks_lint-0.6.0.tar.gz", hash = "sha256:8d5bdb251dc40cbc4cadfcbbbe46014badcba7f9ebb78c0e10fcbff9f8e47c68", size = 8761, upload-time = "2026-10-07T23:51:35.194Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e1/30/ac91cb45bc6c56d7ee230719199a3f27d082b54f166fa7500080d6a0fc91/pragmatiks_lint-0.6.0-py3-none-any.whl", hash = "sha256:3269c7e8cdf385e285f2a97a2ee6c9126318c9c6f4e3f74fe6a7af3d63bcd081", size = 12034, upload-time = "2026-10-07T23:51:33.946Z" },
 ]
 
 [[package]]
