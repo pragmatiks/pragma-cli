@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from pragma_cli.config import CONFIG_PATH
+from pragma_cli.credentials import extract_client_token
 from pragma_cli.exit_codes import (
     FAILURE_EXIT_CODE,
     INPUT_ERROR_EXIT_CODE,
@@ -63,7 +64,7 @@ def require_auth(client: PragmaClient) -> None:
         typer.Exit: With ``FAILURE_EXIT_CODE`` after printing
             ``LOGIN_REQUIRED_MESSAGE``, if the client has no credentials.
     """  # noqa: DOC502
-    if client._auth is None:
+    if extract_client_token(client) is None:
         report_login_required()
 
 

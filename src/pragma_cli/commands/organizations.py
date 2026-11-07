@@ -12,16 +12,20 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 import typer
-from pragma_sdk.models.api import Organization
+from pragma_sdk.models.api import MemberRole, Organization, OrganizationMember
 from rich.console import Console
 from rich.markup import escape
+from rich.table import Table
 
 from pragma_cli import get_client
+from pragma_cli.commands.provider_output import fetch_with_spinner
 from pragma_cli.errors import require_auth
-from pragma_cli.helpers import OutputFormat, output_data
+from pragma_cli.helpers import OutputFormat, format_optional_value, output_data
 
 
 app = typer.Typer(help="Organization management commands")
+members_app = typer.Typer(help="Organization member commands")
+app.add_typer(members_app, name="members")
 
 console = Console()
 
@@ -131,3 +135,109 @@ def show_status(
         return
 
     output_data({"status": status_value}, output)
+
+
+def print_members_table(members: list[OrganizationMember]) -> None:
+    """Print organization members as a table with User ID, Identifier and Role columns.
+
+    Args:
+        members: Members of the caller's organization.
+    """
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("User ID")
+    table.add_column("Identifier")
+    table.add_column("Role")
+
+    for member in members:
+        table.add_row(escape(member.user_id), format_optional_value(member.identifier), member.role.value)
+
+    console.print(table)
+
+
+@members_app.command("list")
+def list_members(
+    output: Annotated[
+        OutputFormat,
+        typer.Option("--output", "-o", help="Output format"),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """List the members of your organization.
+
+    Examples:
+        pragma organizations members list
+        pragma organizations members list -o json
+    """
+    client = get_client()
+    require_auth(client)
+
+    members = fetch_with_spinner("Fetching members...", client.list_organization_members)
+
+    if output != OutputFormat.TABLE:
+        output_data([member.model_dump(mode="json") for member in members], output)
+        return
+
+    if not members:
+        console.print("[dim]No members found.[/dim]")
+        return
+
+    print_members_table(members)
+
+
+@members_app.command("update")
+def update_member(
+    user_id: Annotated[str, typer.Argument(help="User ID of the member")],
+    role: Annotated[MemberRole, typer.Option("--role", help="New role of the member")],
+) -> None:
+    """Update a member's role. Only an organization admin can update roles.
+
+    Examples:
+        pragma organizations members update user_123 --role admin
+    """
+    client = get_client()
+    require_auth(client)
+
+    member = fetch_with_spinner("Updating member...", lambda: client.update_organization_member_role(user_id, role))
+
+    console.print(f"[green]✓[/green] Updated {escape(member.user_id)}: {member.role.value}")
+
+
+@members_app.command("delete")
+def delete_member(
+    user_id: Annotated[str, typer.Argument(help="User ID of the member")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")] = False,
+) -> None:
+    """Delete a member's membership. Deleting your own membership leaves the organization.
+
+    Run ``pragma auth whoami`` to see your own user ID.
+
+    Examples:
+        pragma organizations members delete user_123
+        pragma organizations members delete user_123 --yes
+
+    \f
+
+    Args:
+        user_id: User ID of the member whose membership is deleted.
+        yes: Skip the confirmation prompt.
+
+    Raises:
+        typer.Exit: When the confirmation is declined.
+    """
+    client = get_client()
+    require_auth(client)
+
+    caller_user_id = fetch_with_spinner("Fetching your account...", client.get_me).user_id
+
+    if not yes and not typer.confirm(f"Delete the membership of {user_id}?"):
+        console.print("[dim]Cancelled.[/dim]")
+        raise typer.Exit()
+
+    fetch_with_spinner("Deleting membership...", lambda: client.delete_organization_member(user_id))
+
+    if user_id == caller_user_id:
+        console.print(
+            "[green]✓[/green] You left the organization. Run pragma auth login to choose another organization."
+        )
+        return
+
+    console.print(f"[green]✓[/green] Deleted the membership of {escape(user_id)}.")

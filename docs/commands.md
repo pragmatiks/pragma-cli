@@ -28,6 +28,17 @@ The behavior contract of every `pragma` command: arguments, output, errors and e
 - `pragma providers downgrade <name> --version <v>` - A 422 reaches the global API error handler, which prints the API's message; no extra hint
 - `pragma providers delete <name> [--yes]` - Delete a provider from the catalog (admins of the owning organization only)
 
+## Organizations
+- `pragma organizations me [-o json|yaml]` - Show the caller's organization
+- `pragma organizations status [-o json|yaml]` - Show the organization's setup status (`bootstrapping`, `ready`, `failed`)
+- `pragma organizations members list [-o json|yaml]` - List the organization's members with columns User ID, Identifier (a dim dash when none) and Role (`admin` or `member`); JSON/YAML records carry `user_id`, `identifier` and `role`; no members prints "No members found." in table format. `pragma auth whoami` prints your own user ID
+- `pragma organizations members update <user_id> --role admin|member` - Update a member's role (organization admins only); prints `Updated <user_id>: <role>`
+- `pragma organizations members delete <user_id> [--yes|-y]` - Delete a membership (admins delete any, every member their own). Asks `Delete the membership of <user_id>?`; declining prints `Cancelled.`, success; `--yes` skips the prompt. Deleting your own prints `You left the organization. Run pragma auth login to choose another organization.` and keeps the stored credentials; any other prints `Deleted the membership of <user_id>.`
+- Every members command is for a signed-in user: an API key, or a non-admin updating a role or deleting another's membership, is refused (403, failure). An unknown user ID prints the API's message, not found. Demoting or deleting the last admin is refused with `Your organization must keep at least one admin. Promote another member to admin first.` (409, failure). While membership details are unavailable the API's `Membership details are temporarily unavailable. Please try again in a moment.` is printed, failure; the CLI does not retry. Every refusal goes to the global handler
+
+## Accounts
+- `pragma accounts delete [--yes|-y]` - Delete your Pragmatiks account and every membership it holds (signed-in users only). Prints `This permanently deletes your Pragmatiks account. You leave every organization you belong to. It cannot be undone.` and asks `Delete your account?`; declining prints `Cancelled.`, success; `--yes` skips both. On success prints `Account deleted.` and clears the current context's stored credential when the command used it; a `--token` or `PRAGMA_AUTH_TOKEN` token clears nothing, and other contexts' credentials are kept. The last admin of an organization is refused with `You are the last admin of <slug>[, <slug>…]. Promote another member to admin, or delete the organization first.` (409, failure, through the global handler)
+
 ## Exit codes and output streams
 
 The exit-code table lives in `pragma_cli.exit_codes` and prints in `pragma --help`; read it there. This file names outcomes by that table: failure 1, input error 2 (usage errors included), not found 4. A command's own help names only its command-specific codes (`providers publish`: 3).
