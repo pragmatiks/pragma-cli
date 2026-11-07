@@ -1,5 +1,20 @@
 # Changelog
 
+## v17.1.0 (2026-11-07)
+
+### Feat
+
+- hint at use-context after logging in to an inactive context (PRA-468)
+
+### Fix
+
+- **errors**: read the one detail error envelope (PRA-700)
+- **deps**: cap pragmatiks-sdk below the next unverified major (PRA-711)
+
+### Refactor
+
+- read the SDK client through its public accessors (PRA-469)
+
 ## v17.0.1 (2026-11-07)
 
 ### Fix
