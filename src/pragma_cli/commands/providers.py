@@ -1119,6 +1119,22 @@ def format_installation_state(state: str | None) -> str:
     return f"[{color}]{format_installation_state_label(state)}[/{color}]"
 
 
+def format_running_installation_operation(installation: ProviderInstallation) -> str:
+    """Format an installation's operation for the installed table, only while it runs.
+
+    Args:
+        installation: The installed provider.
+
+    Returns:
+        The operation and its target from :func:`format_installation_operation`
+        while ``operation_running``, or a dim dash once it settled.
+    """
+    if not installation.operation_running:
+        return "[dim]-[/dim]"
+
+    return format_installation_operation(installation.operation_type, installation.operation_version)
+
+
 def format_installation_operation(operation_type: str | None, operation_version: str | None) -> str:
     """Format an operation and the version it targets, such as ``upgrade v3.0.0`` or ``restart v3.0.0``.
 
@@ -1175,7 +1191,7 @@ def print_installed_table(installations: list[ProviderInstallation]) -> None:
             escape(installation.canonical),
             format_installation_state(installation.lifecycle_state),
             format_target_version(installation.installed_version),
-            format_installation_operation(installation.operation_type, installation.operation_version),
+            format_running_installation_operation(installation),
             format_optional_value(installation.failure_message),
         )
 

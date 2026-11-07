@@ -844,6 +844,27 @@ def compute_watch_end(version: ProviderVersion, watch_started_at: float) -> floa
     return max(minimum_end, deadline_end)
 
 
+class AdmissionWatchError(Exception):
+    """Polling a watched version failed; carries the version as the watch last read it.
+
+    Attributes:
+        version: The latest version the watch read successfully, or the
+            declared version when no read succeeded.
+        error: What failed while polling.
+    """
+
+    def __init__(self, version: ProviderVersion, error: Exception) -> None:
+        """Record the version the watch last read and the polling failure.
+
+        Args:
+            version: The latest version the watch read successfully.
+            error: What failed while polling.
+        """
+        super().__init__(f"Watching {version.canonical} {version.version} failed")
+        self.version = version
+        self.error = error
+
+
 def watch_admission(
     client: PragmaClient,
     declared_version: DeclaredProviderVersion,
@@ -874,26 +895,29 @@ def watch_admission(
         still unsettled when the watch bound passed first.
 
     Raises:
-        httpx.HTTPStatusError: If reading the version fails.
-        httpx.TransportError: If the API cannot be reached.
-    """  # noqa: DOC502
+        AdmissionWatchError: If anything fails while polling, carrying the
+            latest version read successfully and the failure.
+    """
     version = declared_version
 
-    while version.status not in SETTLED_VERSION_STATUSES:
-        remaining_seconds = compute_watch_end(version, watch_started_at) - time.monotonic()
+    try:
+        while version.status not in SETTLED_VERSION_STATUSES:
+            remaining_seconds = compute_watch_end(version, watch_started_at) - time.monotonic()
 
-        if remaining_seconds <= 0:
-            break
+            if remaining_seconds <= 0:
+                break
 
-        time.sleep(min(ADMISSION_POLL_INTERVAL_SECONDS, remaining_seconds))
-        previous_status = version.status
-        version = client.get_provider_version(version.canonical, version.version)
+            time.sleep(min(ADMISSION_POLL_INTERVAL_SECONDS, remaining_seconds))
+            previous_status = version.status
+            version = client.get_provider_version(version.canonical, version.version)
 
-        if is_replaced_publish(version, declared_version):
-            break
+            if is_replaced_publish(version, declared_version):
+                break
 
-        if version.status != previous_status:
-            show_status(version.status)
+            if version.status != previous_status:
+                show_status(version.status)
+    except Exception as e:
+        raise AdmissionWatchError(version, e) from e
 
     return version
 
@@ -947,8 +971,7 @@ def watch_admission_with_progress(
         The version as :func:`watch_admission` last read it.
 
     Raises:
-        httpx.HTTPStatusError: If reading the version fails.
-        httpx.TransportError: If the API cannot be reached.
+        AdmissionWatchError: If polling fails (see :func:`watch_admission`).
     """  # noqa: DOC502
     starting_label = format_watched_status_label(declared_version, declared_version.status)
 
@@ -1241,12 +1264,12 @@ def publish(
 
     try:
         last_read_version = watch_admission_with_progress(client, declared_version, watch_started_at)
-    except Exception as e:
-        reason = format_watch_failure_reason(e)
+    except AdmissionWatchError as e:
+        reason = format_watch_failure_reason(e.error)
         try:
-            output_data(build_publish_document(declared_version, declared_version), output)
+            output_data(build_publish_document(e.version, declared_version), output)
         finally:
-            report_watch_failure(reason, declared_version, republish_command)
+            report_watch_failure(reason, e.version, republish_command)
 
     output_data(build_publish_document(last_read_version, declared_version), output)
 
