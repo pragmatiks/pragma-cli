@@ -1,5 +1,11 @@
 # Changelog
 
+## v16.3.4 (2026-11-07)
+
+### Fix
+
+- **providers**: preview the stored version when installing a failed installation again
+
 ## v16.3.3 (2026-11-07)
 
 ### Fix
