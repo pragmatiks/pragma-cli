@@ -748,7 +748,7 @@ requires-dist = [
     { name = "copier", specifier = ">=9.0.0" },
     { name = "jsonschema", specifier = ">=4.25.1" },
     { name = "pragmatiks-lint", extras = ["check"], specifier = ">=0.9.1" },
-    { name = "pragmatiks-sdk", specifier = ">=27.3.0" },
+    { name = "pragmatiks-sdk", specifier = ">=27.3.0,<29" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=13.9.0" },
     { name = "typer", specifier = ">=0.15.3" },

@@ -65,7 +65,17 @@ jobs:
         run: |
           echo "Updating to SDK v${SDK_VERSION}"
 
-          sed -i "s|pragmatiks-sdk>=.*\"|pragmatiks-sdk>=${SDK_VERSION}\"|" pyproject.toml
+          python3 - <<'PYTHON'
+          import os
+          import re
+
+          path = "pyproject.toml"
+          version = os.environ["SDK_VERSION"]
+          text = open(path).read()
+          current_cap = int(re.search(r"pragmatiks-sdk>=[^,\"]*,<(\d+)\"", text).group(1))
+          cap = max(current_cap, int(version.split(".")[0]) + 1)
+          open(path, "w").write(re.sub(r"pragmatiks-sdk>=[^\"]*", f"pragmatiks-sdk>={version},<{cap}", text, count=1))
+          PYTHON
           sed -i "s|tag = \"v.*\"|tag = \"v${SDK_VERSION}\"|" pyproject.toml
 
       - name: Update lockfile (retry on simple-index propagation lag)
