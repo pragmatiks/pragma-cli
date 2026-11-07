@@ -1,5 +1,13 @@
 # Changelog
 
+## v16.3.3 (2026-11-07)
+
+### Fix
+
+- **providers**: report the latest status read and show an operation only while it runs
+- **deps**: update pragmatiks-sdk to v25.2.0 (#129)
+- **deps**: update pragmatiks-sdk to v25.1.1 (#128)
+
 ## v16.3.2 (2026-11-07)
 
 ### Fix
