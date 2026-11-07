@@ -336,7 +336,7 @@ def _describe_file_type(mode: int) -> str:
     return "unknown"
 
 
-def _open_and_read_file_reference(path_str: str, base_dir: Path) -> tuple[Path, bytes]:
+def _read_file_reference(path_str: str, base_dir: Path) -> tuple[Path, bytes]:
     """Open and read a ``@path`` reference atomically through one fd.
 
     Security model: ``@path`` references in manifests are a data-flow
@@ -470,7 +470,7 @@ def _plan_file_upload(resource: dict, base_dir: Path) -> tuple[dict, _PendingUpl
     """Read a pragma/file resource's ``@path`` content into memory.
 
     Callers must ensure the resource has ``config.content`` starting
-    with ``@``. ``_open_and_read_file_reference`` rejects anything
+    with ``@``. ``_read_file_reference`` rejects anything
     that would escape ``base_dir`` (absolute paths, ``..`` traversal,
     symlink escapes) and atomically validates the file type and size
     against the same descriptor it reads from. No network calls are
@@ -499,7 +499,7 @@ def _plan_file_upload(resource: dict, base_dir: Path) -> tuple[dict, _PendingUpl
     if not name:
         raise ValueError("Resource name is required for pragma/file resources")
 
-    _, file_content = _open_and_read_file_reference(content[1:], base_dir)
+    _, file_content = _read_file_reference(content[1:], base_dir)
 
     stripped_resource = resource.copy()
     stripped_resource["config"] = {k: v for k, v in config.items() if k != "content"}
@@ -576,7 +576,7 @@ def _resolve_at_references_pure(value: object, base_dir: Path) -> object:
 
     if isinstance(value, str) and value.startswith("@"):
         path_str = value[1:]
-        _, file_bytes = _open_and_read_file_reference(path_str, base_dir)
+        _, file_bytes = _read_file_reference(path_str, base_dir)
         try:
             return file_bytes.decode("utf-8")
         except UnicodeDecodeError as e:

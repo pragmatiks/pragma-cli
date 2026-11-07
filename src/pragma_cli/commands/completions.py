@@ -6,7 +6,7 @@ import click
 from pragma_sdk import PragmaClient
 
 from pragma_cli.config import get_current_context
-from pragma_cli.project_context import resolve_project_or_none
+from pragma_cli.project_context import resolve_optional_project
 
 
 def _get_completion_client(ctx: click.Context | None = None) -> PragmaClient | None:
@@ -73,7 +73,7 @@ def completion_resource_ids(ctx: click.Context, incomplete: str):
     if client is None:
         return
 
-    project_id = resolve_project_or_none(ctx)
+    project_id = resolve_optional_project(ctx)
     if project_id is None:
         return
 

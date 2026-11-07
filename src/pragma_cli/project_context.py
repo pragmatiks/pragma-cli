@@ -45,7 +45,7 @@ def resolve_project(typer_ctx: typer.Context | click.Context | None) -> str:
     return project
 
 
-def resolve_project_or_none(typer_ctx: typer.Context | click.Context | None) -> str | None:
+def resolve_optional_project(typer_ctx: typer.Context | click.Context | None) -> str | None:
     """Resolve the active project ID without side effects.
 
     Intended for shell completion callbacks: never prints to stderr,
