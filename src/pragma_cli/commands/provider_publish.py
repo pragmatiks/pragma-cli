@@ -167,7 +167,7 @@ def run_wheel_build(project_directory: Path) -> Path:
     return wheels[-1]
 
 
-def _read_changelog(path: Path | None) -> str | None:
+def read_changelog(path: Path | None) -> str | None:
     """Read changelog text from a file path, returning ``None`` when not supplied.
 
     Args:
@@ -1228,7 +1228,7 @@ def publish(
     if wheel is not None and project_directory is not None:
         raise click.UsageError("Pass either PROJECT_DIRECTORY or --wheel, not both.")
 
-    changelog_text = _read_changelog(changelog)
+    changelog_text = read_changelog(changelog)
 
     client = get_client()
     require_auth(client)
