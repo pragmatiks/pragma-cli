@@ -76,8 +76,8 @@ def parse_api_error_message(response: httpx.Response) -> str | None:
         response: The API's error response.
 
     Returns:
-        A string ``detail``, ``detail.message``, or a top-level ``message``,
-        or ``None`` when the body carries none of them.
+        A string ``detail`` or ``detail.message``, or ``None`` when the body
+        carries neither.
     """
     try:
         body = response.json()
@@ -95,8 +95,7 @@ def parse_api_error_message(response: httpx.Response) -> str | None:
     if isinstance(detail, dict) and isinstance(detail.get("message"), str):
         return detail["message"]
 
-    message = body.get("message")
-    return message if isinstance(message, str) else None
+    return None
 
 
 def format_optional_value(value: str | None) -> str:

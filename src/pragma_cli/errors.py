@@ -141,7 +141,7 @@ def check_bootstrap_error(error: httpx.HTTPStatusError) -> None:
 
     Raises:
         typer.Exit: With ``FAILURE_EXIT_CODE``, if the API answered 503 with
-            an organization-bootstrap ``error`` in its body.
+            an organization-bootstrap ``detail.error`` in its body.
     """
     if error.response.status_code != 503:
         return
@@ -151,10 +151,12 @@ def check_bootstrap_error(error: httpx.HTTPStatusError) -> None:
     except ValueError:
         return
 
-    if not isinstance(body, dict):
+    detail = body.get("detail") if isinstance(body, dict) else None
+
+    if not isinstance(detail, dict):
         return
 
-    kind = body.get("error")
+    kind = detail.get("error")
 
     if kind == ORGANIZATION_BOOTSTRAPPING:
         error_console.print("[yellow]Your organization is being set up. Please try again in a moment.[/yellow]")
