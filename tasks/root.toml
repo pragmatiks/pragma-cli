@@ -43,3 +43,53 @@ file = "scripts/tasks/check_types.sh"
 description = "Fail unless PRAGMA_SDK_DIRECTORY is unset or names an absolute pragma-sdk checkout"
 hide = true
 file = "scripts/tasks/check_local_sdk.sh"
+
+["check:ci"]
+description = "Run the CI gate: lint and type check, the pre-commit hooks but ty, which check already runs, and the Pragmatiks lint rules; fails when any step rewrote a file"
+extends = "bash"
+env = { SKIP = "ty" }
+run = [
+  { task = "check:tree-snapshot" },
+  { task = "check" },
+  { task = "check:pre-commit" },
+  { task = "check:lint" },
+  { task = "check:tree-unchanged" },
+]
+
+["check:tree-snapshot"]
+description = "Record the working tree, untracked files included, as the baseline check:tree-unchanged compares against"
+hide = true
+extends = "bash"
+run = """
+index="$(git rev-parse --git-path check-ci-index)"
+cp "$(git rev-parse --git-path index)" "$index"
+GIT_INDEX_FILE="$index" git add --all
+GIT_INDEX_FILE="$index" git write-tree > "$(git rev-parse --git-path check-ci-tree)"
+"""
+
+["check:tree-unchanged"]
+description = "Fail, showing the diff, when the working tree differs from the check:tree-snapshot baseline"
+hide = true
+extends = "bash"
+run = """
+index="$(git rev-parse --git-path check-ci-index)"
+baseline="$(cat "$(git rev-parse --git-path check-ci-tree)")"
+GIT_INDEX_FILE="$index" git add --all
+current="$(GIT_INDEX_FILE="$index" git write-tree)"
+if [ "$baseline" != "$current" ]; then
+  echo "check:ci rewrote files; run mise run format and commit the result:" >&2
+  git --no-pager diff --stat "$baseline" "$current" >&2
+  git --no-pager diff "$baseline" "$current" >&2
+  exit 1
+fi
+"""
+
+["check:pre-commit"]
+description = "Run every pre-commit stage hook on all files, as CI does"
+extends = "bash"
+run = "pre-commit run --all-files --show-diff-on-failure --hook-stage pre-commit"
+
+["check:lint"]
+description = "Run the Pragmatiks principle lint rules over the source paths; blocking findings fail"
+extends = "bash"
+run = "uv run --locked pragma lint check src scripts"

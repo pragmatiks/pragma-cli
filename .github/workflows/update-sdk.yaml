@@ -92,6 +92,9 @@ jobs:
           echo "Timed out waiting for pragmatiks-sdk==${SDK_VERSION} in simple-index"
           exit 1
 
+      - name: Run the CI gate against the new SDK
+        run: mise run check:ci
+
       - name: Commit changes
         id: commit
         env:
