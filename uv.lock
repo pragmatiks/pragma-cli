@@ -748,7 +748,7 @@ requires-dist = [
     { name = "copier", specifier = ">=9.0.0" },
     { name = "jsonschema", specifier = ">=4.25.1" },
     { name = "pragmatiks-lint", specifier = ">=0.6.0" },
-    { name = "pragmatiks-sdk", specifier = ">=26.0.1" },
+    { name = "pragmatiks-sdk", specifier = ">=27.1.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=13.9.0" },
     { name = "typer", specifier = ">=0.15.3" },
@@ -777,7 +777,7 @@ wheels = [
 
 [[package]]
 name = "pragmatiks-sdk"
-version = "26.0.1"
+version = "27.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -787,9 +787,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "structlog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3b/98/8fad629974e1487e3959f59fbfddacc3eda5c011851a6fd0871c8911d06c/pragmatiks_sdk-26.0.1.tar.gz", hash = "sha256:9132b755a7ad5d52f88e751c9c0de512bb214e0b83afda0d882cd1b7fc4c2810", size = 126332, upload-time = "2026-11-07T18:55:57.298Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b7/ba/e75c6eb8210f4ff93eaa5807365b9ada5d4c16ec1b604bf1c46ca8de8d98/pragmatiks_sdk-27.1.0.tar.gz", hash = "sha256:db97faf378bea81cf76d162b3de44f76c9a8868bf973d28a272e0d42b973dfda", size = 126725, upload-time = "2026-11-07T19:54:20.804Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/19/e89c2e3069b90e2f128a6bbfcd35e5d2989f776751a2f217bf91cec1c0c0/pragmatiks_sdk-26.0.1-py3-none-any.whl", hash = "sha256:a53e72249689cb2ff99779b509690b9f08e032a9ca782043a1dffe64a213d1db", size = 155589, upload-time = "2026-11-07T18:55:55.293Z" },
+    { url = "https://files.pythonhosted.org/packages/95/be/ba835b752519ff6ffb6b73ac322baa5b7052ffde736b7e2a7da4b2e91874/pragmatiks_sdk-27.1.0-py3-none-any.whl", hash = "sha256:6e65623c686a0e40effc4753c847bcea51478bd43ce46e36617320be74df4f21", size = 155983, upload-time = "2026-11-07T19:54:19.188Z" },
 ]
 
 [[package]]
