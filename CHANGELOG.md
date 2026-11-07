@@ -1,5 +1,12 @@
 # Changelog
 
+## v16.3.6 (2026-11-07)
+
+### Fix
+
+- match the API's wording for an organization being set up (PRA-576)
+- say organization, not workspace, in bootstrap errors (PRA-576)
+
 ## v16.3.5 (2026-11-07)
 
 ### Fix
