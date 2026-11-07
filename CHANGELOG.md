@@ -1,5 +1,12 @@
 # Changelog
 
+## v16.3.5 (2026-11-07)
+
+### Fix
+
+- **providers**: print the API's refusal when installing a provider with no published version
+- **deps**: update pragmatiks-sdk to v26.0.0 (#132)
+
 ## v16.3.4 (2026-11-07)
 
 ### Fix
