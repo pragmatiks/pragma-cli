@@ -162,7 +162,7 @@ class CallbackHandler(BaseHTTPRequestHandler):
 @app.command()
 def login(
     ctx: typer.Context,
-    context: str | None = typer.Option(None, help="Context to authenticate for (default: current)"),
+    context: str | None = typer.Option(None, help="Context to authenticate for (default: the resolved context)"),
     org: str | None = typer.Option(None, help="Organization slug to authenticate with (skips org picker)"),
 ):
     """Authenticate with Pragma using browser-based Clerk login.
@@ -193,7 +193,8 @@ def login(
     if context is None:
         context = ctx.obj["context"]
 
-    context_config = select_context(load_config(), context)
+    config = load_config()
+    context_config = select_context(config, context)
     auth_url = context_config.get_auth_url()
     login_url = _get_login_url(context_config, org=org)
 
@@ -226,6 +227,9 @@ def login(
         print()
         print("[green]✓ Successfully authenticated![/green]")
         print(f"[dim]Credentials saved to {escape(str(CREDENTIALS_FILE))}[/dim]")
+        if context != config.current_context:
+            activation_command = f"pragma config use-context {escape(context)}"
+            print(f"[dim]Context '{escape(context)}' is not active; run '{activation_command}' to activate it.[/dim]")
         print()
         print("[bold]You can now use pragma commands:[/bold]")
         print("  pragma resources list")
