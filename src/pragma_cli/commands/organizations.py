@@ -9,7 +9,7 @@ those endpoints are deliberately not reachable from this CLI.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 from pragma_sdk.models.api import MemberRole, Organization, OrganizationMember
@@ -91,9 +91,7 @@ def show_me(
     client = get_client()
     require_auth(client)
 
-    response = client._request("GET", "/organizations/me")
-
-    organization = Organization.model_validate(response)
+    organization = client.get_current_organization()
 
     if output == OutputFormat.TABLE:
         _print_organization_panel(organization)
@@ -123,9 +121,7 @@ def show_status(
     client = get_client()
     require_auth(client)
 
-    response: dict[str, Any] = client._request("GET", "/organizations/me/status")
-
-    status_value = str(response.get("status", "unknown"))
+    status_value = client.get_current_organization_status().status.value
 
     if output == OutputFormat.TABLE:
         console.print()
