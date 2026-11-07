@@ -11,7 +11,7 @@ from rich.console import Console
 
 from pragma_cli import get_client
 from pragma_cli.credentials import clear_credentials, extract_client_token
-from pragma_cli.errors import require_auth
+from pragma_cli.errors import error_console, require_auth
 
 
 app = typer.Typer(help="Account commands")
@@ -65,9 +65,9 @@ def delete_account(
     require_auth(client)
 
     if not yes:
-        console.print(ACCOUNT_DELETION_WARNING)
+        error_console.print(ACCOUNT_DELETION_WARNING)
         if not typer.confirm("Delete your account?"):
-            console.print("[dim]Cancelled.[/dim]")
+            error_console.print("[dim]Cancelled.[/dim]")
             raise typer.Exit()
 
     context_name = context.obj["context"]

@@ -670,7 +670,7 @@ def list_resources(
     ctx: typer.Context,
     provider: Annotated[str | None, typer.Option("--provider", "-p", help="Filter by provider")] = None,
     resource: Annotated[str | None, typer.Option("--resource", "-r", help="Filter by resource type")] = None,
-    tags: Annotated[list[str] | None, typer.Option("--tag", "-t", help="Filter by tags")] = None,
+    tags: Annotated[list[str] | None, typer.Option("--tag", help="Filter by tags")] = None,
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
 ):
     """List resources in the active project.
@@ -1942,7 +1942,7 @@ def tags_list(
 def tags_add(
     ctx: typer.Context,
     resource_id: ResourceIdArgument[str],
-    tags: Annotated[list[str], typer.Option("--tag", "-t", help="Tag to add (can be repeated)")],
+    tags: Annotated[list[str], typer.Option("--tag", help="Tag to add (can be repeated)")],
 ):
     """Add tags to a resource.
 
@@ -1951,7 +1951,7 @@ def tags_add(
 
     Examples:
         pragma resources tags add pragmatiks/gcp/secret/my-secret --tag production
-        pragma resources tags add pragmatiks/gcp/secret/my-secret -t prod -t api
+        pragma resources tags add pragmatiks/gcp/secret/my-secret --tag prod --tag api
 
     \f
 
@@ -1980,7 +1980,7 @@ def tags_add(
 def tags_remove(
     ctx: typer.Context,
     resource_id: ResourceIdArgument[str],
-    tags: Annotated[list[str], typer.Option("--tag", "-t", help="Tag to remove (can be repeated)")],
+    tags: Annotated[list[str], typer.Option("--tag", help="Tag to remove (can be repeated)")],
 ):
     """Remove tags from a resource.
 
@@ -1989,7 +1989,7 @@ def tags_remove(
 
     Examples:
         pragma resources tags remove pragmatiks/gcp/secret/my-secret --tag staging
-        pragma resources tags remove pragmatiks/gcp/secret/my-secret -t old -t deprecated
+        pragma resources tags remove pragmatiks/gcp/secret/my-secret --tag old --tag deprecated
 
     \f
 

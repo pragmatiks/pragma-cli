@@ -19,7 +19,7 @@ from rich.table import Table
 
 from pragma_cli import get_client
 from pragma_cli.commands.provider_output import fetch_with_spinner
-from pragma_cli.errors import require_auth
+from pragma_cli.errors import error_console, require_auth
 from pragma_cli.helpers import OutputFormat, format_optional_value, output_data
 
 
@@ -229,7 +229,7 @@ def delete_member(
     caller_user_id = fetch_with_spinner("Fetching your account...", client.get_me).user_id
 
     if not yes and not typer.confirm(f"Delete the membership of {user_id}?"):
-        console.print("[dim]Cancelled.[/dim]")
+        error_console.print("[dim]Cancelled.[/dim]")
         raise typer.Exit()
 
     fetch_with_spinner("Deleting membership...", lambda: client.delete_organization_member(user_id))
