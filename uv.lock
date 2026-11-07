@@ -747,7 +747,7 @@ dev = [
 requires-dist = [
     { name = "copier", specifier = ">=9.0.0" },
     { name = "jsonschema", specifier = ">=4.25.1" },
-    { name = "pragmatiks-lint", extras = ["check"], specifier = ">=0.9.0" },
+    { name = "pragmatiks-lint", extras = ["check"], specifier = ">=0.9.1" },
     { name = "pragmatiks-sdk", specifier = ">=27.2.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=13.9.0" },
@@ -762,14 +762,14 @@ dev = [
 
 [[package]]
 name = "pragmatiks-lint"
-version = "0.9.0"
+version = "0.9.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bd/72/c521a91f83247424ae56580a4903191f3c90fd2c5f71e6bb337ef3dcc0a5/pragmatiks_lint-0.9.0.tar.gz", hash = "sha256:b1fe1ad65639220fff9a48e1e2cf38b928d2eb76af4049b15bb7ce60ee5180d6", size = 17528, upload-time = "2026-11-07T20:25:06.924Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/36/14/23b28dfa3798ed1a9d77eea0ebef0d9d7bbe2bf98b0df37979193189b555/pragmatiks_lint-0.9.1.tar.gz", hash = "sha256:ad776c950212542ffbb2d15040393b8be7d3ab45076fbfc1cc2e59bf7bc8f7c0", size = 19364, upload-time = "2026-11-07T20:58:58.564Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/5a/047231bef4841e6f62b585aa16ac7ad82ad0b9d5a194f3b7fc644a4b60eb/pragmatiks_lint-0.9.0-py3-none-any.whl", hash = "sha256:8d781996b93127ef552901dc98bf6b19ce7f8d65743e0aa3ef13c3375c41e933", size = 23348, upload-time = "2026-11-07T20:25:05.729Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/06/bcb5979b9c9640955f627231dd7d86027beb0225ad5f7793a3993317df0c/pragmatiks_lint-0.9.1-py3-none-any.whl", hash = "sha256:cc9da7851581cb38ee33101271db0f3d593b3e39602088ef75e7a4eacb2bed14", size = 25137, upload-time = "2026-11-07T20:58:57.196Z" },
 ]
 
 [package.optional-dependencies]
