@@ -156,11 +156,13 @@ def check_bootstrap_error(error: httpx.HTTPStatusError) -> None:
     kind = body.get("error")
 
     if kind == ORGANIZATION_BOOTSTRAPPING:
-        error_console.print("[yellow]Your workspace is still being set up. Please try again in a moment.[/yellow]")
+        error_console.print("[yellow]Your organization is still being set up. Please try again in a moment.[/yellow]")
         raise typer.Exit(FAILURE_EXIT_CODE)
 
     if kind == ORGANIZATION_BOOTSTRAP_FAILED:
-        error_console.print("[red]Your workspace setup failed. Please contact support.[/red]")
+        error_console.print(
+            "[red]Your organization could not be set up. Please contact support at support@pragmatiks.io.[/red]"
+        )
         raise typer.Exit(FAILURE_EXIT_CODE)
 
 
