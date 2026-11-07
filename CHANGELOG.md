@@ -1,5 +1,17 @@
 # Changelog
 
+## v17.0.0 (2026-11-07)
+
+### BREAKING CHANGE
+
+- providers init no longer accepts --output/-o and -d now
+means --directory; -c on providers install and -t on resources list,
+tags add and tags remove are removed; preambles moved to stderr.
+
+### Feat
+
+- give CLI short flags one meaning and send preambles to stderr
+
 ## v16.4.2 (2026-11-07)
 
 ### Fix
