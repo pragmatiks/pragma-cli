@@ -2,6 +2,8 @@ name: Toolchain
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -12,6 +14,7 @@ concurrency:
 
 jobs:
   toolchain:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -21,6 +24,7 @@ jobs:
       - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
         with:
           version: 2026.10.17
+          sha256: fe6dd17e68e09682b31d2e7bb7bb755d22636ac1af5d94621e300f2ca9e9fe8a
           github_token: ${{ secrets.GITHUB_TOKEN }}
           cache: false
 
@@ -32,25 +36,8 @@ jobs:
           pre-commit --version
           cz version
 
-      - name: Assert every mise-action version equals the pin
-        run: |
-          pin=$(sed -n 's/^min_version = "\(.*\)"$/\1/p' mise.toml)
-          test -n "$pin"
-
-          test "$(mise --version | cut -d' ' -f1)" = "$pin"
-
-          mise_action_versions=$(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -exec yq --no-doc '
-            .jobs[].steps[]
-            | select(.uses == "jdx/mise-action@*")
-            | filename + ":" + (line | tostring) + "\t" + (.with.version // "" | tostring)
-          ' {} +)
-
-          test -n "$mise_action_versions"
-          if printf '%s\n' "$mise_action_versions" | cut -f2 | grep -qvxF "$pin"; then
-            echo "Every jdx/mise-action step must set version: $pin (min_version in mise.toml). Found:" >&2
-            printf '%s\n' "$mise_action_versions" >&2
-            exit 1
-          fi
+      - name: Assert every mise-action step pins the mise version and binary checksum
+        run: mise run check:mise-pins
 
       - name: Assert UV_PYTHON equals the mise python pin
         run: |
@@ -74,3 +61,21 @@ jobs:
         env:
           MISE_GITHUB_TOKEN: ${{ github.token }}
         run: mise run lock:toolchain && test -z "$(git status --porcelain -- 'mise*.lock' .mise/locks)"
+
+  shared-scripts:
+    name: Shared toolchain scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the locked toolchain
+        uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+        with:
+          version: 2026.10.17
+          sha256: fe6dd17e68e09682b31d2e7bb7bb755d22636ac1af5d94621e300f2ca9e9fe8a
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assert the shared toolchain scripts match the same-named branch, else main, of the public repositories
+        run: mise run check:toolchain-scripts

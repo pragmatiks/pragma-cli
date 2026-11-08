@@ -10,4 +10,4 @@ if [ "$hooks_directory" != "$expected_hooks_directory" ]; then
   exit 1
 fi
 
-GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0= pre-commit install --hook-type pre-commit --hook-type commit-msg
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0= pre-commit install

@@ -93,3 +93,11 @@ run = "pre-commit run --all-files --show-diff-on-failure --hook-stage pre-commit
 description = "Run the Pragmatiks principle lint rules over the source paths; blocking findings fail"
 extends = "bash"
 run = "uv run --locked pragma lint check src scripts"
+
+["check:toolchain-scripts"]
+description = "Fail when a shared toolchain script differs from the public repositories' copies on the branch named like the pull request's head branch, else main"
+file = "scripts/tasks/check_toolchain_scripts.sh"
+
+["check:mise-pins"]
+description = "Fail when a jdx/mise-action step's version or sha256 differs from min_version and its runner's mise binary checksum"
+file = "scripts/tasks/check_mise_pins.sh"
