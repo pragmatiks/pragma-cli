@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, NoReturn, TypeVar, cast
@@ -25,12 +26,29 @@ from pragma_cli.commands.completions import completion_resource_ids
 from pragma_cli.errors import check_bootstrap_error, error_console, format_request_failure, print_api_error
 from pragma_cli.exit_codes import FAILURE_EXIT_CODE, INPUT_ERROR_EXIT_CODE, compute_http_exit_code
 from pragma_cli.helpers import OutputFormat, format_optional_value, output_data, parse_resource_id
-from pragma_cli.project_context import resolve_project
+from pragma_cli.project_context import print_project_override_notice, resolve_project
 from pragma_cli.teardown import DEFAULT_WAIT_TIMEOUT_SECONDS, TeardownOptions, print_impact, watch_teardown
 
 
 console = Console()
 app = typer.Typer()
+
+
+@app.callback()
+def announce_project_override(ctx: typer.Context) -> None:
+    """Print the ``Using project ...`` notice once per project-scoped resource command.
+
+    Prints nothing for ``schemas``, which no project scopes, or for a help
+    request, which targets no project.
+
+    Args:
+        ctx: Active Typer context of the ``resources`` group.
+    """
+    if ctx.resilient_parsing or ctx.invoked_subcommand == "schemas":
+        return
+    if set(ctx.help_option_names) & set(sys.argv[1:]):
+        return
+    print_project_override_notice(ctx)
 
 
 _MAX_FILE_REFERENCE_SIZE = 10 * 1024 * 1024

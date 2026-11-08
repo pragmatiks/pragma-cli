@@ -14,6 +14,12 @@ from pragma_cli.config import (
 )
 from pragma_cli.errors import error_console
 from pragma_cli.exit_codes import INPUT_ERROR_EXIT_CODE
+from pragma_cli.project_context import (
+    extract_context_name,
+    format_effective_project,
+    print_project_override_warning,
+    resolve_effective_project,
+)
 
 
 app = typer.Typer()
@@ -67,13 +73,26 @@ def get_contexts():
 
 
 @app.command()
-def current_context():
-    """Show current context."""
-    context_name, context_config = get_current_context()
+def current_context(ctx: typer.Context):
+    """Show the active context and the project commands target.
+
+    Honors the global ``--context``/``-c`` flag, and warns on stderr when the
+    ``--project`` flag or ``PRAGMA_PROJECT`` overrides the context default.
+
+    \f
+
+    Raises:
+        UnknownContextError: If the context is not in the configuration.
+    """  # noqa: DOC502
+    context_name, context_config = get_current_context(extract_context_name(ctx))
+    effective = resolve_effective_project(ctx)
+
     print(f"[bold]Current context:[/bold] [cyan]{escape(context_name)}[/cyan]")
     print(f"[bold]API URL:[/bold] {escape(context_config.api_url)}")
     print(f"[bold]Auth URL:[/bold] {escape(context_config.derive_auth_url())}")
-    print(f"[bold]Project:[/bold] {escape(context_config.project or 'none set')}")
+    print(f"[bold]Project:[/bold] {escape(format_effective_project(effective))}")
+
+    print_project_override_warning(context_name, context_config.project, effective)
 
 
 @app.command()

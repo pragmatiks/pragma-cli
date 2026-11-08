@@ -23,6 +23,12 @@ from pragma_cli.config import ContextConfig, load_config, select_context, update
 from pragma_cli.errors import error_console
 from pragma_cli.exit_codes import FAILURE_EXIT_CODE, INPUT_ERROR_EXIT_CODE
 from pragma_cli.helpers import OutputFormat, output_data
+from pragma_cli.project_context import (
+    extract_context_name,
+    format_effective_project,
+    print_project_override_warning,
+    resolve_effective_project,
+)
 
 
 app = typer.Typer(help="Project management commands")
@@ -120,13 +126,7 @@ def _active_context_name(ctx: typer.Context) -> str:
     Returns:
         Context name to operate on.
     """
-    root_obj = ctx.find_root().obj if ctx is not None else None
-    if isinstance(root_obj, dict):
-        context_name = root_obj.get("context")
-        if context_name:
-            return context_name
-
-    return load_config().current_context
+    return extract_context_name(ctx) or load_config().current_context
 
 
 def _current_context_config(ctx: typer.Context) -> tuple[str, ContextConfig]:
@@ -362,11 +362,34 @@ def use_project(
 
 
 @app.command("current")
-def current_project(ctx: typer.Context) -> None:
-    """Show the current default project for the active context.
+def current_project(
+    ctx: typer.Context,
+    output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
+) -> None:
+    """Show the project commands target and its source for the active context.
 
-    Honors the global ``--context``/``-c`` flag so the reported project
-    reflects the context the rest of the CLI is operating on.
-    """
-    _, context_config = _current_context_config(ctx)
-    console.print(escape(context_config.project or "none set"))
+    Honors the global ``--context``/``-c`` flag, the ``--project`` flag and
+    ``PRAGMA_PROJECT``, and warns on stderr when the effective project
+    differs from the context default.
+
+    \f
+
+    Raises:
+        UnknownContextError: If the context is not in the configuration.
+    """  # noqa: DOC502
+    context_name, context_config = _current_context_config(ctx)
+    effective = resolve_effective_project(ctx)
+
+    payload = {
+        "project": effective.project if effective is not None else None,
+        "source": str(effective.source) if effective is not None else None,
+    }
+    output_data(
+        payload,
+        output,
+        table_renderer=lambda _: console.print(
+            escape(format_effective_project(effective)), highlight=False, soft_wrap=True
+        ),
+    )
+
+    print_project_override_warning(context_name, context_config.project, effective)
