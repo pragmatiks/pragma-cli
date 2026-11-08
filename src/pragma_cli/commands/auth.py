@@ -86,7 +86,7 @@ def _get_login_url(context_config: ContextConfig, org: str | None = None) -> str
     Returns:
         Full login URL with callback parameter.
     """
-    auth_url = context_config.get_auth_url()
+    auth_url = context_config.derive_auth_url()
     callback_url = _get_callback_url()
     url = f"{auth_url}/auth/callback?callback={quote(callback_url, safe='')}"
 
@@ -195,7 +195,7 @@ def login(
 
     config = load_config()
     context_config = select_context(config, context)
-    auth_url = context_config.get_auth_url()
+    auth_url = context_config.derive_auth_url()
     login_url = _get_login_url(context_config, org=org)
 
     print(f"[cyan]Authenticating for context:[/cyan] {escape(context)}")

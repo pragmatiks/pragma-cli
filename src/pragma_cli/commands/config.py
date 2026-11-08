@@ -72,7 +72,7 @@ def current_context():
     context_name, context_config = get_current_context()
     print(f"[bold]Current context:[/bold] [cyan]{escape(context_name)}[/cyan]")
     print(f"[bold]API URL:[/bold] {escape(context_config.api_url)}")
-    print(f"[bold]Auth URL:[/bold] {escape(context_config.get_auth_url())}")
+    print(f"[bold]Auth URL:[/bold] {escape(context_config.derive_auth_url())}")
     print(f"[bold]Project:[/bold] {escape(context_config.project or 'none set')}")
 
 
@@ -90,7 +90,7 @@ def set_context(
             auth_url=auth_url,
             project=existing.project if existing else None,
         )
-        effective_auth = config.contexts[name].get_auth_url()
+        effective_auth = config.contexts[name].derive_auth_url()
 
     print(f"[green]✓[/green] Context '{escape(name)}' configured")
     print(f"  API URL:  {escape(api_url)}")
