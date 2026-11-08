@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.3.0 (2026-11-08)
+
+### Feat
+
+- **projects**: show the project commands use and where it comes from (PRA-342)
+
 ## v17.2.0 (2026-11-08)
 
 ### Feat
