@@ -84,6 +84,8 @@ Always use mise tasks (`mise tasks` lists them all):
 | `mise run format` | Format with ruff |
 | `mise run check` | Lint + type check against `.venv`, whatever `VIRTUAL_ENV` the shell carries |
 | `mise run lock:toolchain` | Regenerate `mise.lock` and `.mise/locks/` for macOS arm64 and Linux x64 without bumping a tool; runs only on those hosts and only with mise at the `min_version` in `mise.toml` |
+| `mise run check:mise-pins` | Fail when a `jdx/mise-action` step's `version:` or `sha256:` differs from `min_version` and its runner's mise binary checksum |
+| `mise run check:toolchain-scripts` | Fail when a shared toolchain script under `scripts/tasks/` differs from the public repositories' copies (same-named branch, else `main`) |
 
 ### Toolchain
 
@@ -93,7 +95,8 @@ mise is the only toolchain source, on the Mac, in Linux cloud sessions and in CI
 - `mise.toml` points uv at mise's Python (`UV_PYTHON`, `UV_PYTHON_PREFERENCE`), so `.venv` always runs the pinned interpreter.
 - `[tool.uv] required-version` in `pyproject.toml` equals the uv pin in `mise.toml`; uv refuses to run at any other version, and the `Toolchain` workflow fails a pull request where they differ.
 - Changing a tool version in `mise.toml` means running `mise run lock:toolchain` and committing the lock; the `Toolchain` workflow fails a pull request whose lock is stale.
-- The mise version is pinned twice and moves in one sweep across every Pragmatiks repo: `min_version` in `mise.toml`, and every `jdx/mise-action` `version:` under `.github/workflows`.
+- The mise version is pinned in three places and moves in one sweep across every Pragmatiks repo: `min_version` in `mise.toml`, and every `jdx/mise-action` `version:` and `sha256:` (the plain mise binary's checksum for the step's runner) under `.github/workflows`; the `Toolchain` workflow fails a step whose pins do not match.
+- `scripts/tasks/` holds the shared toolchain scripts, byte-identical across every Pragmatiks repo; `mise run check:toolchain-scripts` fails on any difference (hub `docs/runbooks/local-dev-setup.md`, Shared toolchain scripts).
 
 ### Local SDK checkout
 

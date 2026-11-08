@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-primary_checkout=$(cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd -P)
-worktrees_directory="$primary_checkout/.claude/worktrees"
-ceiling_line="ceiling_paths = [\"$worktrees_directory\"]"
+expected_miserc=$(bash "$(dirname "$0")/compute_expected_miserc.sh")
+foreign_settings=""
 
-if [ -f .miserc.toml ] && grep -qF "\"$worktrees_directory\"" .miserc.toml; then
-  exit 0
+if [ -f .miserc.toml ]; then
+  foreign_settings=$(grep -vxE 'ceiling_paths = \["[^"]*"\]' .miserc.toml | grep -v '^[[:space:]]*$' | grep -vxF "$expected_miserc" || true)
 fi
 
-if [ -f .miserc.toml ] && grep -v '^[[:space:]]*$' .miserc.toml | grep -qvx 'ceiling_paths = \["[^"]*"\]'; then
-  echo ".miserc.toml holds other settings, so it was left unchanged. Add $worktrees_directory to its ceiling_paths, for example: $ceiling_line" >&2
+if [ -n "$foreign_settings" ]; then
+  echo ".miserc.toml holds other settings, so it was left unchanged. Delete .miserc.toml and rerun mise run install, or replace its content with:" >&2
+  printf '%s\n' "$expected_miserc" >&2
   exit 1
 fi
 
-printf '%s\n' "$ceiling_line" > .miserc.toml
+printf '%s\n' "$expected_miserc" > .miserc.toml
