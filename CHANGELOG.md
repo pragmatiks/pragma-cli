@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.7.1 (2026-11-08)
+
+### Fix
+
+- call the provider list the catalog and document every list option (PRA-955)
+
 ## v17.7.0 (2026-11-08)
 
 ### Feat
