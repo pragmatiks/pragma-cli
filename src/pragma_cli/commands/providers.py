@@ -36,7 +36,11 @@ from pragma_cli.commands.provider_output import (
     fetch_with_spinner,
     format_version_status,
 )
-from pragma_cli.commands.provider_publish import publish
+from pragma_cli.commands.provider_publish import (
+    format_resumed_watch_status_label,
+    publish,
+    report_admission_watch,
+)
 from pragma_cli.errors import (
     error_console,
     print_api_error,
@@ -316,6 +320,61 @@ def update(
 
 
 app.command()(publish)
+
+
+@app.command()
+def wait(
+    name: ProviderNameArgument,
+    version: Annotated[str, typer.Argument(help="Version to wait for, such as 1.0.0")],
+    operation: Annotated[
+        str,
+        typer.Option("--operation", help="Operation id of the publish to wait for, as publish printed it"),
+    ],
+    output: Annotated[
+        OutputFormat,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output format; json and yaml print the operation id and version record on stdout",
+        ),
+    ] = OutputFormat.TABLE,
+):
+    """Keep waiting for admission of a version a publish declared.
+
+    Runs the same watch as 'pragma providers publish', for the publish
+    whose operation id '--operation' names; 'pragma providers publish'
+    prints this command when it exits 3. A version that already settled
+    is reported at once.
+
+    Exit codes: 0 published; 1 admission failed, or another publish of the
+    version replaced the one named by '--operation'; 3 admission is not
+    confirmed: the watch ended with the version still unsettled, or could
+    not read the version, and the command prints itself to keep waiting.
+    With '-o json' or '-o yaml', stdout carries the same document as
+    'pragma providers publish'.
+
+    Examples:
+        pragma providers wait acme/pipeline 1.0.0 --operation 3f2c9a
+        pragma providers wait acme/pipeline 1.0.0 --operation 3f2c9a -o json
+
+    \f
+
+    Raises:
+        typer.Exit: With ``NOT_FOUND_EXIT_CODE`` if the version is not
+            found, and as :func:`report_admission_watch` exits.
+    """  # noqa: DOC502
+    client = get_client()
+    require_auth(client)
+
+    try:
+        start_version = fetch_with_spinner(
+            "Reading the version...",
+            lambda: client.get_provider_version(name, version),
+        )
+    except httpx.HTTPStatusError as e:
+        report_not_found(e, f"Version {version} of provider '{name}' not found.")
+
+    report_admission_watch(client, start_version, operation, format_resumed_watch_status_label, output)
 
 
 def _merge_install_config(

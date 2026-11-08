@@ -7,10 +7,10 @@ INPUT_ERROR_EXIT_CODE = 2
 """Exit code for invalid usage or a local file or config error, matching Typer's own usage errors."""
 
 ADMISSION_UNCONFIRMED_EXIT_CODE = 3
-"""Exit code of ``pragma providers publish`` when admission is not confirmed.
+"""Exit code of ``pragma providers publish`` and ``pragma providers wait`` when admission is not confirmed.
 
-The wheel was uploaded or already received, and then the watch ended with the
-version still unsettled or could not read the version.
+The watch ended with the version still unsettled or could not read the
+version; for publish, after the wheel was uploaded or already received.
 """
 
 NOT_FOUND_EXIT_CODE = 4
@@ -25,7 +25,8 @@ EXIT_CODES_HELP = (
     f"{INPUT_ERROR_EXIT_CODE} invalid usage or a local file or config error; "
     f"{ADMISSION_UNCONFIRMED_EXIT_CODE} command-specific, named in that command's help "
     "(providers publish: wheel uploaded or already received, then the watch ended with admission unsettled "
-    "or could not read the version); "
+    "or could not read the version, and it prints a providers wait command that keeps waiting; "
+    "providers wait: the watch ended again with admission unsettled or could not read the version); "
     f"{NOT_FOUND_EXIT_CODE} not found: the target does not exist, is not installed, "
     "or is not visible to you. "
     "Errors and warnings go to stderr; command output goes to stdout, "
