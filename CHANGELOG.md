@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.4.3 (2026-11-08)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v27.4.0 (#158)
+
 ## v17.4.2 (2026-11-08)
 
 ### Fix
