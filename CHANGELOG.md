@@ -1,5 +1,15 @@
 # Changelog
 
+## v17.2.0 (2026-11-08)
+
+### Feat
+
+- **providers**: add pragma providers wait to resume an unsettled publish (PRA-715)
+
+### Refactor
+
+- rename get_auth_url to derive_auth_url (PRA-456)
+
 ## v17.1.0 (2026-11-07)
 
 ### Feat
