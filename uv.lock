@@ -730,7 +730,6 @@ source = { editable = "." }
 dependencies = [
     { name = "copier" },
     { name = "jsonschema" },
-    { name = "pragmatiks-lint", extra = ["check"] },
     { name = "pragmatiks-sdk" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -739,6 +738,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "pragmatiks-lint", extra = ["check"] },
     { name = "ruff" },
     { name = "ty" },
 ]
@@ -747,7 +747,6 @@ dev = [
 requires-dist = [
     { name = "copier", specifier = ">=9.0.0" },
     { name = "jsonschema", specifier = ">=4.25.1" },
-    { name = "pragmatiks-lint", extras = ["check"], specifier = ">=0.11.0" },
     { name = "pragmatiks-sdk", specifier = ">=27.3.0,<29" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=13.9.0" },
@@ -756,6 +755,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pragmatiks-lint", extras = ["check"], specifier = ">=0.11.0" },
     { name = "ruff", specifier = ">=0.11.0" },
     { name = "ty", specifier = "==0.0.63" },
 ]
