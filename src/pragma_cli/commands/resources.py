@@ -882,6 +882,25 @@ def print_blockers(blockers: list[dict]) -> None:
         console.print(f"    [dim]{escape(blocker['command'])}[/dim]")
 
 
+def print_owner(owner: dict | None) -> None:
+    """Print the ``Owned by:`` section of a resource's details.
+
+    The owner prints as ``provider/resource/name``, then, dimmed, the
+    command that shows it.
+
+    Args:
+        owner: Owner the API returned on the resource; ``None`` prints
+            nothing.
+    """
+    if not owner:
+        return
+
+    console.print()
+    console.print("[bold]Owned by:[/bold]")
+    console.print(f"  {escape(owner['provider'])}/{escape(owner['resource'])}/{escape(owner['name'])}")
+    console.print(f"    [dim]{escape(owner['command'])}[/dim]")
+
+
 def print_provider_blocker(provider_blocker: dict | None) -> None:
     """Print the ``Waiting for provider:`` section of a resource's details.
 
@@ -1011,6 +1030,7 @@ def _print_resource_details(res: dict) -> None:
 
     console.print(table)
 
+    print_owner(res.get("owner"))
     print_blockers(res.get("blockers") or [])
     print_provider_blocker(res.get("provider_blocker"))
 
@@ -1059,7 +1079,7 @@ def describe(
 
     Resolves the active project from ``--project``, ``PRAGMA_PROJECT``,
     or the persistent default set via ``pragma projects use <project-id>``.
-    Displays the resource's state, health, blockers, config, outputs,
+    Displays the resource's state, health, owner, blockers, config, outputs,
     dependencies, and error messages. Sensitive fields are redacted by
     default; use --reveal to show their values.
 
