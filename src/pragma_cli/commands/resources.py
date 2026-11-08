@@ -646,6 +646,7 @@ def _print_resource_schemas_table(types: list[dict]) -> None:
     table = Table(show_header=True, header_style="bold")
     table.add_column("Provider")
     table.add_column("Resource")
+    table.add_column("Serving")
     table.add_column("Description")
 
     for resource_type in types:
@@ -653,6 +654,7 @@ def _print_resource_schemas_table(types: list[dict]) -> None:
         table.add_row(
             escape(resource_type["provider"]),
             escape(resource_type["resource"]),
+            "yes" if resource_type["serving"] else "[dim]no[/dim]",
             format_optional_value(description),
         )
 
