@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.4.2 (2026-11-08)
+
+### Fix
+
+- stop installing pragma lint and semgrep with the CLI (PRA-933)
+
 ## v17.4.1 (2026-11-08)
 
 ### Refactor
