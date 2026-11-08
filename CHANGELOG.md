@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.6.1 (2026-11-08)
+
+### Fix
+
+- declare click as a direct dependency
+
 ## v17.6.0 (2026-11-08)
 
 ### Feat
