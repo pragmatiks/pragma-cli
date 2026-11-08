@@ -60,7 +60,7 @@ class ContextConfig(BaseModel):
     auth_url: str | None = None
     project: str | None = None
 
-    def get_auth_url(self) -> str:
+    def derive_auth_url(self) -> str:
         """Get the auth URL, deriving from api_url if not explicitly set.
 
         Returns:
