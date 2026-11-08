@@ -1,7 +1,9 @@
-"""The ``pragma providers publish`` flow.
+"""The ``pragma providers publish`` flow and the admission watch it ends with.
 
 Builds or takes a wheel, renames it, declares its version, uploads it and
-watches its admission, reporting each failure with its next step.
+watches its admission, reporting each failure with its next step. The
+admission watch, its labels and the ``pragma providers wait`` command it
+prints also serve a watch resumed from an operation id.
 """
 
 from __future__ import annotations
@@ -299,6 +301,25 @@ def format_watched_status_label(declared_version: DeclaredProviderVersion, statu
         markup.
     """
     if declared_version.wheel_upload is not None and status == VersionStatus.AWAITING_WHEEL:
+        return UPLOADED_WHEEL_LABEL
+
+    return VERSION_STATUS_LABELS[status]
+
+
+def format_resumed_watch_status_label(status: VersionStatus) -> str:
+    """Format the plain-words label of a status a resumed publish watch shows.
+
+    A resumed watch continues a publish whose watch had started, so its wheel
+    was already in storage.
+
+    Args:
+        status: The watched version's status.
+
+    Returns:
+        ``UPLOADED_WHEEL_LABEL`` for ``awaiting_wheel``, else the label from
+        ``VERSION_STATUS_LABELS``. Not escaped for Rich markup.
+    """
+    if status == VersionStatus.AWAITING_WHEEL:
         return UPLOADED_WHEEL_LABEL
 
     return VERSION_STATUS_LABELS[status]
@@ -798,22 +819,20 @@ def publish_wheel(
     return declared_version
 
 
-def is_replaced_publish(version: ProviderVersion, declared_version: DeclaredProviderVersion) -> bool:
+def is_replaced_publish(version: ProviderVersion, operation_id: str) -> bool:
     """Tell whether another publish of the same version replaced the one being watched.
 
     A replacing publish declares the version under its own operation, so the
-    version's ``operation_id`` no longer matches the one it carried when the
-    watch started.
+    version's ``operation_id`` no longer matches the watched publish's.
 
     Args:
         version: The version as last read.
-        declared_version: The version the watch started from, as this
-            publish declared it.
+        operation_id: The watched publish's operation id.
 
     Returns:
-        ``True`` if the two versions' ``operation_id`` differ.
+        ``True`` if the version's ``operation_id`` differs from ``operation_id``.
     """
-    return version.operation_id != declared_version.operation_id
+    return version.operation_id != operation_id
 
 
 def compute_watch_end(version: ProviderVersion, watch_started_at: float) -> float:
@@ -867,7 +886,8 @@ class AdmissionWatchError(Exception):
 
 def watch_admission(
     client: PragmaClient,
-    declared_version: DeclaredProviderVersion,
+    start_version: ProviderVersion,
+    operation_id: str,
     watch_started_at: float,
     show_status: Callable[[VersionStatus], object],
 ) -> ProviderVersion:
@@ -880,15 +900,18 @@ def watch_admission(
 
     Args:
         client: Authenticated SDK client.
-        declared_version: The version as this publish declared it, which
+        start_version: The version the watch starts from, as last declared
+            or read.
+        operation_id: The watched publish's operation id, which
             :func:`is_replaced_publish` compares each read against.
-        watch_started_at: ``time.monotonic()`` reading taken when the upload
-            finished, or the declaration when no upload was needed.
+        watch_started_at: ``time.monotonic()`` reading taken when the watch
+            started: the upload finished, the declaration when no upload
+            was needed, or the first read of ``pragma providers wait``.
         show_status: Called with the version's status each time a read
             shows a status different from the previous read, the first read
-            being compared with ``declared_version``; never called for
-            ``declared_version`` itself, nor for a read showing another
-            publish replaced this one.
+            being compared with ``start_version``; never called for
+            ``start_version`` itself, nor for a read showing another
+            publish replaced the watched one.
 
     Returns:
         The version as last read: ``published``, ``failed``, replaced, or
@@ -898,7 +921,7 @@ def watch_admission(
         AdmissionWatchError: If anything fails while polling, carrying the
             latest version read successfully and the failure.
     """
-    version = declared_version
+    version = start_version
 
     try:
         while version.status not in SETTLED_VERSION_STATUSES:
@@ -911,7 +934,7 @@ def watch_admission(
             previous_status = version.status
             version = client.get_provider_version(version.canonical, version.version)
 
-            if is_replaced_publish(version, declared_version):
+            if is_replaced_publish(version, operation_id):
                 break
 
             if version.status != previous_status:
@@ -935,7 +958,7 @@ def print_version_status(status: VersionStatus, label: str) -> None:
 def show_status_change(
     progress: Progress,
     task: TaskID,
-    declared_version: DeclaredProviderVersion,
+    format_label: Callable[[VersionStatus], str],
     status: VersionStatus,
 ) -> None:
     """Show a status the publish watch reached: a ``Status:`` line on stderr and its label beside the spinner.
@@ -943,29 +966,34 @@ def show_status_change(
     Args:
         progress: The spinner the publish watch runs behind.
         task: The spinner's task.
-        declared_version: The version as this publish declared it.
+        format_label: Formats a status's plain-words label.
         status: The version's new status.
     """
-    label = format_watched_status_label(declared_version, status)
+    label = format_label(status)
     print_version_status(status, label)
     progress.update(task, description=format_spinner_description(label))
 
 
 def watch_admission_with_progress(
     client: PragmaClient,
-    declared_version: DeclaredProviderVersion,
+    start_version: ProviderVersion,
+    operation_id: str,
     watch_started_at: float,
+    format_label: Callable[[VersionStatus], str],
 ) -> ProviderVersion:
     """Run :func:`watch_admission` behind a spinner on stderr, printing each status the version reaches.
 
-    The spinner starts at the declared status's label from
-    :func:`format_watched_status_label`.
+    The spinner starts at the label of ``start_version``'s status.
 
     Args:
         client: Authenticated SDK client.
-        declared_version: The version as this publish declared it.
-        watch_started_at: ``time.monotonic()`` reading taken when the upload
-            finished, or the declaration when no upload was needed.
+        start_version: The version the watch starts from.
+        operation_id: The watched publish's operation id.
+        watch_started_at: ``time.monotonic()`` reading taken when the watch
+            started.
+        format_label: Formats a status's plain-words label, such as
+            :func:`format_watched_status_label` bound to the declared
+            version.
 
     Returns:
         The version as :func:`watch_admission` last read it.
@@ -973,32 +1001,32 @@ def watch_admission_with_progress(
     Raises:
         AdmissionWatchError: If polling fails (see :func:`watch_admission`).
     """  # noqa: DOC502
-    starting_label = format_watched_status_label(declared_version, declared_version.status)
+    starting_label = format_label(start_version.status)
 
     with build_spinner_progress() as progress:
         task = progress.add_task(format_spinner_description(starting_label), total=None)
-        show_status = partial(show_status_change, progress, task, declared_version)
-        return watch_admission(client, declared_version, watch_started_at, show_status)
+        show_status = partial(show_status_change, progress, task, format_label)
+        return watch_admission(client, start_version, operation_id, watch_started_at, show_status)
 
 
-def build_publish_document(version: ProviderVersion, declared_version: DeclaredProviderVersion) -> dict[str, Any]:
-    """Build the document ``pragma providers publish -o json|yaml`` prints once the watch ends.
+def build_publish_document(version: ProviderVersion, operation_id: str) -> dict[str, Any]:
+    """Build the document ``pragma providers publish|wait -o json|yaml`` prints once the watch ends.
 
     Args:
         version: The version to report, any :class:`ProviderVersion`, a
             :class:`DeclaredProviderVersion` included; its ``wheel_upload``
             is dropped.
-        declared_version: The version as this publish declared it.
+        operation_id: The watched publish's operation id.
 
     Returns:
-        A dict with ``operation_id``, this publish's own operation id, and
+        A dict with ``operation_id``, the watched publish's operation id, and
         ``version``, the record :func:`build_version_record` builds, as
         ``pragma providers versions -o json`` prints it. Another publish
-        replaced this one when ``version.operation_id`` differs from
+        replaced the watched one when ``version.operation_id`` differs from
         ``operation_id``.
     """
     return {
-        "operation_id": declared_version.operation_id,
+        "operation_id": operation_id,
         "version": build_version_record(version),
     }
 
@@ -1022,22 +1050,22 @@ def format_published_version(version: ProviderVersion) -> str:
 
 def report_unpublished_version(
     version: ProviderVersion,
-    declared_version: DeclaredProviderVersion,
-    republish_command: str,
+    operation_id: str,
+    format_label: Callable[[VersionStatus], str],
 ) -> None:
     """Print why admission did not publish the version, and exit; return when it published.
 
     Args:
         version: The version as the watch last read it.
-        declared_version: The version as this publish declared it.
-        republish_command: Command that keeps waiting for the version, from ``build_republish_command``.
+        operation_id: The watched publish's operation id.
+        format_label: Formats a status's plain-words label.
 
     Raises:
         typer.Exit: With ``FAILURE_EXIT_CODE`` if another publish replaced
             this one or the version failed admission, or with
             ``ADMISSION_UNCONFIRMED_EXIT_CODE`` if it has not settled.
     """
-    if is_replaced_publish(version, declared_version):
+    if is_replaced_publish(version, operation_id):
         report_replaced_publish(version)
 
     match version.status:
@@ -1047,8 +1075,7 @@ def report_unpublished_version(
             error_console.print(f"[red]Error:[/red] {escape(version.error_message or '')}")
             raise typer.Exit(FAILURE_EXIT_CODE)
         case _:
-            status_label = format_watched_status_label(declared_version, version.status)
-            report_unfinished_admission(version, status_label, republish_command)
+            report_unfinished_admission(version, format_label(version.status), operation_id)
 
 
 def report_replaced_publish(version: ProviderVersion) -> NoReturn:
@@ -1086,13 +1113,13 @@ def format_watch_failure_reason(error: Exception) -> str:
     return str(error) or type(error).__name__
 
 
-def report_watch_failure(reason: str, version: ProviderVersion, republish_command: str) -> NoReturn:
+def report_watch_failure(reason: str, version: ProviderVersion, operation_id: str) -> NoReturn:
     """Print why the publish watch stopped reading a version, with how to follow the version, then exit.
 
     Args:
         reason: Why the watch stopped, not escaped for Rich markup.
         version: The version being watched.
-        republish_command: Command that keeps waiting for the version, from ``build_republish_command``.
+        operation_id: The watched publish's operation id.
 
     Raises:
         typer.Exit: Always, with ``ADMISSION_UNCONFIRMED_EXIT_CODE``.
@@ -1102,19 +1129,18 @@ def report_watch_failure(reason: str, version: ProviderVersion, republish_comman
     error_console.print(
         f"Check admission of {canonical} {escape(version.version)} with: pragma providers versions {canonical}"
     )
-    print_keep_waiting_hint(republish_command)
+    print_keep_waiting_hint(version, operation_id)
     raise typer.Exit(ADMISSION_UNCONFIRMED_EXIT_CODE)
 
 
-def report_unfinished_admission(version: ProviderVersion, status_label: str, republish_command: str) -> NoReturn:
+def report_unfinished_admission(version: ProviderVersion, status_label: str, operation_id: str) -> NoReturn:
     """Print that a version has not settled, what it waits on, and how to follow it, then exit.
 
     Args:
         version: The version as the watch last read it, still unsettled.
-        status_label: Plain-words label of the version's status, from
-            :func:`format_watched_status_label`, not escaped for Rich
-            markup.
-        republish_command: Command that keeps waiting for the version, from ``build_republish_command``.
+        status_label: Plain-words label of the version's status, not
+            escaped for Rich markup.
+        operation_id: The watched publish's operation id.
 
     Raises:
         typer.Exit: Always, with ``ADMISSION_UNCONFIRMED_EXIT_CODE``.
@@ -1125,17 +1151,31 @@ def report_unfinished_admission(version: ProviderVersion, status_label: str, rep
         f"{escape(status_label)}. "
         f"Check it with: pragma providers versions {canonical}[/yellow]"
     )
-    print_keep_waiting_hint(republish_command)
+    print_keep_waiting_hint(version, operation_id)
     raise typer.Exit(ADMISSION_UNCONFIRMED_EXIT_CODE)
 
 
-def print_keep_waiting_hint(republish_command: str) -> None:
-    """Print how to keep waiting for admission of the version just published.
+def build_wait_command(version: ProviderVersion, operation_id: str) -> str:
+    """Build the ``pragma providers wait`` command that keeps waiting for a watched publish.
 
     Args:
-        republish_command: Command that keeps waiting for the version, from ``build_republish_command``.
+        version: The watched version.
+        operation_id: The watched publish's operation id.
+
+    Returns:
+        The command, quoted for a POSIX shell.
     """
-    error_console.print(f"To keep waiting, run: {escape(republish_command)}", soft_wrap=True)
+    return shlex.join(["pragma", "providers", "wait", version.canonical, version.version, "--operation", operation_id])
+
+
+def print_keep_waiting_hint(version: ProviderVersion, operation_id: str) -> None:
+    """Print the command that keeps waiting for admission of a watched publish.
+
+    Args:
+        version: The watched version.
+        operation_id: The watched publish's operation id.
+    """
+    error_console.print(f"To keep waiting, run: {escape(build_wait_command(version, operation_id))}", soft_wrap=True)
 
 
 def build_republish_command(wheel_path: Path, changelog: Path | None) -> str:
@@ -1217,9 +1257,8 @@ def publish(
 
     Exit code 3: the wheel was uploaded, or was already received, but
     admission is not confirmed: the watch ended with the version still
-    unsettled, or could not read the version. Publishing the same wheel
-    again with '--wheel', and the same '--changelog' if one was given, from
-    the same environment, keeps waiting for it.
+    unsettled, or could not read the version. The command prints a
+    'pragma providers wait' command that keeps waiting for it.
 
     With '-o json' or '-o yaml', once the watch ends, stdout carries one
     document and nothing else: 'operation_id', this publish's own
@@ -1260,20 +1299,50 @@ def publish(
     republish_command = build_republish_command(wheel_path, changelog)
 
     declared_version = publish_wheel(client, wheel_path, changelog_text, republish_command)
-    watch_started_at = time.monotonic()
+    format_label = partial(format_watched_status_label, declared_version)
+    report_admission_watch(client, declared_version, declared_version.operation_id, format_label, output)
 
+
+def report_admission_watch(
+    client: PragmaClient,
+    start_version: ProviderVersion,
+    operation_id: str,
+    format_label: Callable[[VersionStatus], str],
+    output: OutputFormat,
+) -> None:
+    """Watch a publish's admission from now, print its document and its outcome, and exit unless it published.
+
+    A version that already settled is reported without waiting.
+
+    Args:
+        client: Authenticated SDK client.
+        start_version: The version the watch starts from.
+        operation_id: The watched publish's operation id.
+        format_label: Formats a status's plain-words label.
+        output: Output format of the document printed once the watch ends.
+
+    Raises:
+        typer.Exit: With ``FAILURE_EXIT_CODE`` when admission failed or
+            another publish replaced the watched one, and with
+            ``ADMISSION_UNCONFIRMED_EXIT_CODE`` when admission is not
+            confirmed (see :func:`report_unpublished_version` and
+            :func:`report_watch_failure`).
+    """  # noqa: DOC502
+    watch_started_at = time.monotonic()
     try:
-        last_read_version = watch_admission_with_progress(client, declared_version, watch_started_at)
+        last_read_version = watch_admission_with_progress(
+            client, start_version, operation_id, watch_started_at, format_label
+        )
     except AdmissionWatchError as e:
         reason = format_watch_failure_reason(e.error)
         try:
-            output_data(build_publish_document(e.version, declared_version), output)
+            output_data(build_publish_document(e.version, operation_id), output)
         finally:
-            report_watch_failure(reason, e.version, republish_command)
+            report_watch_failure(reason, e.version, operation_id)
 
-    output_data(build_publish_document(last_read_version, declared_version), output)
+    output_data(build_publish_document(last_read_version, operation_id), output)
 
-    report_unpublished_version(last_read_version, declared_version, republish_command)
+    report_unpublished_version(last_read_version, operation_id, format_label)
 
     published_console = console if output == OutputFormat.TABLE else error_console
     published_console.print(format_published_version(last_read_version))
