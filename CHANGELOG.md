@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.4.0 (2026-11-08)
+
+### Feat
+
+- print each reached resource's state on teardown impact lines (PRA-861)
+
 ## v17.3.0 (2026-11-08)
 
 ### Feat
