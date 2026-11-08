@@ -175,7 +175,7 @@ def report_not_found(error: httpx.HTTPStatusError, not_found_message: str) -> No
     Args:
         error: The HTTP status error the request raised.
         not_found_message: What a 404 means for this request, such as
-            ``Provider 'acme/x' not found in the store.``, printed with Rich
+            ``Provider 'acme/x' not found in the catalog.``, printed with Rich
             markup escaped.
 
     Raises:

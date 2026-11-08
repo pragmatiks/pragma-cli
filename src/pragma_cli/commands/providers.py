@@ -499,7 +499,7 @@ def fetch_install_preview(client: PragmaClient, name: str, version: str | None) 
         )
         return name, provider_version.version
     except httpx.HTTPStatusError as e:
-        report_not_found(e, f"Version {version} of '{name}' not found in the store.")
+        report_not_found(e, f"Version {version} of '{name}' not found in the catalog.")
 
 
 def fetch_catalog_provider(client: PragmaClient, name: str) -> ProviderModel | None:
@@ -537,7 +537,7 @@ def require_readable_versions(client: PragmaClient, name: str) -> None:
     try:
         fetch_with_spinner(f"Fetching versions of '{name}'...", lambda: client.list_provider_versions(name))
     except httpx.HTTPStatusError as e:
-        report_not_found(e, f"Provider '{name}' not found in the store.")
+        report_not_found(e, f"Provider '{name}' not found in the catalog.")
 
 
 def fetch_install_again_version(client: PragmaClient, name: str) -> str | None:
@@ -548,7 +548,7 @@ def fetch_install_again_version(client: PragmaClient, name: str) -> str | None:
         name: Provider name (``org/name``).
 
     Returns:
-        The stored version (``operation_version``) of the caller's ``failed``
+        The version stored (``operation_version``) on the caller's ``failed``
         installation of ``name``, or ``None`` when it has none.
 
     Raises:
@@ -596,7 +596,7 @@ def install(
         typer.Option("--yes", "-y", help="Skip confirmation prompt"),
     ] = False,
 ):
-    """Install a provider from the store.
+    """Install a provider from the catalog.
 
     Queues the operation and returns. Follow it with: pragma providers history NAME.
 
@@ -828,7 +828,7 @@ def list_providers(
     ] = 0,
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
 ):
-    """List providers in the store or installed providers.
+    """List providers in the catalog or installed providers.
 
     Combines browsing and searching into a single command. Use --installed
     to show only installed providers, or --query to search the catalog.
@@ -870,7 +870,7 @@ def list_providers(
             console.print("[dim]No providers found.[/dim]")
         return
 
-    _print_store_list_table(result)
+    _print_catalog_list_table(result)
 
 
 def _list_installations(client: PragmaClient, output: OutputFormat) -> None:
@@ -929,7 +929,7 @@ def info(
             lambda: client.get_provider(name),
         )
     except httpx.HTTPStatusError as e:
-        report_not_found(e, f"Provider '{name}' not found in the store.")
+        report_not_found(e, f"Provider '{name}' not found in the catalog.")
 
     try:
         versions = fetch_with_spinner(
@@ -960,7 +960,7 @@ def versions(
     the wheel" to "publishing to the registry"; a failed version shows why
     it failed. Versions that are not published are visible only to the
     organization that published them. The Wheel SHA-256 column is the
-    digest of the stored wheel, renamed to the organization's distribution
+    digest of the wheel as stored, renamed to the organization's distribution
     name, not of the file you built.
 
     Examples:
@@ -975,7 +975,7 @@ def versions(
             lambda: client.list_provider_versions(name),
         )
     except httpx.HTTPStatusError as e:
-        report_not_found(e, f"Provider '{name}' not found in the store.")
+        report_not_found(e, f"Provider '{name}' not found in the catalog.")
 
     if output != OutputFormat.TABLE:
         data = [build_version_record(provider_version) for provider_version in provider_versions]
@@ -1069,11 +1069,11 @@ def delete(
     console.print(f"[green]✓[/green] Provider [bold]{escape(name)}[/bold] deleted successfully")
 
 
-def _print_store_list_table(result) -> None:
-    """Print store providers in a formatted table.
+def _print_catalog_list_table(result) -> None:
+    """Print catalog providers in a formatted table.
 
     Args:
-        result: Paginated response of store provider summaries.
+        result: Paginated response of catalog provider summaries.
     """
     table = Table(show_header=True, header_style="bold")
     table.add_column("Name")
@@ -1395,10 +1395,10 @@ def _author_to_dict(author) -> dict | None:
 
 
 def _provider_summary_to_dict(provider) -> dict:
-    """Convert a store provider summary to a plain dict for JSON/YAML output.
+    """Convert a catalog provider summary to a plain dict for JSON/YAML output.
 
     Args:
-        provider: Store provider summary object.
+        provider: Catalog provider summary object.
 
     Returns:
         Dictionary representation.
