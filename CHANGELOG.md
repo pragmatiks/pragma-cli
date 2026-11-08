@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.4.1 (2026-11-08)
+
+### Refactor
+
+- validate resource IDs without a dropped parse result (PRA-733)
+
 ## v17.4.0 (2026-11-08)
 
 ### Feat
