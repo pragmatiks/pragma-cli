@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.5.0 (2026-11-08)
+
+### Feat
+
+- add organizations members leave and document organizations me and status
+
 ## v17.4.3 (2026-11-08)
 
 ### Fix
