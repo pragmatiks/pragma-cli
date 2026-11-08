@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
+from pragma_sdk import PragmaClient
 from pragma_sdk.models.api import MemberRole, Organization, OrganizationMember
 from rich.console import Console
 from rich.markup import escape
@@ -29,6 +30,10 @@ app.add_typer(members_app, name="members")
 
 console = Console()
 
+LEFT_ORGANIZATION_MESSAGE = (
+    "[green]✓[/green] You left the organization. Run pragma auth login to choose another organization."
+)
+"""Success line printed after the caller's own membership is deleted."""
 
 _STATUS_COLORS: dict[str, str] = {
     "active": "green",
@@ -197,6 +202,35 @@ def update_member(
     console.print(f"[green]✓[/green] Updated {escape(member.user_id)}: {member.role.value}")
 
 
+def delete_membership(client: PragmaClient, user_id: str, caller_user_id: str, prompt: str, yes: bool) -> None:
+    """Confirm, then delete a membership and print the outcome.
+
+    Shared by ``members delete`` and ``members leave``: deleting the caller's own membership prints
+    the left-organization message, any other the deleted-membership line.
+
+    Args:
+        client: Authenticated API client.
+        user_id: User ID of the member whose membership is deleted.
+        caller_user_id: User ID of the signed-in caller.
+        prompt: Confirmation question asked unless ``yes``.
+        yes: Skip the confirmation prompt.
+
+    Raises:
+        typer.Exit: When the confirmation is declined.
+    """
+    if not yes and not typer.confirm(prompt):
+        error_console.print("[dim]Cancelled.[/dim]")
+        raise typer.Exit()
+
+    fetch_with_spinner("Deleting membership...", lambda: client.delete_organization_member(user_id))
+
+    if user_id == caller_user_id:
+        console.print(LEFT_ORGANIZATION_MESSAGE)
+        return
+
+    console.print(f"[green]✓[/green] Deleted the membership of {escape(user_id)}.")
+
+
 @members_app.command("delete")
 def delete_member(
     user_id: Annotated[str, typer.Argument(help="User ID of the member")],
@@ -204,7 +238,8 @@ def delete_member(
 ) -> None:
     """Delete a member's membership. Deleting your own membership leaves the organization.
 
-    Run ``pragma auth whoami`` to see your own user ID.
+    Run ``pragma auth whoami`` to see your own user ID, or ``pragma organizations members leave``
+    to leave without it.
 
     Examples:
         pragma organizations members delete user_123
@@ -215,25 +250,33 @@ def delete_member(
     Args:
         user_id: User ID of the member whose membership is deleted.
         yes: Skip the confirmation prompt.
-
-    Raises:
-        typer.Exit: When the confirmation is declined.
     """
     client = get_client()
     require_auth(client)
 
     caller_user_id = fetch_with_spinner("Fetching your account...", client.get_me).user_id
 
-    if not yes and not typer.confirm(f"Delete the membership of {user_id}?"):
-        error_console.print("[dim]Cancelled.[/dim]")
-        raise typer.Exit()
+    delete_membership(client, user_id, caller_user_id, f"Delete the membership of {user_id}?", yes)
 
-    fetch_with_spinner("Deleting membership...", lambda: client.delete_organization_member(user_id))
 
-    if user_id == caller_user_id:
-        console.print(
-            "[green]✓[/green] You left the organization. Run pragma auth login to choose another organization."
-        )
-        return
+@members_app.command("leave")
+def leave_organization(
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")] = False,
+) -> None:
+    """Leave the organization by deleting your own membership.
 
-    console.print(f"[green]✓[/green] Deleted the membership of {escape(user_id)}.")
+    Examples:
+        pragma organizations members leave
+        pragma organizations members leave --yes
+
+    \f
+
+    Args:
+        yes: Skip the confirmation prompt.
+    """
+    client = get_client()
+    require_auth(client)
+
+    user_id = fetch_with_spinner("Fetching your account...", client.get_me).user_id
+
+    delete_membership(client, user_id, user_id, "Leave the organization?", yes)
