@@ -45,14 +45,11 @@ def output_data(
         print(yaml.dump(data, default_flow_style=False, sort_keys=False))
 
 
-def parse_resource_id(resource_id: str) -> tuple[str, str, str]:
-    """Parse resource identifier into provider, resource type, and name.
+def validate_resource_id_segments(resource_id: str) -> None:
+    """Check a resource identifier has the 'org/provider/resource/name' shape.
 
     Args:
-        resource_id: Resource identifier in format 'org/provider/resource/name'.
-
-    Returns:
-        Tuple of (provider, resource, name) where provider is 'org/provider'.
+        resource_id: Resource identifier to check.
 
     Raises:
         ValueError: If resource_id does not have exactly 4 non-empty segments.
@@ -62,6 +59,19 @@ def parse_resource_id(resource_id: str) -> tuple[str, str, str]:
     if len(parts) != 4 or not all(parts):
         raise ValueError(f"Invalid resource ID: {resource_id}. Expected 'org/provider/resource/name'.")
 
+
+def parse_resource_id(resource_id: str) -> tuple[str, str, str]:
+    """Parse resource identifier into provider, resource type, and name.
+
+    Args:
+        resource_id: Resource identifier in format 'org/provider/resource/name'.
+
+    Returns:
+        Tuple of (provider, resource, name) where provider is 'org/provider'.
+        The ID is checked with ``validate_resource_id_segments`` first.
+    """
+    validate_resource_id_segments(resource_id)
+    parts = resource_id.split("/")
     provider = f"{parts[0]}/{parts[1]}"
     resource = parts[2]
     name = parts[3]

@@ -25,7 +25,13 @@ from pragma_cli import get_client
 from pragma_cli.commands.completions import completion_resource_ids
 from pragma_cli.errors import check_bootstrap_error, error_console, format_request_failure, print_api_error
 from pragma_cli.exit_codes import FAILURE_EXIT_CODE, INPUT_ERROR_EXIT_CODE, compute_http_exit_code
-from pragma_cli.helpers import OutputFormat, format_optional_value, output_data, parse_resource_id
+from pragma_cli.helpers import (
+    OutputFormat,
+    format_optional_value,
+    output_data,
+    parse_resource_id,
+    validate_resource_id_segments,
+)
 from pragma_cli.project_context import print_project_override_notice, resolve_project
 from pragma_cli.teardown import DEFAULT_WAIT_TIMEOUT_SECONDS, TeardownOptions, print_impact, watch_teardown
 
@@ -250,7 +256,7 @@ def validate_resource_id(context: typer.Context, resource_id: str | None) -> str
             optional and was not given.
 
     Returns:
-        The resource ID unchanged.
+        The resource ID unchanged, or ``None`` when it was not given.
 
     Raises:
         typer.BadParameter: Exiting with ``INPUT_ERROR_EXIT_CODE``, if the
@@ -260,9 +266,9 @@ def validate_resource_id(context: typer.Context, resource_id: str | None) -> str
         return resource_id
 
     try:
-        parse_resource_id(resource_id)
-    except ValueError as e:
-        raise typer.BadParameter(f"must be 'org/provider/resource/name', got '{resource_id}'.") from e
+        validate_resource_id_segments(resource_id)
+    except ValueError as error:
+        raise typer.BadParameter(f"must be 'org/provider/resource/name', got '{resource_id}'.") from error
 
     return resource_id
 
