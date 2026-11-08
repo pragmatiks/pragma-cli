@@ -66,7 +66,10 @@ becomes available; broken plugins log a warning and are skipped, so the host nev
 | Public | PyPI | none |
 | Private | `[tool.uv.sources] my-plugin = { git = "...", tag = "v..." }` | git credentials |
 
-For a public plugin like `pragmatiks-lint`, consumers install via `uv add pragmatiks-lint`.
+For a public plugin like `pragmatiks-lint`, consumers install via `uv add pragmatiks-lint[check]`.
+`pragmatiks-cli` itself never depends on a plugin: `pragma lint` and its semgrep install reach only
+repositories that declare `pragmatiks-lint[check]` (this repository's `dev` group, the hub's dependencies),
+not the end-user `pragma` install.
 For an internal plugin (e.g. future `pragmatiks-console`), consumers declare a git source
 in their pyproject.toml. No central index is required; auth piggybacks on existing GitHub
 SSH/HTTPS credentials.
