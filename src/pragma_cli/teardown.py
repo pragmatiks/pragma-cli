@@ -40,6 +40,9 @@ class TeardownOptions:
 def print_impact(impact: list[TeardownImpact]) -> None:
     """Print one indented line per resource the teardown reaches.
 
+    Each line names the resource, the state it is in before the teardown and
+    what the teardown does to it: ``  <id> (<state>) — <action>``.
+
     Args:
         impact: Impact rows returned by a deactivate or delete call.
     """
@@ -48,7 +51,7 @@ def print_impact(impact: list[TeardownImpact]) -> None:
 
     console.print("Resources this reaches:")
     for row in impact:
-        console.print(f"  {row.id} — {ACTION_WORDING[row.action]}")
+        console.print(f"  {row.id} ({row.lifecycle_state.value}) — {ACTION_WORDING[row.action]}")
 
 
 def watch_teardown(
