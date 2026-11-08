@@ -1,5 +1,15 @@
 # Changelog
 
+## v17.7.0 (2026-11-08)
+
+### Feat
+
+- show whether each resource schema is serving (PRA-908)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v27.5.0 (#161)
+
 ## v17.6.1 (2026-11-08)
 
 ### Fix
