@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.6.0 (2026-11-08)
+
+### Feat
+
+- describe shows the resource that owns a resource (PRA-898)
+
 ## v17.5.1 (2026-11-08)
 
 ### Fix
