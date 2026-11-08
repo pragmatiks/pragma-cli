@@ -291,7 +291,7 @@ def token():
     \f
 
     Raises:
-        typer.Exit: If no token is stored or the stored token is expired.
+        typer.Exit: If no token is stored or it is expired.
     """  # noqa: DOC502
     client = get_client()
     current_token = extract_client_token(client)
