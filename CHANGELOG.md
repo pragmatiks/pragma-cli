@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.8.1 (2026-11-12)
+
+### Fix
+
+- **resources**: upload apply files into the applied project (PRA-593)
+
 ## v17.8.0 (2026-11-12)
 
 ### Feat
