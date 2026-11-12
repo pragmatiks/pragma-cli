@@ -1,5 +1,15 @@
 # Changelog
 
+## v17.9.0 (2026-11-12)
+
+### Feat
+
+- add pragma resources vitals (PRA-855)
+
+### Refactor
+
+- name the vitals color and the printed vitals apart from the command (PRA-855)
+
 ## v17.8.1 (2026-11-12)
 
 ### Fix

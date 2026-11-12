@@ -725,7 +725,7 @@ wheels = [
 
 [[package]]
 name = "pragmatiks-cli"
-version = "17.8.1"
+version = "17.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
