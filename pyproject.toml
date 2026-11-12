@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "click>=8.1.8",
     "typer>=0.15.3",
-    "pragmatiks-sdk>=28.0.0,<29",
+    "pragmatiks-sdk>=29.1.0,<30",
     "pyyaml>=6.0.3",
     "copier>=9.0.0",
     "rich>=13.9.0",
