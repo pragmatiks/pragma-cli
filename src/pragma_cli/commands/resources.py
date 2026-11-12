@@ -21,6 +21,8 @@ from pragma_sdk import (
     ResourceFailedError,
     ResourceHistoryEvent,
     TeardownImpact,
+    Vitals,
+    VitalsStatus,
 )
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rich import print
@@ -72,6 +74,12 @@ HEALTH_COLORS = {
     "degraded": "yellow",
     "blocked": "yellow",
     "failed": "red",
+}
+
+VITALS_COLORS: dict[VitalsStatus, str] = {
+    "nominal": "green",
+    "impaired": "yellow",
+    "down": "red",
 }
 
 
@@ -1194,6 +1202,80 @@ def history(
         return
 
     print_resource_history_table(events)
+
+
+def format_vitals_status(status: VitalsStatus) -> str:
+    """Format a vitals status with color markup.
+
+    Args:
+        status: Status the provider reported.
+
+    Returns:
+        The status wrapped in its color: green for ``nominal``, yellow for
+        ``impaired``, red for ``down``.
+    """
+    return f"[{VITALS_COLORS[status]}]{status}[/{VITALS_COLORS[status]}]"
+
+
+def print_vitals(vitals: Vitals) -> None:
+    """Print a resource's vitals: a Status and Message table, then its details.
+
+    Args:
+        vitals: Vitals the provider reported.
+    """
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Property")
+    table.add_column("Value")
+    table.add_row("Status", format_vitals_status(vitals.status))
+    table.add_row("Message", format_optional_value(vitals.message))
+    console.print(table)
+
+    if not vitals.details:
+        return
+
+    console.print()
+    console.print("[bold]Details:[/bold]")
+    for key, value in vitals.details.items():
+        console.print(f"  {escape(key)}: {escape(str(value))}")
+
+
+@app.command()
+def vitals(
+    ctx: typer.Context,
+    resource_id: ResourceIdArgument[str],
+    output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
+):
+    """Show the vitals a resource's provider reports for it.
+
+    The provider reads them live from the object the resource manages:
+    ``nominal`` when it works as configured, ``impaired`` when it works with
+    reduced capacity, ``down`` when it does not work, with a message and
+    provider-specific details. Any status is a successful read.
+
+    Examples:
+        pragma resources vitals acme/gcp/secret/db-pass
+        pragma resources vitals acme/gcp/secret/db-pass -o json
+
+    \f
+
+    Raises:
+        httpx.HTTPStatusError: If the API refuses the read: 404 for a missing
+            resource, 409 for one not applied yet, 502 when the provider is
+            unavailable or cannot report, 504 when it does not report in time.
+    """  # noqa: DOC502
+    project = _project_client(ctx)
+    provider, resource, name = parse_resource_id(resource_id)
+
+    resource_vitals = fetch_with_spinner(
+        "Fetching vitals...",
+        lambda: project.get_resource_vitals(provider=provider, resource=resource, name=name),
+    )
+
+    if output != OutputFormat.TABLE:
+        output_data(resource_vitals.model_dump(mode="json"), output)
+        return
+
+    print_vitals(resource_vitals)
 
 
 def _plan_apply_batch(
