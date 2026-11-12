@@ -1432,7 +1432,7 @@ def _execute_plan(plan: _ApplyPlan, project_id: str) -> None:
             continue
 
         try:
-            client.upload_file(upload.name, upload.content, upload.content_type)
+            project.upload_file(upload.name, upload.content, upload.content_type)
         except (httpx.HTTPError, ProjectMismatchError) as e:
             heading = f"Error uploading file for {planned.resource_id}"
             report_apply_failure(e, heading, plan, applied, uploaded, failed_resource_id=planned.resource_id)
