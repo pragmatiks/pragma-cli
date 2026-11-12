@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.10.0 (2026-11-12)
+
+### Feat
+
+- **resources**: filter the resource list by health (PRA-860)
+
 ## v17.9.0 (2026-11-12)
 
 ### Feat
