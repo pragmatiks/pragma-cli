@@ -15,6 +15,7 @@ import jsonschema
 import typer
 import yaml
 from pragma_sdk import (
+    HealthStatus,
     LifecycleState,
     ProjectMismatchError,
     ProjectResources,
@@ -713,6 +714,7 @@ def list_resources(
     provider: Annotated[str | None, typer.Option("--provider", "-p", help="Filter by provider")] = None,
     resource: Annotated[str | None, typer.Option("--resource", "-r", help="Filter by resource type")] = None,
     tags: Annotated[list[str] | None, typer.Option("--tag", help="Filter by tags")] = None,
+    health: Annotated[HealthStatus | None, typer.Option("--health", help="Filter by health")] = None,
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
 ):
     """List resources in the active project.
@@ -720,16 +722,17 @@ def list_resources(
     Requires a project context. Precedence: ``--project`` flag,
     ``PRAGMA_PROJECT`` env var, then the persistent default set via
     ``pragma projects use <project-id>``. Results can be filtered by
-    provider, resource type, or tags.
+    provider, resource type, tags, or health.
 
     Examples:
         pragma resources list
         pragma --project my-app resources list
         pragma resources list --provider gcp
+        pragma resources list --health failed
         pragma resources list -o json
     """
     project = _project_client(ctx)
-    resources = project.list_resources(provider=provider, resource=resource, tags=tags)
+    resources = project.list_resources(provider=provider, resource=resource, tags=tags, health=health)
     print_resource_list(resources, output)
 
 
