@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.8.0 (2026-11-12)
+
+### Feat
+
+- add pragma resources history (PRA-859)
+
 ## v17.7.3 (2026-11-12)
 
 ### Fix
