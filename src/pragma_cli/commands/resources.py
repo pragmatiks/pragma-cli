@@ -1214,28 +1214,29 @@ def format_vitals_status(status: VitalsStatus) -> str:
         The status wrapped in its color: green for ``nominal``, yellow for
         ``impaired``, red for ``down``.
     """
-    return f"[{VITALS_COLORS[status]}]{status}[/{VITALS_COLORS[status]}]"
+    color = VITALS_COLORS[status]
+    return f"[{color}]{status}[/{color}]"
 
 
-def print_vitals(vitals: Vitals) -> None:
+def print_vitals(resource_vitals: Vitals) -> None:
     """Print a resource's vitals: a Status and Message table, then its details.
 
     Args:
-        vitals: Vitals the provider reported.
+        resource_vitals: Vitals the provider reported.
     """
     table = Table(show_header=True, header_style="bold")
     table.add_column("Property")
     table.add_column("Value")
-    table.add_row("Status", format_vitals_status(vitals.status))
-    table.add_row("Message", format_optional_value(vitals.message))
+    table.add_row("Status", format_vitals_status(resource_vitals.status))
+    table.add_row("Message", format_optional_value(resource_vitals.message))
     console.print(table)
 
-    if not vitals.details:
+    if not resource_vitals.details:
         return
 
     console.print()
     console.print("[bold]Details:[/bold]")
-    for key, value in vitals.details.items():
+    for key, value in resource_vitals.details.items():
         console.print(f"  {escape(key)}: {escape(str(value))}")
 
 
