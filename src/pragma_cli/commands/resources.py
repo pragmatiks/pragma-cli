@@ -14,7 +14,14 @@ import httpx
 import jsonschema
 import typer
 import yaml
-from pragma_sdk import LifecycleState, ProjectMismatchError, ProjectResources, ResourceFailedError, TeardownImpact
+from pragma_sdk import (
+    LifecycleState,
+    ProjectMismatchError,
+    ProjectResources,
+    ResourceFailedError,
+    ResourceHistoryEvent,
+    TeardownImpact,
+)
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rich import print
 from rich.console import Console
@@ -23,6 +30,7 @@ from rich.table import Table
 
 from pragma_cli import get_client
 from pragma_cli.commands.completions import completion_resource_ids
+from pragma_cli.commands.provider_output import fetch_with_spinner
 from pragma_cli.errors import check_bootstrap_error, error_console, format_request_failure, print_api_error
 from pragma_cli.exit_codes import FAILURE_EXIT_CODE, INPUT_ERROR_EXIT_CODE, compute_http_exit_code
 from pragma_cli.helpers import (
@@ -1102,6 +1110,90 @@ def describe(
 
     fetched_resource = project.get_resource(provider=provider, resource=resource, name=name, reveal=reveal)
     output_data(fetched_resource, output, table_renderer=_print_resource_details)
+
+
+def format_resource_history_transition(event: ResourceHistoryEvent) -> str:
+    """Format a history entry's transition as raw lifecycle states.
+
+    Args:
+        event: One history entry.
+
+    Returns:
+        ``<from> -> <to>``, or the entered state alone when the entry has no
+        previous state, with Rich markup escaped.
+    """
+    if event.from_state is None:
+        return escape(event.to_state.value)
+
+    return escape(f"{event.from_state.value} -> {event.to_state.value}")
+
+
+def print_resource_history_table(events: list[ResourceHistoryEvent]) -> None:
+    """Print a resource's history in a table, in the order given.
+
+    Args:
+        events: History entries, newest first.
+    """
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Time")
+    table.add_column("Transition")
+    table.add_column("Operation")
+    table.add_column("Version")
+    table.add_column("Message")
+
+    for event in events:
+        table.add_row(
+            event.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            format_resource_history_transition(event),
+            escape(event.event_type),
+            format_optional_value(event.provider_version),
+            format_optional_value(event.error),
+        )
+
+    console.print(table)
+
+
+@app.command()
+def history(
+    ctx: typer.Context,
+    resource_id: ResourceIdArgument[str],
+    output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
+):
+    """Show the history of a resource, newest first.
+
+    Lists each transition: when, the states it moved between, the recorded
+    event, the provider version that ran it, and its failure message. Kept
+    for 30 days, also after the resource is deleted; a resource deleted and
+    recreated under the same ID shows every lifetime. An ID that never
+    existed shows no history.
+
+    Examples:
+        pragma resources history acme/gcp/secret/db-pass
+        pragma resources history acme/gcp/secret/db-pass -o json
+
+    \f
+
+    Raises:
+        httpx.HTTPStatusError: If the API refuses the read, a 404 for an
+            unknown project included.
+    """  # noqa: DOC502
+    project = _project_client(ctx)
+    provider, resource, name = parse_resource_id(resource_id)
+
+    events = fetch_with_spinner(
+        "Fetching history...",
+        lambda: project.list_resource_history(provider=provider, resource=resource, name=name),
+    )
+
+    if output != OutputFormat.TABLE:
+        output_data([event.model_dump(mode="json") for event in events], output)
+        return
+
+    if not events:
+        console.print("[dim]No history found.[/dim]")
+        return
+
+    print_resource_history_table(events)
 
 
 def _plan_apply_batch(
