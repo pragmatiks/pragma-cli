@@ -13,7 +13,7 @@ description = "Write the gitignored .miserc.toml that keeps mise in .claude/work
 file = "scripts/tasks/install_mise_ceiling.sh"
 
 ["install:hooks"]
-description = "Install the pre-commit and commit-msg git hooks into the shared hooks directory"
+description = "Install the git hooks, which run pre-commit through mise, into the shared hooks directory"
 file = "scripts/tasks/install_hooks.sh"
 
 ["lock:toolchain"]
