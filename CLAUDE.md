@@ -2,7 +2,7 @@
 
 ## Project
 
-**pragma-cli**: Command-line interface for Pragmatiks. Provides `pragma` command for managing resources, providers, and workflows.
+**pragma-cli**: Command-line interface for Pragmatiks. Provides `pragma` command for managing resources, providers, projects, organizations and accounts.
 
 ## Shared rules
 
@@ -15,16 +15,18 @@ pragma-cli/
 └── src/pragma_cli/
     ├── main.py            # Typer app entry point
     ├── commands/          # Command modules
-    └── utils/             # Helpers (output, config)
+    └── *.py               # Shared helpers: config, credentials, errors, exit codes, plugins, project context, teardown
 ```
 
 ## Dependencies
 
 - `typer` - CLI framework
+- `click` - Typer's underlying framework, used directly for custom groups and usage errors
 - `pragmatiks-sdk` - API client
 - `rich` - Terminal formatting
 - `copier` - Project scaffolding
 - `pyyaml` - YAML parsing
+- `jsonschema` - Validating resource config against provider schemas
 
 This is a CLI end users install: a new top-level dependency adds directly to their install footprint.
 
@@ -80,7 +82,7 @@ Always use mise tasks (`mise tasks` lists them all):
 
 | Command | Purpose |
 |---------|---------|
-| `mise run install` | Install the locked mise toolchain, the locked environment into `.venv`, and the pre-commit and commit-msg hooks |
+| `mise run install` | Write the `.miserc.toml` mise ceiling, install the locked mise toolchain, the locked environment into `.venv`, and the pre-commit and commit-msg hooks |
 | `mise run format` | Format with ruff |
 | `mise run check` | Lint + type check against `.venv`, whatever `VIRTUAL_ENV` the shell carries |
 | `mise run lock:toolchain` | Regenerate `mise.lock` and `.mise/locks/` for macOS arm64 and Linux x64 without bumping a tool; runs only on those hosts and only with mise at the `min_version` in `mise.toml` |
