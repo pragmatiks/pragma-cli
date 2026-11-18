@@ -11,60 +11,27 @@ import click
 import httpx
 import jsonschema
 import typer
-from pragma_sdk import InvalidResourceIdentityError, PragmaClient, ProjectMismatchError
+from pragma_sdk import InvalidResourceIdentityError, ProjectMismatchError
 from pydantic import ValidationError
 from typer.core import TyperGroup
 
 from pragma_cli import set_client_factory
-from pragma_cli.commands import accounts, auth, config, organizations, projects, providers, resources
+from pragma_cli.clients import build_client
+from pragma_cli.commands import accounts, api_keys, auth, config, organizations, projects, providers, resources
 from pragma_cli.config import (
     MalformedConfigError,
-    PragmaConfig,
     UnknownContextError,
-    is_valid_api_url,
     load_config,
-    select_context,
 )
 from pragma_cli.errors import (
     report_api_error,
     report_input_error,
-    report_invalid_api_url,
     report_os_error,
     report_request_error,
     report_unreadable_response,
 )
 from pragma_cli.exit_codes import EXIT_CODES_HELP
 from pragma_cli.plugins import load_plugins
-
-
-def build_client(config: PragmaConfig, context_name: str, token: str | None) -> PragmaClient:
-    """Build the SDK client for a context.
-
-    Args:
-        config: Loaded configuration.
-        context_name: Context whose API URL the client calls.
-        token: Bearer token overriding the context's stored credentials, or
-            ``None`` to use them.
-
-    Returns:
-        A PragmaClient for the context's API URL, authenticated with
-        ``token`` when given, else with the context's stored credentials if
-        any.
-
-    Raises:
-        UnknownContextError: If the context is not in the configuration.
-        typer.Exit: With ``INPUT_ERROR_EXIT_CODE`` if the context's API URL
-            is not an ``http://`` or ``https://`` URL with a host.
-    """  # noqa: DOC502
-    context_config = select_context(config, context_name)
-
-    if not is_valid_api_url(context_config.api_url):
-        report_invalid_api_url(context_name, context_config.api_url)
-
-    if token:
-        return PragmaClient(base_url=context_config.api_url, auth_token=token)
-
-    return PragmaClient(base_url=context_config.api_url, context=context_name, require_auth=False)
 
 
 class ErrorHandlingGroup(TyperGroup):
@@ -193,6 +160,7 @@ def main(
 app.add_typer(resources.app, name="resources")
 app.add_typer(auth.app, name="auth")
 app.add_typer(accounts.app, name="accounts")
+app.add_typer(api_keys.app, name="api-keys")
 app.add_typer(config.app, name="config")
 app.add_typer(organizations.app, name="organizations")
 app.add_typer(providers.app, name="providers")
