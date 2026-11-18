@@ -28,7 +28,7 @@ mise is the only toolchain source, on the Mac, in Linux cloud sessions and in CI
 
 ## Local SDK checkout
 
-To work against an unreleased pragma-sdk, set an absolute `PRAGMA_SDK_DIRECTORY` in the worktree's own gitignored `mise.local.toml` and run `mise trust` once:
+To work against an unreleased pragma-sdk, set an absolute `PRAGMA_SDK_DIRECTORY` in the checkout's own gitignored `mise.local.toml` and run `mise trust` once:
 
 ```toml
 [env]
@@ -39,7 +39,6 @@ PRAGMA_SDK_DIRECTORY = "/absolute/path/to/pragma-sdk"
 - Run the CLI against it with `uv run --with-editable "$PRAGMA_SDK_DIRECTORY" pragma …`.
 - `pyproject.toml` and `uv.lock` never change; never `uv add --editable` a sibling checkout.
 - Code that uses names only in an unreleased SDK passes `mise run check` with the variable set, but the pre-commit ty hook rejects it until that SDK is released, because committed code must work against the registry SDK.
-- Never set it in the main checkout's `mise.local.toml`: mise loads parent directories' config into every worktree under `.claude/worktrees`.
 
 ## Patterns
 
