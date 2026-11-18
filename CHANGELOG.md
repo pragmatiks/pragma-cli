@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.11.0 (2026-11-18)
+
+### Feat
+
+- add api-keys commands and auth login --with-token (PRA-983)
+
 ## v17.10.2 (2026-11-18)
 
 ### Fix
