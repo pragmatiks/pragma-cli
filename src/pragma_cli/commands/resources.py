@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import sys
+from collections.abc import Generator
+from contextlib import closing
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, NoReturn, TypeVar, cast
 
@@ -17,6 +21,11 @@ import yaml
 from pragma_sdk import (
     HealthStatus,
     LifecycleState,
+    LogEntry,
+    LogFollowEnd,
+    LogFollowError,
+    LogFollowEvent,
+    LogFollowInterruptedError,
     ProjectMismatchError,
     ProjectResources,
     ResourceFailedError,
@@ -35,7 +44,12 @@ from pragma_cli import get_client
 from pragma_cli.commands.completions import completion_resource_ids
 from pragma_cli.commands.provider_output import fetch_with_spinner
 from pragma_cli.errors import check_bootstrap_error, error_console, format_request_failure, print_api_error
-from pragma_cli.exit_codes import FAILURE_EXIT_CODE, INPUT_ERROR_EXIT_CODE, compute_http_exit_code
+from pragma_cli.exit_codes import (
+    FAILURE_EXIT_CODE,
+    INPUT_ERROR_EXIT_CODE,
+    INTERRUPTED_EXIT_CODE,
+    compute_http_exit_code,
+)
 from pragma_cli.helpers import (
     OutputFormat,
     format_optional_value,
@@ -81,6 +95,13 @@ VITALS_COLORS: dict[VitalsStatus, str] = {
     "nominal": "green",
     "impaired": "yellow",
     "down": "red",
+}
+
+LOG_LEVEL_COLORS: dict[str, str] = {
+    "debug": "dim",
+    "info": "blue",
+    "warn": "yellow",
+    "error": "red",
 }
 
 
@@ -1280,6 +1301,186 @@ def vitals(
         return
 
     print_vitals(resource_vitals)
+
+
+def parse_since(value: str) -> datetime:
+    """Parse a ``--since`` ISO 8601 timestamp, reading one without an offset as UTC.
+
+    Args:
+        value: The option's text.
+
+    Returns:
+        The timezone-aware timestamp.
+
+    Raises:
+        ValueError: If the text is not an ISO 8601 timestamp.
+    """  # noqa: DOC502
+    timestamp = datetime.fromisoformat(value)
+
+    if timestamp.utcoffset() is None:
+        return timestamp.replace(tzinfo=UTC)
+
+    return timestamp
+
+
+def format_log_entry(entry: LogEntry) -> str:
+    """Format one log entry as ``timestamp level message`` with color markup.
+
+    Args:
+        entry: Log entry the provider reported.
+
+    Returns:
+        The ISO timestamp, the level in its color, and the escaped message.
+    """
+    color = LOG_LEVEL_COLORS[entry.level]
+    return f"{entry.timestamp.isoformat()} [{color}]{entry.level}[/{color}] {escape(entry.message)}"
+
+
+def print_log_entry(entry: LogEntry) -> None:
+    """Print one log entry on one line, never wrapped or highlighted.
+
+    Args:
+        entry: Log entry the provider reported.
+    """
+    console.print(format_log_entry(entry), soft_wrap=True, highlight=False)
+
+
+def print_logs(entries: list[LogEntry]) -> None:
+    """Print log entries one per line, oldest first.
+
+    Args:
+        entries: Log entries the provider reported.
+    """
+    if not entries:
+        console.print("[dim]No logs found.[/dim]")
+        return
+    for entry in entries:
+        print_log_entry(entry)
+
+
+def print_log_entry_json(entry: LogEntry) -> None:
+    """Print one log entry as one line of JSON.
+
+    Args:
+        entry: Log entry the provider reported.
+    """
+    sys.stdout.write(json.dumps(entry.model_dump(mode="json")) + "\n")
+    sys.stdout.flush()
+
+
+def print_follow_end(event: LogFollowEnd, last_timestamp: datetime | None, target: Console) -> None:
+    """Print why a followed log stream ended.
+
+    Args:
+        event: The stream's terminal ``end`` event.
+        last_timestamp: Timestamp of the last entry received, if any.
+        target: Console the notice goes to: stdout for text output, stderr for JSON.
+    """
+    target.print(f"[dim]Log stream ended: {escape(event.reason)}[/dim]", soft_wrap=True)
+    if event.reason != "provider_restarted":
+        return
+    if last_timestamp is None:
+        target.print("[dim]The provider restarted. Run the command again to keep following.[/dim]", soft_wrap=True)
+        return
+    target.print(
+        f"[dim]The provider restarted after {last_timestamp.isoformat()}. "
+        f"Run again with --follow --since {last_timestamp.isoformat()} to continue; "
+        "entries at that timestamp print again, and --tail caps how many earlier entries print.[/dim]",
+        soft_wrap=True,
+    )
+
+
+def print_followed_logs(events: Generator[LogFollowEvent], output: OutputFormat) -> None:
+    """Print a followed log stream until its terminal event.
+
+    Args:
+        events: Events of the followed stream, ending with ``end`` or ``error``.
+        output: ``table`` prints text lines; ``json`` prints one JSON object per
+            entry and sends notices to stderr.
+
+    Raises:
+        typer.Exit: With ``FAILURE_EXIT_CODE`` on an ``error`` event or a
+            stream that breaks without a terminal event.
+    """
+    print_entry = print_log_entry if output == OutputFormat.TABLE else print_log_entry_json
+    notice_console = console if output == OutputFormat.TABLE else error_console
+    last_timestamp: datetime | None = None
+    try:
+        for event in events:
+            if isinstance(event, LogFollowEnd):
+                print_follow_end(event, last_timestamp, notice_console)
+                return
+            if isinstance(event, LogFollowError):
+                error_console.print(f"[red]Log stream failed:[/red] {escape(event.message)}")
+                raise typer.Exit(FAILURE_EXIT_CODE)
+            print_entry(event.entry)
+            last_timestamp = event.entry.timestamp
+    except LogFollowInterruptedError as error:
+        error_console.print(f"[red]{escape(str(error))}[/red]")
+        raise typer.Exit(FAILURE_EXIT_CODE) from error
+
+
+@app.command()
+def logs(
+    ctx: typer.Context,
+    resource_id: ResourceIdArgument[str],
+    since: Annotated[
+        datetime | None,
+        typer.Option(
+            "--since",
+            parser=parse_since,
+            help="Only entries at or after this ISO 8601 timestamp (UTC when it has no offset)",
+        ),
+    ] = None,
+    tail: Annotated[int, typer.Option("--tail", min=1, max=10000, help="Number of recent entries")] = 100,
+    follow: Annotated[bool, typer.Option("--follow", help="Keep streaming new entries")] = False,
+    output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
+):
+    """Show a resource's logs from its provider.
+
+    With --follow, the --tail most recent entries print first, then each new
+    one as the provider writes it, until the stream ends or Ctrl-C. Delivery
+    is at most once: entries written while not connected are not replayed.
+    With -o json, --follow prints one JSON object per entry.
+
+    Examples:
+        pragma resources logs acme/kubernetes/deployment/web --tail 50
+        pragma resources logs acme/kubernetes/deployment/web --follow --tail 5
+        pragma resources logs acme/kubernetes/deployment/web -o json
+
+    \f
+
+    Raises:
+        httpx.HTTPStatusError: If the API refuses the read: 404 for a missing
+            resource, 409 for one not applied yet, 501 for a type that does
+            not support following logs, 502 when the provider is unavailable,
+            504 when it does not answer in time.
+        typer.Exit: With ``INPUT_ERROR_EXIT_CODE`` for ``--follow -o yaml``,
+            or ``INTERRUPTED_EXIT_CODE`` on Ctrl-C while following.
+    """  # noqa: DOC502
+    if follow and output == OutputFormat.YAML:
+        error_console.print("[red]--follow prints text or JSON lines; use -o json or leave out -o.[/red]")
+        raise typer.Exit(INPUT_ERROR_EXIT_CODE)
+
+    project = _project_client(ctx)
+    provider, resource, name = parse_resource_id(resource_id)
+
+    if not follow:
+        entries = fetch_with_spinner(
+            "Fetching logs...",
+            lambda: project.logs(provider, resource, name, since=since, tail=tail),
+        )
+        if output != OutputFormat.TABLE:
+            output_data([entry.model_dump(mode="json") for entry in entries], output)
+            return
+        print_logs(entries)
+        return
+
+    try:
+        with closing(project.follow_logs(provider, resource, name, since=since, tail=tail)) as events:
+            print_followed_logs(events, output)
+    except KeyboardInterrupt as error:
+        raise typer.Exit(INTERRUPTED_EXIT_CODE) from error
 
 
 def _plan_apply_batch(

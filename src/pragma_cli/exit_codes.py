@@ -20,6 +20,9 @@ The target does not exist, is not installed, or is not visible to the
 caller.
 """
 
+INTERRUPTED_EXIT_CODE = 130
+"""Exit code when Ctrl-C stops a command, such as ``pragma resources logs --follow``: 128 plus SIGINT."""
+
 EXIT_CODES_HELP = (
     f"Exit codes: 0 success; {FAILURE_EXIT_CODE} failure; "
     f"{INPUT_ERROR_EXIT_CODE} invalid usage or a local file or config error; "
@@ -28,7 +31,8 @@ EXIT_CODES_HELP = (
     "or could not read the version, and it prints a providers wait command that keeps waiting; "
     "providers wait: the watch ended again with admission unsettled or could not read the version); "
     f"{NOT_FOUND_EXIT_CODE} not found: the target does not exist, is not installed, "
-    "or is not visible to you. "
+    "or is not visible to you; "
+    f"{INTERRUPTED_EXIT_CODE} interrupted: Ctrl-C stopped the command. "
     "Errors and warnings go to stderr; command output goes to stdout, "
     "and with -o json or -o yaml stdout carries only the json or yaml document."
 )
