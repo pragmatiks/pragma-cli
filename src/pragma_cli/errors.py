@@ -320,6 +320,36 @@ def format_known_request_failure(error: httpx.RequestError, recipient: str) -> s
             return None
 
 
+def format_storage_request_failure(error: httpx.RequestError) -> str:
+    """Format what kept an upload from getting a readable answer from storage, in plain words.
+
+    Never includes the error's own text, so no part of the signed upload
+    address can reach the terminal.
+
+    Args:
+        error: The request error the upload raised.
+
+    Returns:
+        :func:`format_known_request_failure`'s phrase for ``storage``, such
+        as ``storage did not answer in time``, ``storage's answer could not
+        be read`` for an answer that could not be decoded, or ``the
+        connection to storage broke off while sending`` for a connection
+        that broke while the bytes were being sent. A cause without a
+        phrase of its own gives ``the connection to storage failed
+        (<ErrorType>)``.
+    """
+    if isinstance(error, httpx.DecodingError):
+        return "storage's answer could not be read"
+
+    if isinstance(error, httpx.WriteError):
+        return "the connection to storage broke off while sending"
+
+    if (phrase := format_known_request_failure(error, "storage")) is not None:
+        return phrase
+
+    return f"the connection to storage failed ({type(error).__name__})"
+
+
 def is_connection_failure(error: httpx.RequestError) -> bool:
     """Tell whether a request error means the API URL or the server may be wrong.
 

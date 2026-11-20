@@ -32,11 +32,11 @@ from pragma_sdk import (
     ProviderVersion,
     ProviderVersionDeclaration,
     RenamedWheelWriteError,
+    UploadAddress,
+    UploadError,
+    UploadOutcome,
     VersionStatus,
     WheelExpansionLimitError,
-    WheelUploadAddress,
-    WheelUploadError,
-    WheelUploadOutcome,
     read_wheel_declaration,
     rename_provider_wheel,
 )
@@ -57,17 +57,17 @@ from pragma_cli.errors import (
     check_bootstrap_error,
     error_console,
     format_api_error,
-    format_known_request_failure,
     format_os_error_reason,
     format_request_failure,
+    format_storage_request_failure,
     is_request_unsent,
     print_unreadable_response,
     require_auth,
 )
 from pragma_cli.exit_codes import (
-    ADMISSION_UNCONFIRMED_EXIT_CODE,
     FAILURE_EXIT_CODE,
     INPUT_ERROR_EXIT_CODE,
+    UNCONFIRMED_EXIT_CODE,
 )
 from pragma_cli.helpers import OutputFormat, output_data, parse_api_error_message
 
@@ -94,7 +94,7 @@ The file is not a readable wheel, or it expands past the size limit Pragmatiks s
 """
 
 
-UPLOAD_FAILURE_ERRORS = (WheelUploadError, httpx.RequestError, OSError)
+UPLOAD_FAILURE_ERRORS = (UploadError, httpx.RequestError, OSError)
 """Errors ``upload_provider_wheel`` raises when the wheel did not reach storage, or its outcome is unknown.
 
 Storage refused the upload, got no readable answer to it, or the wheel could not be read.
@@ -221,37 +221,7 @@ def format_declaration_interruption(error: httpx.TransportError) -> str:
     return f"Could not finish the publish: {escape(format_request_failure(error))}."
 
 
-def format_storage_request_failure(error: httpx.RequestError) -> str:
-    """Format what kept a wheel upload from getting a readable answer from storage, in plain words.
-
-    Never includes the error's own text, so no part of the signed upload
-    address can reach the terminal.
-
-    Args:
-        error: The request error the upload raised.
-
-    Returns:
-        :func:`~pragma_cli.errors.format_known_request_failure`'s phrase for
-        ``storage``, such as ``storage did not answer in time``,
-        ``storage's answer could not be read`` for an answer that could not
-        be decoded, or ``the connection to storage broke off while sending``
-        for a connection that broke while the wheel was being sent. A cause
-        without a phrase of its own gives ``the connection to storage failed
-        (<ErrorType>)``.
-    """
-    if isinstance(error, httpx.DecodingError):
-        return "storage's answer could not be read"
-
-    if isinstance(error, httpx.WriteError):
-        return "the connection to storage broke off while sending"
-
-    if (phrase := format_known_request_failure(error, "storage")) is not None:
-        return phrase
-
-    return f"the connection to storage failed ({type(error).__name__})"
-
-
-def format_upload_failure(error: WheelUploadError | httpx.RequestError | OSError) -> str:
+def format_upload_failure(error: UploadError | httpx.RequestError | OSError) -> str:
     """Format why a wheel upload did not store the wheel, or why its outcome is unknown.
 
     Never includes the signed upload address.
@@ -269,7 +239,7 @@ def format_upload_failure(error: WheelUploadError | httpx.RequestError | OSError
         cause. Not escaped for Rich markup.
     """
     match error:
-        case WheelUploadError():
+        case UploadError():
             return str(error)
         case OSError():
             return f"Could not read the wheel to upload it: {format_os_error_reason(error)}."
@@ -695,7 +665,7 @@ def print_declared_version(declared_version: DeclaredProviderVersion) -> None:
     error_console.print(f"[dim]Operation {escape(declared_version.operation_id)}[/dim]")
 
 
-def print_upload_outcome(outcome: WheelUploadOutcome, wheel_size: int) -> None:
+def print_upload_outcome(outcome: UploadOutcome, wheel_size: int) -> None:
     """Print on stderr how this publish's upload left the wheel in storage.
 
     Args:
@@ -703,13 +673,13 @@ def print_upload_outcome(outcome: WheelUploadOutcome, wheel_size: int) -> None:
         wheel_size: Size of the wheel in bytes.
     """
     match outcome:
-        case WheelUploadOutcome.ALREADY_STORED:
+        case UploadOutcome.ALREADY_STORED:
             error_console.print("Wheel already uploaded")
-        case WheelUploadOutcome.STORED:
+        case UploadOutcome.STORED:
             error_console.print(f"Uploaded {format_wheel_size(wheel_size)}")
 
 
-def report_upload_failure(error: WheelUploadError | httpx.RequestError | OSError, republish_command: str) -> NoReturn:
+def report_upload_failure(error: UploadError | httpx.RequestError | OSError, republish_command: str) -> NoReturn:
     """Print why a wheel upload failed or why its outcome is unknown, and exit.
 
     Ends with the command that publishes the wheel again.
@@ -728,10 +698,10 @@ def report_upload_failure(error: WheelUploadError | httpx.RequestError | OSError
 
 def upload_declared_wheel(
     client: PragmaClient,
-    wheel_upload: WheelUploadAddress,
+    wheel_upload: UploadAddress,
     wheel_path: Path,
     republish_command: str,
-) -> WheelUploadOutcome:
+) -> UploadOutcome:
     """Upload the wheel of a declared version to the address its declaration returned.
 
     Args:
@@ -1063,7 +1033,7 @@ def report_unpublished_version(
     Raises:
         typer.Exit: With ``FAILURE_EXIT_CODE`` if another publish replaced
             this one or the version failed admission, or with
-            ``ADMISSION_UNCONFIRMED_EXIT_CODE`` if it has not settled.
+            ``UNCONFIRMED_EXIT_CODE`` if it has not settled.
     """
     if is_replaced_publish(version, operation_id):
         report_replaced_publish(version)
@@ -1122,7 +1092,7 @@ def report_watch_failure(reason: str, version: ProviderVersion, operation_id: st
         operation_id: The watched publish's operation id.
 
     Raises:
-        typer.Exit: Always, with ``ADMISSION_UNCONFIRMED_EXIT_CODE``.
+        typer.Exit: Always, with ``UNCONFIRMED_EXIT_CODE``.
     """
     canonical = escape(version.canonical)
     error_console.print(f"[red]Error:[/red] Stopped waiting for admission: {escape(reason.rstrip('.'))}.")
@@ -1130,7 +1100,7 @@ def report_watch_failure(reason: str, version: ProviderVersion, operation_id: st
         f"Check admission of {canonical} {escape(version.version)} with: pragma providers versions {canonical}"
     )
     print_keep_waiting_hint(version, operation_id)
-    raise typer.Exit(ADMISSION_UNCONFIRMED_EXIT_CODE)
+    raise typer.Exit(UNCONFIRMED_EXIT_CODE)
 
 
 def report_unfinished_admission(version: ProviderVersion, status_label: str, operation_id: str) -> NoReturn:
@@ -1143,7 +1113,7 @@ def report_unfinished_admission(version: ProviderVersion, status_label: str, ope
         operation_id: The watched publish's operation id.
 
     Raises:
-        typer.Exit: Always, with ``ADMISSION_UNCONFIRMED_EXIT_CODE``.
+        typer.Exit: Always, with ``UNCONFIRMED_EXIT_CODE``.
     """
     canonical = escape(version.canonical)
     error_console.print(
@@ -1152,7 +1122,7 @@ def report_unfinished_admission(version: ProviderVersion, status_label: str, ope
         f"Check it with: pragma providers versions {canonical}[/yellow]"
     )
     print_keep_waiting_hint(version, operation_id)
-    raise typer.Exit(ADMISSION_UNCONFIRMED_EXIT_CODE)
+    raise typer.Exit(UNCONFIRMED_EXIT_CODE)
 
 
 def build_wait_command(version: ProviderVersion, operation_id: str) -> str:
@@ -1282,7 +1252,7 @@ def publish(
 
     Exits through ``typer.Exit`` with ``FAILURE_EXIT_CODE`` when admission
     failed or another publish replaced this one, and with
-    ``ADMISSION_UNCONFIRMED_EXIT_CODE`` when admission is not confirmed.
+    ``UNCONFIRMED_EXIT_CODE`` when admission is not confirmed.
 
     Raises:
         click.UsageError: If both PROJECT_DIRECTORY and --wheel are given.
@@ -1324,7 +1294,7 @@ def report_admission_watch(
     Raises:
         typer.Exit: With ``FAILURE_EXIT_CODE`` when admission failed or
             another publish replaced the watched one, and with
-            ``ADMISSION_UNCONFIRMED_EXIT_CODE`` when admission is not
+            ``UNCONFIRMED_EXIT_CODE`` when admission is not
             confirmed (see :func:`report_unpublished_version` and
             :func:`report_watch_failure`).
     """  # noqa: DOC502

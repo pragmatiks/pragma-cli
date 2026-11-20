@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
-import stat
+import shlex
 import sys
 from collections.abc import Generator
 from contextlib import closing
@@ -42,6 +41,13 @@ from rich.table import Table
 
 from pragma_cli import get_client
 from pragma_cli.commands.completions import completion_resource_ids
+from pragma_cli.commands.file_upload import (
+    FileUploadRecovery,
+    PlannedFileUpload,
+    open_file_reference,
+    plan_file_upload,
+    upload_planned_files,
+)
 from pragma_cli.commands.provider_output import fetch_with_spinner
 from pragma_cli.errors import check_bootstrap_error, error_console, format_request_failure, print_api_error
 from pragma_cli.exit_codes import (
@@ -82,7 +88,8 @@ def announce_project_override(ctx: typer.Context) -> None:
     print_project_override_notice(ctx)
 
 
-_MAX_FILE_REFERENCE_SIZE = 10 * 1024 * 1024
+MAX_INLINE_FILE_REFERENCE_SIZE = 10 * 1024 * 1024
+"""Largest file a ``@path`` reference inlines into a resource's config, which the planner holds in memory."""
 
 HEALTH_COLORS = {
     "healthy": "green",
@@ -152,21 +159,12 @@ def _resource_payload(resource: dict[str, Any], project_id: str) -> _ScopedResou
 
 
 @dataclass
-class _PendingUpload:
-    """Planned file upload that has been read but not yet sent to the API."""
-
-    name: str
-    content: bytes
-    content_type: str
-
-
-@dataclass
 class _PlannedResource:
     """A single resource document that has been pre-validated for apply."""
 
     resource_id: str
     payload: _ScopedResourcePayload
-    upload: _PendingUpload | None = None
+    upload: PlannedFileUpload | None = None
 
 
 @dataclass
@@ -352,11 +350,11 @@ ResourceIdArgument = Annotated[
 
 
 def _format_operation_error(error: httpx.HTTPError | ProjectMismatchError) -> str:
-    """Render an apply or upload failure that is not an API error response into one line.
+    """Render an apply failure that is not an API error response into one line.
 
     Args:
         error: Transport error, other httpx error, or project-scoping
-            mismatch raised by a resource apply or file upload.
+            mismatch raised by a resource apply.
 
     Returns:
         What interrupted the exchange for a transport error, the
@@ -372,65 +370,16 @@ def _format_operation_error(error: httpx.HTTPError | ProjectMismatchError) -> st
     return f"{type(error).__name__}: {error}"
 
 
-def _describe_file_type(mode: int) -> str:
-    """Describe the file type of a stat ``st_mode`` for error messages.
-
-    Args:
-        mode: ``st_mode`` field from a stat result.
-
-    Returns:
-        Lowercase short label such as ``"FIFO"``, ``"socket"``,
-        ``"directory"``, ``"character device"``, ``"block device"``,
-        or ``"unknown"`` when the type does not match a known kind.
-    """
-    if stat.S_ISFIFO(mode):
-        return "FIFO"
-    if stat.S_ISSOCK(mode):
-        return "socket"
-    if stat.S_ISDIR(mode):
-        return "directory"
-    if stat.S_ISCHR(mode):
-        return "character device"
-    if stat.S_ISBLK(mode):
-        return "block device"
-    if stat.S_ISLNK(mode):
-        return "symlink"
-    return "unknown"
-
-
 def _read_file_reference(path_str: str, base_dir: Path) -> tuple[Path, bytes]:
-    """Open and read a ``@path`` reference atomically through one fd.
+    """Read a ``@path`` reference inlined into a resource's config, through one descriptor.
 
-    Security model: ``@path`` references in manifests are a data-flow
-    from a potentially untrusted YAML author to the local filesystem.
-    An attacker who can influence a manifest could otherwise exfiltrate
-    local secrets (``~/.ssh/id_rsa``, ``~/.aws/credentials``, etc.) by
-    pointing ``@path`` at them — the CLI would read the bytes during
-    planning and upload them during apply. To block that class of
-    attack, this loader enforces seven rules:
-
-    1. Absolute paths are rejected.
-    2. Raw ``..`` segments in the path string are rejected.
-    3. The resolved path must land inside ``base_dir``.
-    4. Symlinks are followed before the containment check so symlink
-       escapes (``base_dir/link`` -> ``/etc/passwd``) are rejected.
-    5. The file is opened with ``O_NOFOLLOW`` and validated via
-       ``fstat`` on the same descriptor — type and size checks happen
-       on the exact bytes that are about to be read, closing the
-       stat-to-open TOCTOU race where an attacker swaps the file
-       between the planner's check and the planner's read.
-    6. Only regular files are accepted — FIFOs, sockets, devices, and
-       directories would hang or mis-upload the planner.
-    7. Files larger than ``_MAX_FILE_REFERENCE_SIZE`` are rejected so
-       a manifest cannot OOM the planner by pointing at a huge blob.
-       The size is checked twice — once against ``st_size`` at open
-       time and once against the running byte count in the read
-       loop — because ``fstat`` returns the file size as of the open
-       call, and a file that grows during the read would otherwise
-       blow past the cap on the back of kernel EOF alone.
-
-    ``~`` expansion is intentionally NOT performed: a tilde should not
-    map to a real path during manifest loading.
+    Opens the file under :func:`open_file_reference`'s rules and reads
+    it from the same descriptor. Inlined content is held in memory and
+    sent inside the resource's config, so a file larger than
+    ``MAX_INLINE_FILE_REFERENCE_SIZE`` is refused. The size is checked
+    twice, against ``st_size`` at open time and against the running byte
+    count, because a file that grows during the read would otherwise
+    pass the cap.
 
     Args:
         path_str: Path string (without ``@`` prefix).
@@ -438,143 +387,50 @@ def _read_file_reference(path_str: str, base_dir: Path) -> tuple[Path, bytes]:
             stay inside it.
 
     Returns:
-        Tuple of ``(resolved_path, file_bytes)``. ``resolved_path`` is
-        the absolute, realpath-resolved path inside ``base_dir`` and
-        is suitable for display in error messages. ``file_bytes`` is
-        the raw file contents read from the validated descriptor.
+        Tuple of ``(resolved_path, file_bytes)``, ``resolved_path`` as
+        :func:`open_file_reference` returns it.
 
     Raises:
-        ValueError: If the path is absolute, contains ``..``, resolves
-            outside ``base_dir`` (directly or via symlink), is not a
-            regular file, exceeds the size limit, or cannot be opened.
-    """
-    raw_path = Path(path_str)
+        ValueError: As :func:`open_file_reference` describes, or if the
+            file exceeds the size limit or cannot be read.
+    """  # noqa: DOC502
+    limit_mib = MAX_INLINE_FILE_REFERENCE_SIZE / (1024 * 1024)
 
-    if raw_path.is_absolute():
-        raise ValueError(
-            f"@path reference {path_str!r} is absolute; only paths relative to the manifest directory are allowed."
-        )
-
-    if ".." in raw_path.parts:
-        raise ValueError(f"@path reference {path_str!r} contains '..'; parent traversal is not allowed.")
-
-    base_real = Path(os.path.realpath(base_dir))
-    candidate = base_real / raw_path
-
-    try:
-        resolved = candidate.resolve(strict=True)
-    except FileNotFoundError as e:
-        raise ValueError(f"File not found: {candidate}") from e
-    except OSError as e:
-        raise ValueError(f"Cannot resolve @path reference {path_str!r}: {e}") from e
-
-    try:
-        resolved.relative_to(base_real)
-    except ValueError as e:
-        raise ValueError(
-            f"@path reference {path_str!r} resolves outside the manifest directory ({base_real}); "
-            "refusing to read for security reasons."
-        ) from e
-
-    open_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-    try:
-        fd = os.open(resolved, open_flags)
-    except OSError as e:
-        raise ValueError(f"Cannot open @path reference {path_str!r}: {e}") from e
-
-    try:
-        try:
-            st = os.fstat(fd)
-        except OSError as e:
-            raise ValueError(f"Cannot stat @path reference {path_str!r}: {e}") from e
-
-        if not stat.S_ISREG(st.st_mode):
-            raise ValueError(
-                f"@path reference {path_str!r} is not a regular file "
-                f"(detected {_describe_file_type(st.st_mode)}); "
-                "FIFOs, sockets, devices, and directories are refused."
-            )
-
-        if st.st_size > _MAX_FILE_REFERENCE_SIZE:
-            size_mib = st.st_size / (1024 * 1024)
-            limit_mib = _MAX_FILE_REFERENCE_SIZE / (1024 * 1024)
+    with open_file_reference(path_str, base_dir) as opened:
+        if opened.status.st_size > MAX_INLINE_FILE_REFERENCE_SIZE:
+            size_mib = opened.status.st_size / (1024 * 1024)
             raise ValueError(
                 f"@path reference {path_str!r} is {size_mib:.2f} MiB "
-                f"({st.st_size} bytes), exceeding the "
-                f"{limit_mib:.0f} MiB ({_MAX_FILE_REFERENCE_SIZE} bytes) limit."
+                f"({opened.status.st_size} bytes), exceeding the "
+                f"{limit_mib:.0f} MiB ({MAX_INLINE_FILE_REFERENCE_SIZE} bytes) limit."
             )
 
         chunks: list[bytes] = []
         total = 0
         while True:
             try:
-                chunk = os.read(fd, 65536)
+                chunk = opened.file.read(65536)
             except OSError as e:
                 raise ValueError(f"Cannot read @path reference {path_str!r}: {e}") from e
             if not chunk:
                 break
             total += len(chunk)
-            if total > _MAX_FILE_REFERENCE_SIZE:
-                limit_mib = _MAX_FILE_REFERENCE_SIZE / (1024 * 1024)
+            if total > MAX_INLINE_FILE_REFERENCE_SIZE:
                 raise ValueError(
                     f"@path reference {path_str!r} grew during read past the "
-                    f"{limit_mib:.0f} MiB limit; refusing to upload."
+                    f"{limit_mib:.0f} MiB limit; refusing to inline."
                 )
             chunks.append(chunk)
-        data = b"".join(chunks)
-    finally:
-        os.close(fd)
 
-    return resolved, data
+    return opened.path, b"".join(chunks)
 
 
-def _plan_file_upload(resource: dict, base_dir: Path) -> tuple[dict, _PendingUpload]:
-    """Read a pragma/file resource's ``@path`` content into memory.
-
-    Callers must ensure the resource has ``config.content`` starting
-    with ``@``. ``_read_file_reference`` rejects anything
-    that would escape ``base_dir`` (absolute paths, ``..`` traversal,
-    symlink escapes) and atomically validates the file type and size
-    against the same descriptor it reads from. No network calls are
-    made.
-
-    Args:
-        resource: Resource dictionary from YAML.
-        base_dir: Base directory for resolving relative paths.
-
-    Returns:
-        Tuple of (resource dict with ``content`` stripped, pending upload).
-
-    Raises:
-        ValueError: If the resource is missing required fields, the file
-            cannot be found, escapes the manifest directory, or cannot
-            be read.
-    """
-    config = resource["config"]
-    content = config["content"]
-
-    content_type = config.get("content_type")
-    if not content_type:
-        raise ValueError("content_type is required for pragma/file resources with @path syntax")
-
-    name = resource.get("name")
-    if not name:
-        raise ValueError("Resource name is required for pragma/file resources")
-
-    _, file_content = _read_file_reference(content[1:], base_dir)
-
-    stripped_resource = resource.copy()
-    stripped_resource["config"] = {k: v for k, v in config.items() if k != "content"}
-
-    return stripped_resource, _PendingUpload(name=name, content=file_content, content_type=content_type)
-
-
-def _plan_resource_file_references(resource: dict, base_dir: Path) -> tuple[dict, _PendingUpload | None]:
+def _plan_resource_file_references(resource: dict, base_dir: Path) -> tuple[dict, PlannedFileUpload | None]:
     """Prepare a resource document for submission without side effects.
 
-    For pragma/file resources with an @path reference, reads the
-    referenced bytes into memory and returns them as a pending upload.
-    For all other resources, recursively resolves @path strings in the
+    For pragma/file resources with an @path reference, checks the
+    referenced file and returns it as a planned upload, without reading
+    its bytes. For all other resources, recursively resolves @path strings in the
     config into file contents (text) inline.
 
     Args:
@@ -582,7 +438,7 @@ def _plan_resource_file_references(resource: dict, base_dir: Path) -> tuple[dict
         base_dir: Base directory for resolving relative paths.
 
     Returns:
-        Tuple of (prepared resource dict, optional pending upload).
+        Tuple of (prepared resource dict, optional planned upload).
 
     Raises:
         ValueError: If file references are missing, unreadable, or
@@ -591,12 +447,12 @@ def _plan_resource_file_references(resource: dict, base_dir: Path) -> tuple[dict
     provider = resource.get("provider")
     resource_type = resource.get("resource")
 
-    if provider == "pragma" and resource_type == "file":
+    if provider == "pragmatiks/pragma" and resource_type == "file":
         config = resource.get("config")
         if isinstance(config, dict):
             content = config.get("content")
             if isinstance(content, str) and content.startswith("@"):
-                stripped, upload = _plan_file_upload(resource, base_dir)
+                stripped, upload = plan_file_upload(resource, base_dir)
                 return stripped, upload
         return resource, None
 
@@ -1491,8 +1347,9 @@ def _plan_apply_batch(
 ) -> _ApplyPlan:
     """Parse, validate, and plan every document across all supplied files.
 
-    All documents are parsed up front, file references are read into
-    memory (without uploading), project_id is validated, each
+    All documents are parsed up front, a ``pragma/file`` resource's
+    ``@path`` file is checked without being read, other file references
+    are read into memory, project_id is validated, each
     resource payload is validated through Pydantic, and nested
     ``config`` fields are validated against the per-provider JSON
     schema fetched from the API (a read-only side effect). Errors
@@ -1641,6 +1498,15 @@ def apply(
     are resolved before submission. Use '@path/to/file' syntax to inline
     file contents.
 
+    For a pragma/file resource whose config.content is '@path/to/file',
+    the file is streamed from disk into the project, with config.content_type
+    as its media type, and stored before any resource is applied; a file
+    replaced after planning is refused.
+
+    Exit codes: 3 a file upload reached Pragmatiks and is not stored yet;
+    no resource was applied, and applying again keeps waiting for it
+    without sending the file again.
+
     \f
 
     Raises:
@@ -1665,37 +1531,58 @@ def apply(
         console.print("[dim]No resources to apply.[/dim]")
         return
 
-    _execute_plan(plan, project_id)
+    _execute_plan(plan, project_id, build_apply_again_command(sys.argv[1:]))
 
 
-def _execute_plan(plan: _ApplyPlan, project_id: str) -> None:
-    """Apply a pre-validated plan with partial-failure containment.
+def build_apply_again_command(arguments: list[str]) -> str:
+    """Build the command that runs this ``pragma resources apply`` again, with the same arguments.
 
-    Ordering strategy: apply every resource first, then upload file
-    bytes for ``pragma/file`` resources afterwards. This keeps a
-    failing mid-batch apply from leaking uploaded secrets to the
-    server. If an apply or upload fails mid-flight — whether through
-    an HTTP error, a transport error (connect/timeout/read/write),
-    or a project-scoping mismatch — the function prints a loud
-    ``PARTIAL APPLY FAILURE`` report listing what did and did not
-    complete, then exits with a non-zero status.
+    Args:
+        arguments: The command line's arguments after the program name.
+
+    Returns:
+        The command, quoted for a POSIX shell.
+    """
+    return shlex.join(["pragma", *arguments])
+
+
+def _execute_plan(plan: _ApplyPlan, project_id: str, apply_again_command: str) -> None:
+    """Upload every planned file, then apply a pre-validated plan with partial-failure containment.
+
+    Every ``pragma/file`` resource's ``@path`` file is uploaded first,
+    each upload returning once the file is stored, so a ``pragma/file``
+    resource and every resource reading ``pragma://files/<name>`` are
+    applied after their file exists. The files go only to the caller's
+    own project and planning has already validated every document, so a
+    later failed apply leaves only stored files, which the next apply
+    finds stored and does not send again. An upload failure ends the
+    batch before any apply, ending with the command that applies the
+    batch again
+    (:func:`~pragma_cli.commands.file_upload.report_file_upload_failure`).
+    If an apply fails mid-flight, whether through an HTTP error, a transport error
+    (connect/timeout/read/write), or a project-scoping mismatch, the
+    function prints a loud ``PARTIAL APPLY FAILURE`` report listing what
+    did and did not complete, then exits with a non-zero status.
 
     Args:
         plan: Plan returned by ``_plan_apply_batch``.
         project_id: Resolved project ID.
+        apply_again_command: Command that runs this apply again, printed
+            after a failed upload.
 
     Raises:
-        typer.Exit: On any apply or upload failure, after reporting which
-            resources were touched and which were left in partial state;
-            with ``NOT_FOUND_EXIT_CODE`` when the API answered 404, else
-            with ``FAILURE_EXIT_CODE``.
+        typer.Exit: On any upload failure, as
+            :func:`~pragma_cli.commands.file_upload.report_file_upload_failure`
+            describes, or on any apply failure, after reporting which
+            resources were touched; with ``NOT_FOUND_EXIT_CODE`` when the
+            API answered 404, else with ``FAILURE_EXIT_CODE``.
     """  # noqa: DOC502
     client = get_client()
     project = client.project(project_id)
 
+    uploads = [(planned.resource_id, planned.upload) for planned in plan.resources if planned.upload is not None]
+    uploaded = upload_planned_files(project, uploads, FileUploadRecovery(client.base_url, apply_again_command))
     applied: list[tuple[str, str]] = []
-    uploaded: list[str] = []
-    pending_uploads: list[_PlannedResource] = []
 
     for planned in plan.resources:
         try:
@@ -1709,23 +1596,6 @@ def _execute_plan(plan: _ApplyPlan, project_id: str) -> None:
         applied.append((planned.resource_id, applied_state))
         print(f"Applied {escape(applied_id)} {format_state(applied_state)}")
 
-        if planned.upload is not None:
-            pending_uploads.append(planned)
-
-    for planned in pending_uploads:
-        upload = planned.upload
-
-        if upload is None:
-            continue
-
-        try:
-            project.upload_file(upload.name, upload.content, upload.content_type)
-        except (httpx.HTTPError, ProjectMismatchError) as e:
-            heading = f"Error uploading file for {planned.resource_id}"
-            report_apply_failure(e, heading, plan, applied, uploaded, failed_resource_id=planned.resource_id)
-
-        uploaded.append(planned.resource_id)
-
     console.print(f"[green]Applied {len(applied)} resource(s) to project '{escape(project_id)}'.[/green]")
 
 
@@ -1738,19 +1608,19 @@ def report_apply_failure(
     *,
     failed_resource_id: str,
 ) -> NoReturn:
-    """Print why an apply or upload failed mid-batch, with what the batch left behind, then exit.
+    """Print why an apply failed mid-batch, with what the batch left behind, then exit.
 
     A 503 saying the caller's organization is not set up yet prints the
     set-up message instead, without the batch report.
 
     Args:
-        error: The error the apply or upload raised.
+        error: The error the apply raised.
         heading: What failed, such as ``Error applying acme/db/database/main``.
         plan: Full plan that was being executed.
         applied: ``(resource_id, state)`` pairs applied so far, each state
             as ``format_resource_state`` names it.
-        uploaded: Resource IDs whose file content was uploaded so far.
-        failed_resource_id: Resource ID whose apply or upload failed.
+        uploaded: Resource IDs whose files are stored.
+        failed_resource_id: Resource ID whose apply failed.
 
     Raises:
         typer.Exit: With the code ``compute_http_exit_code`` gives an API
@@ -1780,7 +1650,9 @@ def _report_partial_apply_failure(
     The CLI has no atomic multi-resource apply endpoint, so a
     mid-batch failure leaves the server in partial state. Callers
     and humans both need to see exactly what made it through so they
-    can reconcile manually. The failed resource is reported as a
+    can reconcile manually. The files uploaded before the applies are
+    listed first, under ``Uploaded``; applying again finds them stored
+    and does not send them again. The failed resource is reported as a
     dedicated ``Failed`` section so it is visually distinct from the
     rest of the untouched batch listed under ``Not attempted``.
 
@@ -1789,15 +1661,15 @@ def _report_partial_apply_failure(
         applied: Resources that were successfully applied, as a list
             of ``(resource_id, state)`` tuples, each state as
             ``format_resource_state`` names it.
-        uploaded: Resource IDs whose file bytes were uploaded.
-        failed_resource_id: Resource ID whose apply or upload failed.
+        uploaded: Resource IDs whose files are stored.
+        failed_resource_id: Resource ID whose apply failed.
     """
     all_ids = [p.resource_id for p in plan.resources]
-    applied_ids = {rid for rid, _ in applied}
-    uploaded_ids = set(uploaded)
+    applied_ids = {resource_id for resource_id, _ in applied}
 
-    not_attempted = [rid for rid in all_ids if rid not in applied_ids and rid != failed_resource_id]
-    orphan_uploads = [rid for rid in applied_ids if rid not in uploaded_ids and _needs_upload(plan, rid)]
+    not_attempted = [
+        resource_id for resource_id in all_ids if resource_id not in applied_ids and resource_id != failed_resource_id
+    ]
 
     error_console.print()
     error_console.print("[red bold]PARTIAL APPLY FAILURE[/red bold]")
@@ -1807,10 +1679,18 @@ def _report_partial_apply_failure(
     )
 
     error_console.print()
+    error_console.print(f"[bold]Uploaded ({len(uploaded)}):[/bold]")
+    if uploaded:
+        for resource_id in uploaded:
+            error_console.print(f"  [green]+[/green] {escape(resource_id)}")
+    else:
+        error_console.print("  [dim](none)[/dim]")
+
+    error_console.print()
     error_console.print(f"[bold]Applied ({len(applied)}):[/bold]")
     if applied:
-        for rid, state in applied:
-            error_console.print(f"  [green]+[/green] {escape(rid)} ({escape(state)})")
+        for resource_id, state in applied:
+            error_console.print(f"  [green]+[/green] {escape(resource_id)} ({escape(state)})")
     else:
         error_console.print("  [dim](none)[/dim]")
 
@@ -1821,36 +1701,12 @@ def _report_partial_apply_failure(
     error_console.print()
     error_console.print(f"[bold]Not attempted ({len(not_attempted)}):[/bold]")
     if not_attempted:
-        for rid in not_attempted:
-            error_console.print(f"  [dim]-[/dim] {escape(rid)}")
+        for resource_id in not_attempted:
+            error_console.print(f"  [dim]-[/dim] {escape(resource_id)}")
     else:
         error_console.print("  [dim](none)[/dim]")
 
-    if orphan_uploads:
-        error_console.print()
-        error_console.print("[yellow bold]Orphaned pragma/file applies without uploaded bytes:[/yellow bold]")
-        for rid in orphan_uploads:
-            error_console.print(f"  [yellow]![/yellow] {escape(rid)}")
-        error_console.print("  [yellow]These resources reference file content that was never uploaded.[/yellow]")
-        error_console.print("  [yellow]Re-run apply once the underlying issue is resolved.[/yellow]")
-
     error_console.print()
-
-
-def _needs_upload(plan: _ApplyPlan, resource_id: str) -> bool:
-    """Return True if ``resource_id`` in ``plan`` has a pending file upload.
-
-    Args:
-        plan: Plan to search.
-        resource_id: Resource identifier to look up.
-
-    Returns:
-        True if the planned resource has an associated ``_PendingUpload``.
-    """
-    for planned in plan.resources:
-        if planned.resource_id == resource_id:
-            return planned.upload is not None
-    return False
 
 
 def report_resource_api_error(error: httpx.HTTPStatusError, heading: str) -> NoReturn:
