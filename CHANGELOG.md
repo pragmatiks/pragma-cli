@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.11.1 (2026-11-20)
+
+### Fix
+
+- **auth**: accept an API key in whoami and token
+
 ## v17.11.0 (2026-11-18)
 
 ### Feat
