@@ -16,7 +16,7 @@ repos:
         entry: python -m pragmatiks_lint.comments
         language: python
         language_version: python3.13
-        additional_dependencies: ["pragmatiks-lint==0.11.0"]
+        additional_dependencies: ["pragmatiks-lint==0.12.1"]
         types: [python]
         pass_filenames: true
         stages: [pre-commit]
@@ -25,7 +25,7 @@ repos:
         entry: python -m pragmatiks_lint.sources
         language: python
         language_version: python3.13
-        additional_dependencies: ["pragmatiks-lint==0.11.0"]
+        additional_dependencies: ["pragmatiks-lint==0.12.1"]
         files: (^|/)(pyproject\.toml|package\.json|pnpm-workspace\.yaml)$
         pass_filenames: true
         stages: [pre-commit]
@@ -34,7 +34,7 @@ repos:
         entry: python -m pragmatiks_lint.uv_pip
         language: python
         language_version: python3.13
-        additional_dependencies: ["pragmatiks-lint==0.11.0"]
+        additional_dependencies: ["pragmatiks-lint==0.12.1"]
         pass_filenames: true
         stages: [pre-commit]
       - id: check-unittest
