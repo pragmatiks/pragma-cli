@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.12.0 (2026-11-20)
+
+### Feat
+
+- **resources**: show and follow a resource's logs (PRA-479)
+
 ## v17.11.3 (2026-11-20)
 
 ### Fix
