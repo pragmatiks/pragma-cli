@@ -88,22 +88,24 @@ def parse_token_claims(token: str) -> dict[str, Any] | None:
 
 
 def is_token_expired(token: str) -> bool:
-    """Check if a JWT token is expired by decoding the payload.
+    """Check if a bearer token is a JWT whose ``exp`` claim has passed.
 
-    Decodes the payload without verifying the signature.
+    Decodes the payload without verifying the signature. A token that is not
+    a JWT, such as an API key, carries no expiry the CLI can read, so only the
+    API can refuse it.
 
     Args:
-        token: JWT token string.
+        token: Bearer token string.
 
     Returns:
-        True if the token is expired, carries an ``exp`` claim that is not
-        a number, or is not a JWT (see :func:`parse_token_claims`); False
-        otherwise, a JWT without ``exp`` included.
+        True if the token is a JWT that is expired or carries an ``exp`` claim
+        that is not a number; False otherwise, a JWT without ``exp`` and a
+        token that is not a JWT (see :func:`parse_token_claims`) included.
     """
     claims = parse_token_claims(token)
 
     if claims is None:
-        return True
+        return False
 
     exp = claims.get("exp")
 
@@ -462,13 +464,14 @@ def token():
     Emits only the raw token on stdout so it can be captured in a shell:
     ``TOKEN=$(pragma auth token)``. Resolves the token the same way as every
     other command (--token flag > PRAGMA_AUTH_TOKEN env var > stored
-    credentials). A missing or expired token is an error: the login-required
-    message goes to stderr and stdout stays empty.
+    credentials). An API key is printed as is. A missing token or an expired
+    JWT is an error: the login-required message goes to stderr and stdout
+    stays empty.
 
     \f
 
     Raises:
-        typer.Exit: If no token is stored or it is expired.
+        typer.Exit: If no token is found or it is an expired JWT.
     """  # noqa: DOC502
     client = get_client()
     current_token = extract_client_token(client)
@@ -488,7 +491,7 @@ def whoami(ctx: typer.Context):
 
     Displays the resolved context (``--context`` / ``-c`` / ``PRAGMA_CONTEXT``),
     authentication state, and user details including email and organization
-    name from the API. No token or an expired one is a status report on
+    name from the API. No token or an expired JWT is a status report on
     stdout, not an error; a token the API rejects, or an API that cannot be
     reached, is an error on stderr.
 
