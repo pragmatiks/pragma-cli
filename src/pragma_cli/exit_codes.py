@@ -6,11 +6,14 @@ FAILURE_EXIT_CODE = 1
 INPUT_ERROR_EXIT_CODE = 2
 """Exit code for invalid usage or a local file or config error, matching Typer's own usage errors."""
 
-ADMISSION_UNCONFIRMED_EXIT_CODE = 3
-"""Exit code of ``pragma providers publish`` and ``pragma providers wait`` when admission is not confirmed.
+UNCONFIRMED_EXIT_CODE = 3
+"""Exit code when what a command sent is not confirmed yet and may still complete.
 
-The watch ended with the version still unsettled or could not read the
+``pragma providers publish`` and ``pragma providers wait``: the admission
+watch ended with the version still unsettled or could not read the
 version; for publish, after the wheel was uploaded or already received.
+``pragma resources apply``: a file upload reached Pragmatiks and was not
+stored within the wait, so no resource was applied.
 """
 
 NOT_FOUND_EXIT_CODE = 4
@@ -26,10 +29,12 @@ INTERRUPTED_EXIT_CODE = 130
 EXIT_CODES_HELP = (
     f"Exit codes: 0 success; {FAILURE_EXIT_CODE} failure; "
     f"{INPUT_ERROR_EXIT_CODE} invalid usage or a local file or config error; "
-    f"{ADMISSION_UNCONFIRMED_EXIT_CODE} command-specific, named in that command's help "
+    f"{UNCONFIRMED_EXIT_CODE} command-specific, named in that command's help "
     "(providers publish: wheel uploaded or already received, then the watch ended with admission unsettled "
     "or could not read the version, and it prints a providers wait command that keeps waiting; "
-    "providers wait: the watch ended again with admission unsettled or could not read the version); "
+    "providers wait: the watch ended again with admission unsettled or could not read the version; "
+    "resources apply: a file upload reached Pragmatiks and is not stored yet, no resource was applied, "
+    "and applying again keeps waiting without sending the file again); "
     f"{NOT_FOUND_EXIT_CODE} not found: the target does not exist, is not installed, "
     "or is not visible to you; "
     f"{INTERRUPTED_EXIT_CODE} interrupted: Ctrl-C stopped the command. "
