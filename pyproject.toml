@@ -65,7 +65,7 @@ changelog_file = "CHANGELOG.md"
 
 [dependency-groups]
 dev = [
-    "pragmatiks-lint[check]>=0.11.0",
+    "pragmatiks-lint[check]>=0.12.1",
     "ruff>=0.11.0",
     "ty==0.0.63",
 ]
