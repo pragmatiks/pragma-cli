@@ -1,5 +1,15 @@
 # Changelog
 
+## v17.15.0 (2026-11-21)
+
+### Feat
+
+- **resources**: label secret fields from format: password in describe
+
+### Fix
+
+- **deps**: require pragmatiks-sdk 33 for format: password schemas
+
 ## v17.14.1 (2026-11-21)
 
 ### Fix
