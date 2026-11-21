@@ -111,6 +111,10 @@ LOG_LEVEL_COLORS: dict[str, str] = {
     "error": "red",
 }
 
+SECRET_FORMAT = "password"
+SCHEMA_COMBINATORS = ("anyOf", "oneOf", "allOf")
+DEFINITIONS_REFERENCE_PREFIX = "#/$defs/"
+
 
 class _ScopedResourcePayload(BaseModel):
     """Generic project-scoped resource payload for CLI-driven apply operations.
@@ -835,56 +839,126 @@ def _format_config_value(value) -> str:
     return str(value)
 
 
-def _get_field_metadata(res: dict) -> tuple[set[str], set[str], set[str]]:
+def is_secret_node(node: object, definitions: dict, visited: frozenset[str] = frozenset()) -> bool:
+    """Tell whether a JSON schema node marks its value as a secret.
+
+    A node is secret when it, a definition its ``$ref`` names, or any branch
+    of its ``anyOf``, ``oneOf`` or ``allOf`` carries ``format: password``.
+    A reference to a definition already on the resolution path adds
+    nothing, so a recursive schema terminates.
+
+    Args:
+        node: The schema node; anything but a dict is not secret.
+        definitions: The schema's ``$defs``, against which ``#/$defs/<name>``
+            references resolve.
+        visited: Definitions already on the resolution path; callers leave
+            it at its default.
+
+    Returns:
+        Whether the node marks its value as a secret.
+    """
+    if not isinstance(node, dict):
+        return False
+
+    if node.get("format") == SECRET_FORMAT:
+        return True
+
+    reference = node.get("$ref")
+
+    if isinstance(reference, str) and reference.startswith(DEFINITIONS_REFERENCE_PREFIX):
+        name = reference.removeprefix(DEFINITIONS_REFERENCE_PREFIX)
+        referenced_is_secret = name not in visited and is_secret_node(
+            definitions.get(name), definitions, visited | {name}
+        )
+
+        if referenced_is_secret:
+            return True
+
+    for keyword in SCHEMA_COMBINATORS:
+        alternatives = node.get(keyword)
+
+        if not isinstance(alternatives, list):
+            continue
+
+        for branch in alternatives:
+            if is_secret_node(branch, definitions, visited):
+                return True
+
+    return False
+
+
+def compute_secret_properties(schema: dict[str, Any] | None) -> set[str]:
+    """Name the top-level properties of a resource schema that hold a secret.
+
+    Serves both the config and the outputs schema of a resource type.
+
+    Args:
+        schema: The JSON schema; ``None`` has no properties.
+
+    Returns:
+        The names of the properties that ``is_secret_node`` finds secret.
+    """
+    if not schema:
+        return set()
+
+    properties = schema.get("properties")
+
+    if not isinstance(properties, dict):
+        return set()
+
+    definitions = schema.get("$defs")
+
+    if not isinstance(definitions, dict):
+        definitions = {}
+
+    return {str(name) for name, node in properties.items() if is_secret_node(node, definitions)}
+
+
+def _get_field_metadata(resource: dict) -> tuple[set[str], set[str], set[str]]:
     """Fetch field metadata from the resource definition schema.
 
     Reads both the config schema and outputs schema to determine which
-    fields are marked as immutable or sensitive.
+    fields are immutable and which hold a secret (``format: password``).
+
+    Args:
+        resource: The resource the API returned, naming its provider and type.
 
     Returns:
-        Tuple of (immutable_fields, sensitive_config_fields, sensitive_output_fields).
+        Tuple of (immutable_fields, secret_config_fields, secret_output_fields).
         Empty sets if the definition cannot be fetched.
     """
     try:
         client = get_client()
-        types = client.list_resource_schemas(provider=res["provider"])
+        types = client.list_resource_schemas(provider=resource["provider"])
     except (httpx.HTTPError, RuntimeError):
         return set(), set(), set()
 
     for resource_type in types:
-        if resource_type.resource != res["resource"]:
+        if resource_type.resource != resource["resource"]:
             continue
 
         schema = resource_type.config_schema or {}
         properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
 
         immutable = {name for name, prop in properties.items() if isinstance(prop, dict) and prop.get("immutable")}
-        sensitive = {name for name, prop in properties.items() if isinstance(prop, dict) and prop.get("sensitive")}
 
-        outputs_schema = resource_type.outputs_schema or {}
-        output_properties = outputs_schema.get("properties", {}) if isinstance(outputs_schema, dict) else {}
-
-        sensitive_outputs = {
-            name for name, prop in output_properties.items() if isinstance(prop, dict) and prop.get("sensitive")
-        }
-
-        return immutable, sensitive, sensitive_outputs
+        return immutable, compute_secret_properties(schema), compute_secret_properties(resource_type.outputs_schema)
 
     return set(), set(), set()
 
 
-def _format_field_labels(key: str, immutable_fields: set[str], sensitive_fields: set[str]) -> str:
+def _format_field_labels(key: str, immutable_fields: set[str], secret_fields: set[str]) -> str:
     r"""Build the metadata label suffix for a field.
 
     Returns:
-        Label string like " [dim]\[immutable] \[sensitive][/dim]" or empty.
+        Label string like " [dim]\[immutable] \[secret][/dim]" or empty.
     """
     labels: list[str] = []
 
     if key in immutable_fields:
         labels.append("immutable")
-    if key in sensitive_fields:
-        labels.append("sensitive")
+    if key in secret_fields:
+        labels.append("secret")
 
     if not labels:
         return ""
@@ -896,7 +970,7 @@ def _format_field_labels(key: str, immutable_fields: set[str], sensitive_fields:
 def _print_resource_details(res: dict) -> None:
     """Print resource details in a formatted table."""
     resource_id = f"{res['provider']}/{res['resource']}/{res['name']}"
-    immutable_fields, sensitive_config_fields, sensitive_output_fields = _get_field_metadata(res)
+    immutable_fields, secret_config_fields, secret_output_fields = _get_field_metadata(res)
 
     console.print()
     console.print(f"[bold]Resource:[/bold] {escape(resource_id)}")
@@ -937,7 +1011,7 @@ def _print_resource_details(res: dict) -> None:
         console.print("[bold]Config:[/bold]")
         for key, value in config.items():
             formatted = _format_config_value(value)
-            labels = _format_field_labels(key, immutable_fields, sensitive_config_fields)
+            labels = _format_field_labels(key, immutable_fields, secret_config_fields)
             console.print(f"  {escape(key)}: {escape(formatted)}{labels}")
 
     outputs = res.get("outputs", {})
@@ -945,7 +1019,7 @@ def _print_resource_details(res: dict) -> None:
         console.print()
         console.print("[bold]Outputs:[/bold]")
         for key, value in outputs.items():
-            labels = _format_field_labels(key, set(), sensitive_output_fields)
+            labels = _format_field_labels(key, set(), secret_output_fields)
             console.print(f"  {escape(key)}: {escape(str(value))}{labels}")
 
     dependencies = res.get("dependencies", [])
@@ -970,14 +1044,14 @@ def describe(
     ctx: typer.Context,
     resource_id: ResourceIdArgument[str],
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format")] = OutputFormat.TABLE,
-    reveal: Annotated[bool, typer.Option("--reveal", help="Show sensitive field values")] = False,
+    reveal: Annotated[bool, typer.Option("--reveal", help="Show secret field values")] = False,
 ):
     """Show detailed information about a resource.
 
     Resolves the active project from ``--project``, ``PRAGMA_PROJECT``,
     or the persistent default set via ``pragma projects use <project-id>``.
     Displays the resource's state, health, owner, blockers, config, outputs,
-    dependencies, and error messages. Sensitive fields are redacted by
+    dependencies, and error messages. Secret fields are masked by
     default; use --reveal to show their values.
 
     Examples:
