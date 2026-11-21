@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.13.3 (2026-11-21)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v32.2.0 (#189)
+
 ## v17.13.2 (2026-11-21)
 
 ### Fix
