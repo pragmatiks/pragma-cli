@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.14.1 (2026-11-21)
+
+### Fix
+
+- **resources**: offer the --since hint when a log follow ends at host drain (PRA-1011, PRA-1012)
+
 ## v17.14.0 (2026-11-21)
 
 ### Feat
