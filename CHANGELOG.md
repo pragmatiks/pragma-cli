@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.13.0 (2026-11-21)
+
+### Feat
+
+- **files**: stream file uploads straight to storage
+
 ## v17.12.0 (2026-11-20)
 
 ### Feat

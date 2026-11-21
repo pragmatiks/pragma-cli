@@ -725,7 +725,7 @@ wheels = [
 
 [[package]]
 name = "pragmatiks-cli"
-version = "17.12.0"
+version = "17.13.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -793,6 +793,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "structlog" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/70/3e/707a322bf00332e6242d912eb1b8705a3c3a77307d0561780a9507ee2c92/pragmatiks_sdk-32.0.0.tar.gz", hash = "sha256:de1f1ddc689823a46d3aad7132aa03ec78421c61a67721169b91f619606a733a", size = 151750, upload-time = "2026-11-21T10:55:42.458Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9b/62/33d03e16c80ab6c356399d404cde3bc32df8815ab24ca91daa7b2ab1d9b5/pragmatiks_sdk-32.0.0-py3-none-any.whl", hash = "sha256:8dbfbb41f7bbaea20467394cada80c5c4fcba78257023a06b5533706c2769b0e", size = 185083, upload-time = "2026-11-21T10:55:41.087Z" },
 ]
