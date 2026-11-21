@@ -1223,6 +1223,13 @@ def print_log_entry_json(entry: LogEntry) -> None:
     sys.stdout.flush()
 
 
+RESUMABLE_END_REASONS = {
+    "provider_restarted": "The provider restarted",
+    "host_draining": "The provider's host restarted",
+}
+"""End reasons after which following again with ``--since`` continues, with what restarted."""
+
+
 def print_follow_end(event: LogFollowEnd, last_timestamp: datetime | None, target: Console) -> None:
     """Print why a followed log stream ended.
 
@@ -1232,13 +1239,14 @@ def print_follow_end(event: LogFollowEnd, last_timestamp: datetime | None, targe
         target: Console the notice goes to: stdout for text output, stderr for JSON.
     """
     target.print(f"[dim]Log stream ended: {escape(event.reason)}[/dim]", soft_wrap=True)
-    if event.reason != "provider_restarted":
+    restarted = RESUMABLE_END_REASONS.get(event.reason)
+    if restarted is None:
         return
     if last_timestamp is None:
-        target.print("[dim]The provider restarted. Run the command again to keep following.[/dim]", soft_wrap=True)
+        target.print(f"[dim]{restarted}. Run the command again to keep following.[/dim]", soft_wrap=True)
         return
     target.print(
-        f"[dim]The provider restarted after {last_timestamp.isoformat()}. "
+        f"[dim]{restarted} after {last_timestamp.isoformat()}. "
         f"Run again with --follow --since {last_timestamp.isoformat()} to continue; "
         "entries at that timestamp print again, and --tail caps how many earlier entries print.[/dim]",
         soft_wrap=True,
