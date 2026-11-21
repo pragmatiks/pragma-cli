@@ -1,5 +1,11 @@
 # Changelog
 
+## v17.14.0 (2026-11-21)
+
+### Feat
+
+- **resources**: plan file uploads from the resource's file reference (PRA-1020)
+
 ## v17.13.3 (2026-11-21)
 
 ### Fix
