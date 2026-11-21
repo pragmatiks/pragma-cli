@@ -45,8 +45,11 @@ if TYPE_CHECKING:
     from pragma_sdk import FileMetadata, ProjectResources
 
 
-FILE_UPLOAD_CONFIG_KEYS = frozenset({"content", "content_type"})
-"""Keys of a ``pragma/file`` config that describe its upload and leave the applied config."""
+PRAGMA_FILE_URI_PREFIX = "pragma://files/"
+"""Prefix of a Pragmatiks file reference, followed by the file's name."""
+
+UPLOAD_CONTENT_TYPE_KEY = "content_type"
+"""Key of a ``pragma/file`` config holding the upload's media type, which leaves the applied config."""
 
 FILE_SIZE_UNITS = (("GiB", 1024**3), ("MiB", 1024**2), ("KiB", 1024))
 """Binary units a file size is shown in, largest first, each with its size in bytes."""
@@ -315,17 +318,19 @@ def plan_file_upload(resource: dict, base_dir: Path) -> tuple[dict, PlannedFileU
     with ``@``. :func:`check_file_reference` refuses anything that
     would escape ``base_dir`` (absolute paths, ``..`` traversal, symlink
     escapes) or is not a regular file, and the planned upload records the
-    file's size and identity, not its bytes. ``content_type`` becomes the
-    upload's media type, so both ``content`` and ``content_type`` leave
-    the applied config. No network calls are made.
+    file's size and identity, not its bytes. The file uploads under the
+    resource's name, so ``content`` becomes the reference
+    ``pragma://files/<name>`` in the applied config; ``content_type``
+    becomes the upload's media type and leaves the applied config. No
+    network calls are made.
 
     Args:
         resource: Resource dictionary from YAML.
         base_dir: Base directory for resolving relative paths.
 
     Returns:
-        Tuple of (resource dict with ``content`` and ``content_type``
-        stripped, planned upload).
+        Tuple of (resource dict with ``content`` replaced by the file's
+        reference and ``content_type`` removed, planned upload).
 
     Raises:
         ValueError: If the resource is missing required fields, or the
@@ -346,10 +351,12 @@ def plan_file_upload(resource: dict, base_dir: Path) -> tuple[dict, PlannedFileU
     reference = content[1:]
     file_status = check_file_reference(reference, base_dir)
 
-    stripped_resource = resource.copy()
-    stripped_resource["config"] = {k: v for k, v in config.items() if k not in FILE_UPLOAD_CONFIG_KEYS}
+    applied_config = {key: value for key, value in config.items() if key != UPLOAD_CONTENT_TYPE_KEY}
+    applied_config["content"] = f"{PRAGMA_FILE_URI_PREFIX}{name}"
+    applied_resource = resource.copy()
+    applied_resource["config"] = applied_config
 
-    return stripped_resource, PlannedFileUpload(
+    return applied_resource, PlannedFileUpload(
         name=name,
         reference=reference,
         base_dir=base_dir,

@@ -452,8 +452,7 @@ def _plan_resource_file_references(resource: dict, base_dir: Path) -> tuple[dict
         if isinstance(config, dict):
             content = config.get("content")
             if isinstance(content, str) and content.startswith("@"):
-                stripped, upload = plan_file_upload(resource, base_dir)
-                return stripped, upload
+                return plan_file_upload(resource, base_dir)
         return resource, None
 
     config = resource.get("config")
