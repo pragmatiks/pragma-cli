@@ -64,7 +64,14 @@ from pragma_cli.helpers import (
     validate_resource_id_segments,
 )
 from pragma_cli.project_context import print_project_override_notice, resolve_project
-from pragma_cli.teardown import DEFAULT_WAIT_TIMEOUT_SECONDS, TeardownOptions, print_impact, watch_teardown
+from pragma_cli.teardown import (
+    DEACTIVATION_SETTLED_LABELS,
+    DEFAULT_WAIT_TIMEOUT_SECONDS,
+    DELETION_SETTLED_LABELS,
+    TeardownOptions,
+    print_impact,
+    watch_teardown,
+)
 
 
 console = Console()
@@ -733,6 +740,7 @@ def _format_state_color(resource: dict) -> str:
         "processing": "cyan",
         "ready": "green",
         "failed": "red",
+        "deactivating": "dark_orange",
         "deleting": "dark_orange",
         "deleted": "dim",
     }
@@ -1870,7 +1878,7 @@ def build_resource_error_details(response: httpx.Response) -> list[str]:
 
 
 DEACTIVATION_STARTED = "Deactivating {} — teardown is in progress; the resource returns to draft when it completes."
-DELETION_STARTED = "Deleting {} — the resource and everything it owns are removed when this completes."
+DELETION_STARTED = "Deleting {} — the resource and everything it owns are deleted when this completes."
 
 WAIT_HELP = "Wait for teardown to finish before returning."
 WAIT_TIMEOUT_HELP = "Seconds to wait when --wait is passed; 0 waits forever."
@@ -1896,7 +1904,7 @@ def delete(
     Resolves the active project from ``--project``, ``PRAGMA_PROJECT``,
     or the persistent default set via ``pragma projects use <project-id>``.
 
-    Removal cascades into everything the resource owns and runs
+    Deletion cascades into everything the resource owns and runs
     asynchronously: the command returns as soon as Pragmatiks accepts the
     request unless ``--wait`` is passed. With ``--wait`` the cascade is
     reported one resource at a time as it completes.
@@ -1925,7 +1933,7 @@ def delete(
 
 
 def _delete_one(project: ProjectResources, provider: str, resource: str, name: str, options: TeardownOptions) -> None:
-    """Remove one resource, reporting everything the removal reaches.
+    """Delete one resource, reporting everything the deletion reaches.
 
     Args:
         project: Project-scoped SDK handle.
@@ -1936,7 +1944,7 @@ def _delete_one(project: ProjectResources, provider: str, resource: str, name: s
 
     Raises:
         typer.Exit: With ``NOT_FOUND_EXIT_CODE`` if the resource does not
-            exist, or with ``FAILURE_EXIT_CODE`` if the removal is rejected,
+            exist, or with ``FAILURE_EXIT_CODE`` if the deletion is rejected,
             fails, or does not finish within the wait timeout.
     """  # noqa: DOC502
     resource_id = f"{provider}/{resource}/{name}"
@@ -1947,7 +1955,7 @@ def _delete_one(project: ProjectResources, provider: str, resource: str, name: s
         report_resource_api_error(e, f"Error deleting {resource_id}")
 
     if options.dry_run:
-        print(f"Dry run — {escape(resource_id)} was not removed.")
+        print(f"Dry run — {escape(resource_id)} was not deleted.")
         print_impact(response.impact)
         return
 
@@ -1955,15 +1963,15 @@ def _delete_one(project: ProjectResources, provider: str, resource: str, name: s
     print_impact(response.impact)
 
     if options.wait:
-        _wait_removed(project, response.impact, resource_id, options.wait_timeout)
+        _wait_deleted(project, response.impact, resource_id, options.wait_timeout)
 
 
-def _wait_removed(project: ProjectResources, impact: list[TeardownImpact], resource_id: str, timeout: float) -> None:
-    """Block until a removal cascade finishes, reporting each resource as it goes.
+def _wait_deleted(project: ProjectResources, impact: list[TeardownImpact], resource_id: str, timeout: float) -> None:
+    """Block until a deletion cascade finishes, reporting each resource as it goes.
 
     Args:
         project: Project-scoped SDK handle.
-        impact: Impact rows returned by the removal.
+        impact: Impact rows returned by the deletion.
         resource_id: Full resource identifier shown to the user.
         timeout: Seconds to wait before giving up; ``0`` waits forever.
 
@@ -1971,7 +1979,9 @@ def _wait_removed(project: ProjectResources, impact: list[TeardownImpact], resou
         typer.Exit: With ``FAILURE_EXIT_CODE`` if teardown fails or does not finish in time.
     """
     try:
-        watch_teardown(project, impact, timeout=timeout, settled_state=LifecycleState.DELETED)
+        watch_teardown(
+            project, impact, requested_id=resource_id, timeout=timeout, settled_labels=DELETION_SETTLED_LABELS
+        )
     except ResourceFailedError as e:
         error_console.print(
             f"[red]Error deleting {escape(resource_id)}:[/red] {escape(str(e.error or e))}. "
@@ -1980,7 +1990,7 @@ def _wait_removed(project: ProjectResources, impact: list[TeardownImpact], resou
         raise typer.Exit(FAILURE_EXIT_CODE) from e
     except TimeoutError as e:
         error_console.print(
-            f"[red]Error deleting {escape(resource_id)}:[/red] Removal is still running after {timeout}s. "
+            f"[red]Error deleting {escape(resource_id)}:[/red] Deletion is still running after {timeout}s. "
             "Run 'pragma resources list' to see what is left."
         )
         raise typer.Exit(FAILURE_EXIT_CODE) from e
@@ -2080,6 +2090,9 @@ def _wait_deactivated(
 ) -> None:
     """Block until a deactivation cascade finishes, reporting each resource as it goes.
 
+    A resource a delete takes over is reported as deleted, and the closing
+    line says ``Deleted`` when it is the requested resource.
+
     Args:
         project: Project-scoped SDK handle.
         impact: Impact rows returned by the deactivation.
@@ -2090,7 +2103,9 @@ def _wait_deactivated(
         typer.Exit: With ``FAILURE_EXIT_CODE`` if teardown fails or does not finish in time.
     """
     try:
-        watch_teardown(project, impact, timeout=timeout, settled_state=LifecycleState.DRAFT)
+        requested_state = watch_teardown(
+            project, impact, requested_id=resource_id, timeout=timeout, settled_labels=DEACTIVATION_SETTLED_LABELS
+        )
     except ResourceFailedError as e:
         error_console.print(
             f"[red]Error deactivating {escape(resource_id)}:[/red] {escape(str(e.error or e))}. "
@@ -2104,6 +2119,10 @@ def _wait_deactivated(
             "the resource returns to draft when teardown completes."
         )
         raise typer.Exit(FAILURE_EXIT_CODE) from e
+
+    if requested_state == LifecycleState.DELETED:
+        print(f"Deleted {escape(resource_id)}")
+        return
 
     print(f"Deactivated {escape(resource_id)}")
 
