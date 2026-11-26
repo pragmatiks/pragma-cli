@@ -1,5 +1,15 @@
 # Changelog
 
+## v17.16.0 (2026-11-26)
+
+### Feat
+
+- **resources**: follow the deactivate and delete cascades (PRA-502)
+
+### Fix
+
+- **deps**: update pragmatiks-sdk to v33.0.1 (#193)
+
 ## v17.15.0 (2026-11-21)
 
 ### Feat
